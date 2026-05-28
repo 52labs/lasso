@@ -1,0 +1,236 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>herdr + file viewer</title>
+<style>
+  :root {
+    --bg: #0d1117; --panel: #161b22; --border: #30363d; --fg: #c9d1d9;
+    --muted: #8b949e; --accent: #58a6ff; --accent-dim: #1f6feb33;
+    --dir: #58a6ff; --good: #3fb950; --warn: #d29922; --bad: #f85149;
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; height: 100%; background: var(--bg); color: var(--fg);
+    font: 13px/1.5 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
+  #app { display: flex; height: 100%; width: 100%; }
+
+  /* left: terminal */
+  #left { flex: 1 1 60%; min-width: 240px; display: flex; flex-direction: column; }
+  #left iframe { border: 0; width: 100%; height: 100%; display: block; background: #000; }
+
+  /* drag handle */
+  #splitter { flex: 0 0 6px; cursor: col-resize; background: var(--border);
+    transition: background .15s; }
+  #splitter:hover, #splitter.dragging { background: var(--accent); }
+
+  /* right: file viewer */
+  #right { flex: 1 1 40%; min-width: 280px; display: flex; flex-direction: column;
+    background: var(--panel); border-left: 1px solid var(--border); overflow: hidden; }
+
+  header.bar { padding: 8px 12px; border-bottom: 1px solid var(--border); background: #0d1117; }
+  .row { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+  .pill { padding: 1px 7px; border-radius: 10px; border: 1px solid var(--border);
+    font-size: 11px; color: var(--muted); white-space: nowrap; }
+  .pill.ws { color: var(--accent); border-color: var(--accent-dim); }
+  .pill.agent.working { color: var(--warn); border-color: var(--warn); }
+  .pill.agent.blocked { color: var(--bad); border-color: var(--bad); }
+  .pill.agent.idle, .pill.agent.done { color: var(--good); border-color: var(--good); }
+  .dot { width: 7px; height: 7px; border-radius: 50%; background: var(--muted); display: inline-block; }
+  .dot.live { background: var(--good); box-shadow: 0 0 6px var(--good); }
+
+  .cwd { margin-top: 6px; display: flex; align-items: center; gap: 6px; }
+  .cwd .crumbs { color: var(--fg); word-break: break-all; }
+  .cwd .crumbs a { color: var(--accent); text-decoration: none; cursor: pointer; }
+  .cwd .crumbs a:hover { text-decoration: underline; }
+  label.follow { margin-left: auto; color: var(--muted); font-size: 11px; cursor: pointer;
+    display: flex; align-items: center; gap: 4px; white-space: nowrap; }
+
+  #files { flex: 1 1 auto; overflow: auto; }
+  .entry { display: flex; align-items: center; gap: 8px; padding: 3px 12px; cursor: pointer;
+    white-space: nowrap; }
+  .entry:hover { background: #1f242c; }
+  .entry.sel { background: var(--accent-dim); }
+  .entry .nm { overflow: hidden; text-overflow: ellipsis; }
+  .entry.d .nm { color: var(--dir); }
+  .entry .sz { margin-left: auto; color: var(--muted); font-size: 11px; }
+  .ico { width: 14px; text-align: center; opacity: .8; }
+
+  #preview { flex: 0 0 auto; max-height: 45%; overflow: auto; border-top: 1px solid var(--border);
+    display: none; background: #0d1117; }
+  #preview.open { display: block; }
+  #preview .phdr { position: sticky; top: 0; background: #0d1117; padding: 6px 12px;
+    border-bottom: 1px solid var(--border); display: flex; gap: 8px; align-items: center; }
+  #preview .phdr .x { margin-left: auto; cursor: pointer; color: var(--muted); }
+  #preview pre { margin: 0; padding: 10px 12px; white-space: pre; font-size: 12px; }
+  #preview img { max-width: 100%; display: block; padding: 10px; }
+  .empty { color: var(--muted); padding: 16px 12px; }
+</style>
+</head>
+<body>
+<div id="app">
+  <div id="left"><iframe id="term" src="/terminal/" title="herdr terminal"></iframe></div>
+  <div id="splitter"></div>
+  <div id="right">
+    <header class="bar">
+      <div class="row">
+        <span class="dot" id="live"></span>
+        <span class="pill ws" id="ws">workspace —</span>
+        <span class="pill" id="tab">tab —</span>
+        <span class="pill agent" id="agent" style="display:none"></span>
+      </div>
+      <div class="cwd">
+        <span class="crumbs" id="crumbs">—</span>
+        <label class="follow"><input type="checkbox" id="follow" checked> follow active pane</label>
+      </div>
+    </header>
+    <div id="files"><div class="empty">waiting for herdr…</div></div>
+    <div id="preview">
+      <div class="phdr"><span id="pname"></span><span class="x" onclick="closePreview()">✕ close</span></div>
+      <div id="pbody"></div>
+    </div>
+  </div>
+</div>
+
+<script>
+const $ = s => document.querySelector(s);
+let curPath = null;        // dir currently shown in the file list
+let activeCwd = null;      // cwd of herdr's focused pane
+let selected = null;
+
+// ---- file list ----
+async function loadDir(path) {
+  curPath = path;
+  try {
+    const r = await fetch('/api/files?path=' + encodeURIComponent(path));
+    if (!r.ok) throw new Error(await r.text());
+    const data = await r.json();
+    renderDir(data);
+  } catch (e) {
+    $('#files').innerHTML = '<div class="empty">cannot read ' + path + '<br>' + e.message + '</div>';
+  }
+}
+
+function renderDir(data) {
+  renderCrumbs(data.path);
+  const f = $('#files');
+  f.innerHTML = '';
+  if (data.parent && data.parent !== data.path) {
+    f.appendChild(entryEl({ name: '..', dir: true }, data.parent, true));
+  }
+  if (!data.entries.length) {
+    const d = document.createElement('div'); d.className = 'empty'; d.textContent = '(empty)';
+    f.appendChild(d);
+  }
+  for (const e of data.entries) {
+    const full = data.path.replace(/\/$/, '') + '/' + e.name;
+    f.appendChild(entryEl(e, full, false));
+  }
+}
+
+function entryEl(e, full, isUp) {
+  const div = document.createElement('div');
+  div.className = 'entry ' + (e.dir ? 'd' : 'f');
+  div.innerHTML = '<span class="ico">' + (e.dir ? (isUp ? '↑' : '▸') : '·') + '</span>' +
+    '<span class="nm">' + escapeHtml(e.name) + '</span>' +
+    (e.dir ? '' : '<span class="sz">' + fmtSize(e.size) + '</span>');
+  div.onclick = () => {
+    if (e.dir) loadDir(full);
+    else openFile(full, div);
+  };
+  return div;
+}
+
+function renderCrumbs(path) {
+  const parts = path.split('/').filter(Boolean);
+  let acc = '';
+  const frags = ['<a data-p="/">/</a>'];
+  for (const p of parts) {
+    acc += '/' + p;
+    frags.push('<a data-p="' + acc + '">' + escapeHtml(p) + '</a>');
+  }
+  const c = $('#crumbs');
+  c.innerHTML = frags.join('<span style="color:var(--muted)">/</span>');
+  c.querySelectorAll('a').forEach(a => a.onclick = () => loadDir(a.dataset.p));
+}
+
+// ---- preview ----
+const IMG = /\.(png|jpe?g|gif|webp|svg|bmp|ico)$/i;
+async function openFile(path, el) {
+  if (selected) selected.classList.remove('sel');
+  if (el) { el.classList.add('sel'); selected = el; }
+  $('#pname').textContent = path;
+  const body = $('#pbody');
+  $('#preview').classList.add('open');
+  if (IMG.test(path)) {
+    body.innerHTML = '<img src="/api/file?path=' + encodeURIComponent(path) + '">';
+    return;
+  }
+  body.innerHTML = '<pre>loading…</pre>';
+  try {
+    const r = await fetch('/api/file?path=' + encodeURIComponent(path));
+    const txt = await r.text();
+    const pre = document.createElement('pre');
+    pre.textContent = txt;
+    body.innerHTML = ''; body.appendChild(pre);
+  } catch (e) {
+    body.innerHTML = '<pre>error: ' + e.message + '</pre>';
+  }
+}
+function closePreview() { $('#preview').classList.remove('open'); if (selected) selected.classList.remove('sel'); }
+
+// ---- active pane (SSE) ----
+function applyActive(a) {
+  $('#live').classList.add('live');
+  $('#ws').textContent = 'ws: ' + (a.workspace_label || a.workspace_id || '—');
+  $('#tab').textContent = 'tab: ' + (a.tab_label || a.tab_id || '—');
+  const ag = $('#agent');
+  if (a.agent || (a.agent_status && a.agent_status !== 'unknown')) {
+    ag.style.display = '';
+    ag.className = 'pill agent ' + (a.agent_status || '');
+    ag.textContent = (a.agent || 'agent') + (a.agent_status ? ' · ' + a.agent_status : '');
+  } else ag.style.display = 'none';
+
+  if (a.cwd && a.cwd !== activeCwd) {
+    activeCwd = a.cwd;
+    if ($('#follow').checked) loadDir(a.cwd);
+  }
+}
+
+function connectSSE() {
+  const es = new EventSource('/api/events');
+  es.addEventListener('active', e => applyActive(JSON.parse(e.data)));
+  es.onerror = () => { $('#live').classList.remove('live'); };
+}
+
+$('#follow').onchange = () => { if ($('#follow').checked && activeCwd) loadDir(activeCwd); };
+
+// ---- splitter ----
+(function () {
+  const sp = $('#splitter'), app = $('#app'), left = $('#left');
+  let drag = false;
+  sp.onmousedown = e => { drag = true; sp.classList.add('dragging'); e.preventDefault(); };
+  window.onmousemove = e => {
+    if (!drag) return;
+    const pct = Math.min(85, Math.max(15, (e.clientX / app.clientWidth) * 100));
+    left.style.flex = '0 0 ' + pct + '%';
+  };
+  window.onmouseup = () => { drag = false; sp.classList.remove('dragging'); };
+})();
+
+// ---- helpers ----
+function escapeHtml(s){return s.replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));}
+function fmtSize(n){ if(n==null)return''; const u=['B','K','M','G']; let i=0; while(n>=1024&&i<u.length-1){n/=1024;i++;} return (i?n.toFixed(1):n)+u[i]; }
+
+// boot
+(async function () {
+  try {
+    const a = await (await fetch('/api/active')).json();
+    applyActive(a);
+    if (a.cwd) { activeCwd = a.cwd; loadDir(a.cwd); }
+  } catch (e) { /* SSE will populate */ }
+  connectSSE();
+})();
+</script>
+</body>
+</html>
