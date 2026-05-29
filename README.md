@@ -2,19 +2,26 @@
 
 A single Go binary that serves a two-column web UI:
 
-- **Left** — `herdr` running inside a `ttyd` terminal, embedded in an `<iframe>`.
-- **Right** — four tabs:
+- **Left** — three tabs:
+  - **herdr** (default) — `herdr` running inside a `ttyd` terminal, embedded in an
+    `<iframe>`. The iframe stays mounted when you switch tabs, so the terminal
+    never reconnects.
+  - **Grid** — a grid of every herdr pane, grouped by workspace (click to focus it
+    in the terminal, right-click to rename/close, ⌘/ctrl/shift-click to
+    multi-select and bulk-close).
+  - **Settings** — update herdr: runs `herdr update` from the viewer process
+    (outside the herdr session, where it's allowed — it refuses to self-update from
+    *inside* a session) and shows the installed version.
+- **Right** — three tabs:
   - **Files** — a file browser that follows herdr's **focused pane** `cwd` live;
     click a file to open it full-screen with rich markdown preview and syntax
     highlighting (see [File viewer](#file-viewer)).
-  - **Panes** — a grid of every herdr pane (click to focus it in the terminal,
-    right-click to rename/close, ⌘/ctrl/shift-click to multi-select and bulk-close).
   - **Diff** — the git diff of the focused pane's repo (working tree, or the
     branch-vs-base diff when the tree is clean), in the spirit of Fulcrum's diff view.
   - **Browser** — an embedded `<iframe>` web preview with a URL bar, for viewing
     a dev server running in a pane.
 
-  The column is collapsible via the `»` button in the tab strip (the terminal
+  The right column is collapsible via the `»` button in the tab strip (the terminal
   then fills the width); a floating `«` button brings it back. The state persists
   in `localStorage`. The divider between the panes is also drag-resizable.
 

@@ -26,9 +26,10 @@
     font: 13px/1.5 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
   #app { display: flex; height: 100%; width: 100%; }
 
-  /* left: terminal */
+  /* left: terminal + grid + settings (tabbed) */
   #left { flex: 1 1 60%; min-width: 240px; display: flex; flex-direction: column; }
-  #left iframe { border: 0; width: 100%; height: 100%; display: block; background: var(--bg); }
+  #left iframe { border: 0; width: 100%; flex: 1 1 auto; min-height: 0; display: block; background: var(--bg); }
+  #lview-term { padding: 0; }   /* the terminal view holds only the iframe — fill it */
 
   /* drag handle */
   #splitter { flex: 0 0 6px; cursor: col-resize; background: var(--border);
@@ -62,17 +63,37 @@
   /* collapsed: hide the sidebar + splitter, let the terminal fill the width */
   #app.collapsed #right, #app.collapsed #splitter { display: none; }
 
-  /* tab strip + swappable views inside the right column */
+  /* tab strips + swappable views — shared by the left column (terminal / grid /
+     settings) and the right column (files / diff / browser) */
   .tabs { display: flex; align-items: stretch; flex: 0 0 auto;
     border-bottom: 1px solid var(--border); background: var(--bg); }
-  .tabs .tab { background: transparent; color: var(--muted); border: 0;
+  .tabs .tab, .tabs .ltab { background: transparent; color: var(--muted); border: 0;
     border-bottom: 2px solid transparent; padding: 7px 11px; font: inherit; font-size: 12px;
     cursor: pointer; white-space: nowrap; }
-  .tabs .tab:hover { color: var(--fg); }
-  .tabs .tab.active { color: var(--accent); border-bottom-color: var(--accent); }
+  .tabs .tab:hover, .tabs .ltab:hover { color: var(--fg); }
+  .tabs .tab.active, .tabs .ltab.active { color: var(--accent); border-bottom-color: var(--accent); }
   .tabs #collapse { align-self: center; margin-right: 8px; }
   .view { display: none; flex: 1 1 auto; min-height: 0; flex-direction: column; overflow: hidden; }
   .view.active { display: flex; }
+
+  /* settings view */
+  .settings { flex: 1 1 auto; overflow: auto; padding: 14px; }
+  .scard { border: 1px solid var(--border); border-radius: 8px; background: var(--bg);
+    padding: 14px 16px; max-width: 600px; }
+  .scard .stitle { color: var(--fg); font-size: 14px; margin-bottom: 6px; }
+  .scard .sdesc { color: var(--muted); font-size: 12px; line-height: 1.6; margin-bottom: 12px; }
+  .scard .sdesc code { background: var(--panel); border: 1px solid var(--border);
+    border-radius: 4px; padding: .05em .35em; }
+  .srow { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+  .sbtn { background: var(--hover); color: var(--accent); border: 1px solid var(--accent);
+    border-radius: 5px; padding: 6px 14px; font: inherit; font-size: 12px; cursor: pointer; }
+  .sbtn:hover { background: var(--accent-dim); }
+  .sbtn:disabled { color: var(--muted); border-color: var(--border); background: var(--hover); cursor: default; }
+  .smsg { font-size: 11px; color: var(--muted); }
+  .smsg.bad { color: var(--bad); } .smsg.good { color: var(--good); }
+  .sout { margin-top: 12px; max-height: 340px; overflow: auto; background: var(--panel);
+    border: 1px solid var(--border); border-radius: 6px; padding: 10px 12px; font-size: 12px;
+    line-height: 1.5; white-space: pre-wrap; word-break: break-word; color: var(--fg); }
 
   /* pane grid */
   #panegrid { flex: 1 1 auto; overflow: auto; padding: 10px; display: grid;
@@ -284,13 +305,63 @@
 </head>
 <body>
 <div id="app">
-  <div id="left"><iframe id="term" src="/terminal/" title="herdr terminal"></iframe></div>
+  <div id="left">
+    <nav class="tabs ltabs">
+      <button class="ltab active" data-lview="term">herdr</button>
+      <button class="ltab" data-lview="grid">Grid</button>
+      <button class="ltab" data-lview="settings">Settings</button>
+    </nav>
+
+    <section class="view active" id="lview-term">
+      <iframe id="term" src="/terminal/" title="herdr terminal"></iframe>
+    </section>
+
+    <section class="view" id="lview-grid">
+      <header class="bar">
+        <div class="row">
+          <span class="pill ws" id="panes-count">panes —</span>
+          <span class="pill" id="panes-msg" style="display:none"></span>
+          <button class="iconbtn" id="panes-refresh" title="refresh pane list">⟳</button>
+        </div>
+        <div class="row selbar" id="selbar" style="display:none">
+          <span class="pill ws" id="selcount">0 selected</span>
+          <button class="selbtn danger" id="sel-close">Close selected</button>
+          <button class="selbtn" id="sel-clear">Clear</button>
+        </div>
+      </header>
+      <div id="panegrid"><div class="empty">loading panes…</div></div>
+      <div class="hint" id="panes-hint">click to focus · ⌘/ctrl/shift-click to multi-select · right-click for rename / close</div>
+    </section>
+
+    <section class="view" id="lview-settings">
+      <header class="bar">
+        <div class="row">
+          <span class="pill ws">herdr</span>
+          <span class="pill" id="set-version">version —</span>
+          <button class="iconbtn" id="set-refresh" title="refresh version">⟳</button>
+        </div>
+      </header>
+      <div class="settings">
+        <div class="scard">
+          <div class="stitle">Update herdr</div>
+          <div class="sdesc">Downloads and installs the latest herdr release, then restart
+            the session (close it in the terminal and reopen) to pick it up. Runs
+            <code>herdr update</code> from the viewer process — outside the herdr session,
+            where it's allowed.</div>
+          <div class="srow">
+            <button class="sbtn" id="set-update">Update herdr</button>
+            <span class="smsg" id="set-status"></span>
+          </div>
+          <pre class="sout" id="set-output" style="display:none"></pre>
+        </div>
+      </div>
+    </section>
+  </div>
   <div id="splitter"></div>
   <button id="reopen" title="show file viewer">«</button>
   <div id="right">
     <nav class="tabs">
       <button class="tab active" data-view="files">Files</button>
-      <button class="tab" data-view="panes">Panes</button>
       <button class="tab" data-view="diff">Diff</button>
       <button class="tab" data-view="browser">Browser</button>
       <button class="iconbtn" id="collapse" title="collapse sidebar">»</button>
@@ -312,23 +383,6 @@
         </div>
       </header>
       <div id="files"><div class="empty">waiting for herdr…</div></div>
-    </section>
-
-    <section class="view" id="view-panes">
-      <header class="bar">
-        <div class="row">
-          <span class="pill ws" id="panes-count">panes —</span>
-          <span class="pill" id="panes-msg" style="display:none"></span>
-          <button class="iconbtn" id="panes-refresh" title="refresh pane list">⟳</button>
-        </div>
-        <div class="row selbar" id="selbar" style="display:none">
-          <span class="pill ws" id="selcount">0 selected</span>
-          <button class="selbtn danger" id="sel-close">Close selected</button>
-          <button class="selbtn" id="sel-clear">Clear</button>
-        </div>
-      </header>
-      <div id="panegrid"><div class="empty">loading panes…</div></div>
-      <div class="hint" id="panes-hint">click to focus · ⌘/ctrl/shift-click to multi-select · right-click for rename / close</div>
     </section>
 
     <section class="view" id="view-diff">
@@ -387,6 +441,8 @@ let activeCwd = null;      // cwd of herdr's focused pane
 let activePaneID = null;   // pane_id of herdr's focused pane
 let selected = null;
 let curView = 'files';     // which right-column view is showing
+let curLeftView = 'term';  // which left-column view is showing (term / grid / settings)
+let settingsInit = false;  // settings tab lazily initialized on first open
 let paneEls = {};          // pane_id -> grid card element (for focus highlighting)
 let paneData = {};         // pane_id -> pane object (for context-menu actions)
 let selectedPanes = new Set(); // pane_ids selected for bulk actions
@@ -608,16 +664,33 @@ $('#v-wrap').onclick = () => {
 $('#v-open').onclick = () => { if (viewerFile) window.open('/api/file?path=' + encodeURIComponent(viewerFile.path), '_blank'); };
 document.addEventListener('keydown', e => { if (e.key === 'Escape' && $('#viewer').classList.contains('open')) closeViewer(); });
 
-// ---- view tabs (Files / Panes) ----
+// ---- right-column view tabs (Files / Diff / Browser) ----
+// Queries are scoped to #right so they never touch the left column's tabs/views.
 function switchView(name) {
   curView = name;
-  document.querySelectorAll('.tabs .tab').forEach(t => t.classList.toggle('active', t.dataset.view === name));
-  document.querySelectorAll('.view').forEach(v => v.classList.toggle('active', v.id === 'view-' + name));
-  if (name === 'panes') loadPanes();
-  else if (name === 'diff') loadDiff();
+  document.querySelectorAll('#right > .tabs .tab').forEach(t => t.classList.toggle('active', t.dataset.view === name));
+  document.querySelectorAll('#right > .view').forEach(v => v.classList.toggle('active', v.id === 'view-' + name));
+  if (name === 'diff') loadDiff();
   else if (name === 'browser') initBrowser();
 }
-document.querySelectorAll('.tabs .tab').forEach(t => t.onclick = () => switchView(t.dataset.view));
+document.querySelectorAll('#right > .tabs .tab').forEach(t => t.onclick = () => switchView(t.dataset.view));
+
+// ---- left-column view tabs (herdr terminal / Grid / Settings) ----
+// The terminal iframe stays mounted across switches (only hidden via CSS), so
+// the ttyd WebSocket never reconnects when you visit Grid/Settings and back.
+function switchLeft(name) {
+  curLeftView = name;
+  document.querySelectorAll('#left > .tabs .ltab').forEach(t => t.classList.toggle('active', t.dataset.lview === name));
+  document.querySelectorAll('#left > .view').forEach(v => v.classList.toggle('active', v.id === 'lview-' + name));
+  if (name === 'grid') loadPanes();
+  else if (name === 'settings') initSettings();
+  else if (name === 'term') {
+    // the iframe was display:none (zero-size) while hidden — nudge xterm to refit
+    // and hand it the keyboard.
+    try { const w = document.getElementById('term').contentWindow; w.dispatchEvent(new Event('resize')); w.focus(); } catch (e) {}
+  }
+}
+document.querySelectorAll('#left > .tabs .ltab').forEach(t => t.onclick = () => switchLeft(t.dataset.lview));
 
 // ---- pane grid ----
 async function loadPanes() {
@@ -944,6 +1017,45 @@ $('#br-url').addEventListener('keydown', e => { if (e.key === 'Enter') navBrowse
 $('#br-reload').onclick = () => { const f = $('#brframe'); f.src = f.src; };
 $('#br-open').onclick = () => { const u = $('#br-url').value.trim(); if (u) window.open(/^https?:\/\//i.test(u) ? u : 'http://' + u, '_blank'); };
 
+// ---- settings: herdr version + update ----
+function initSettings() {
+  if (settingsInit) return;
+  settingsInit = true;
+  loadVersion();
+}
+async function loadVersion() {
+  const el = $('#set-version');
+  el.textContent = 'version …';
+  try {
+    const r = await fetch('/api/version');
+    if (!r.ok) throw new Error(await r.text());
+    const d = await r.json();
+    el.textContent = d.version || 'version unknown';
+  } catch (e) { el.textContent = 'version unavailable'; }
+}
+$('#set-refresh').onclick = () => loadVersion();
+$('#set-update').onclick = async () => {
+  const btn = $('#set-update'), st = $('#set-status'), out = $('#set-output');
+  btn.disabled = true;
+  st.className = 'smsg'; st.textContent = 'updating… downloading the latest release';
+  out.style.display = 'none'; out.textContent = '';
+  try {
+    const r = await fetch('/api/update', { method: 'POST' });
+    const d = await r.json().catch(() => ({}));   // 409/plain-text errors aren't JSON
+    if (d.output) { out.style.display = ''; out.textContent = d.output; }
+    if (r.ok && d.ok) {
+      st.className = 'smsg good';
+      st.textContent = 'done — restart herdr (close it in the terminal, reopen) to use the new version';
+      loadVersion();
+    } else {
+      st.className = 'smsg bad';
+      st.textContent = 'update failed' + (d.error ? ': ' + d.error : (r.ok ? '' : ' (' + r.status + ')'));
+    }
+  } catch (e) {
+    st.className = 'smsg bad'; st.textContent = 'update failed: ' + e.message;
+  } finally { btn.disabled = false; }
+};
+
 // ---- active pane (SSE) ----
 function applyActive(a) {
   const ag = $('#agent');
@@ -982,7 +1094,7 @@ function applyActive(a) {
   if (typeof a.panes_rev === 'number' && a.panes_rev !== lastPanesRev) {
     const first = lastPanesRev === -1;
     lastPanesRev = a.panes_rev;
-    if (!first && curView === 'panes') loadPanes();
+    if (!first && curLeftView === 'grid') loadPanes();
   }
 
   // herdr's theme changed (config.toml [theme].name edited): repaint live.

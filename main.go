@@ -169,6 +169,8 @@ func main() {
 	mux.HandleFunc("/api/close", serveClose)
 	mux.HandleFunc("/api/paste-image", servePasteImage)
 	mux.HandleFunc("/api/diff", serveDiff)
+	mux.HandleFunc("/api/version", serveVersion)
+	mux.HandleFunc("/api/update", serveUpdate)
 	if *devMode {
 		// Serve the vendored libs from disk too, so an edit there shows on refresh.
 		mux.Handle("/static/", http.StripPrefix("/static/", noCache(http.FileServer(http.Dir(devStaticDir)))))
@@ -802,6 +804,66 @@ func serveClose(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	writeJSON(w, map[string]any{"closed": closed, "errors": errs})
+}
+
+// ---------------------------------------------------------------------------
+// herdr self-update (Settings tab)
+// ---------------------------------------------------------------------------
+
+// herdrBinary is the herdr executable to invoke for out-of-session commands
+// (version, update) — the first field of -term-cmd (what ttyd runs in the
+// terminal), defaulting to "herdr".
+func herdrBinary() string {
+	if f := strings.Fields(*termCmd); len(f) > 0 {
+		return f[0]
+	}
+	return "herdr"
+}
+
+// updateMu serializes herdr updates so two clicks can't race two installs onto
+// the same on-disk binary.
+var updateMu sync.Mutex
+
+// serveVersion returns the installed herdr version (`herdr --version`) for the
+// Settings tab. Best effort — a non-zero exit with some output (e.g. a banner
+// on stderr) is still surfaced rather than failed.
+func serveVersion(w http.ResponseWriter, r *http.Request) {
+	out, err := exec.Command(herdrBinary(), "--version").CombinedOutput()
+	v := strings.TrimSpace(string(out))
+	if err != nil && v == "" {
+		http.Error(w, "herdr --version: "+err.Error(), http.StatusBadGateway)
+		return
+	}
+	writeJSON(w, map[string]string{"version": v})
+}
+
+// serveUpdate runs `herdr update` and returns its combined output. This is the
+// supported out-of-session update path: `herdr update` refuses to run from
+// *inside* a herdr session, but the viewer is a separate process supervising
+// ttyd — so it installs the new binary cleanly. The running herdr server keeps
+// the old version until it's restarted; the command's own output says so and we
+// pass it straight through.
+func serveUpdate(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "POST only", http.StatusMethodNotAllowed)
+		return
+	}
+	if !updateMu.TryLock() {
+		http.Error(w, "an update is already running", http.StatusConflict)
+		return
+	}
+	defer updateMu.Unlock()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
+	defer cancel()
+	cmd := exec.CommandContext(ctx, herdrBinary(), "update")
+	cmd.Stdin = nil // no TTY/stdin: run non-interactively, never block on a prompt
+	out, err := cmd.CombinedOutput()
+	resp := map[string]any{"ok": err == nil, "output": string(out)}
+	if err != nil {
+		resp["error"] = err.Error()
+	}
+	writeJSON(w, resp)
 }
 
 // ---------------------------------------------------------------------------
