@@ -29,7 +29,7 @@
   /* left: terminal + grid + settings (tabbed) */
   #left { flex: 1 1 60%; min-width: 240px; display: flex; flex-direction: column; }
   #left iframe { border: 0; width: 100%; flex: 1 1 auto; min-height: 0; display: block; background: var(--bg); }
-  #lview-term { padding: 0; }   /* the terminal view holds only the iframe — fill it */
+  #lview-herdr { padding: 0; }   /* the terminal view holds only the iframe — fill it */
 
   /* drag handle */
   #splitter { flex: 0 0 6px; cursor: col-resize; background: var(--border);
@@ -309,13 +309,13 @@
 <div id="app">
   <div id="left">
     <nav class="tabs ltabs">
-      <button class="ltab active" data-lview="term">herdr</button>
+      <button class="ltab active" data-lview="herdr">Herdr</button>
       <button class="ltab" data-lview="grid">Grid</button>
       <button class="ltab" data-lview="settings">Settings</button>
     </nav>
 
-    <section class="view active" id="lview-term">
-      <iframe id="term" src="/terminal/" title="herdr terminal"></iframe>
+    <section class="view active" id="lview-herdr">
+      <iframe id="term" src="/terminal/" title="Herdr terminal"></iframe>
     </section>
 
     <section class="view" id="lview-grid">
@@ -338,7 +338,7 @@
     <section class="view" id="lview-settings">
       <header class="bar">
         <div class="row">
-          <span class="pill ws">herdr</span>
+          <span class="pill ws">Herdr</span>
           <span class="pill" id="set-installed">installed —</span>
           <span class="pill" id="set-latest">latest —</span>
           <button class="iconbtn" id="set-refresh" title="check for updates">⟳</button>
@@ -439,7 +439,7 @@ let activeCwd = null;      // cwd of herdr's focused pane
 let activePaneID = null;   // pane_id of herdr's focused pane
 let selected = null;
 let curView = 'files';     // which right-column view is showing
-let curLeftView = 'term';  // which left-column view is showing (term / grid / settings)
+let curLeftView = 'herdr'; // which left-column view is showing (herdr / grid / settings)
 let settingsInit = false;  // settings tab lazily initialized on first open
 let paneEls = {};          // pane_id -> grid card element (for focus highlighting)
 let paneData = {};         // pane_id -> pane object (for context-menu actions)
@@ -673,22 +673,31 @@ function switchView(name) {
 }
 document.querySelectorAll('#right > .tabs .tab').forEach(t => t.onclick = () => switchView(t.dataset.view));
 
-// ---- left-column view tabs (herdr terminal / Grid / Settings) ----
+// ---- left-column view tabs (Herdr terminal / Grid / Settings) ----
 // The terminal iframe stays mounted across switches (only hidden via CSS), so
 // the ttyd WebSocket never reconnects when you visit Grid/Settings and back.
-function switchLeft(name) {
+// The active tab is mirrored to the URL hash (#herdr / #grid / #settings) so
+// back/forward navigate between tabs and a link opens straight to one.
+const LEFT_VIEWS = ['herdr', 'grid', 'settings'];
+function switchLeft(name, fromHash) {
+  if (!LEFT_VIEWS.includes(name)) name = 'herdr';
   curLeftView = name;
   document.querySelectorAll('#left > .tabs .ltab').forEach(t => t.classList.toggle('active', t.dataset.lview === name));
   document.querySelectorAll('#left > .view').forEach(v => v.classList.toggle('active', v.id === 'lview-' + name));
+  if (!fromHash && location.hash.slice(1) !== name) location.hash = name;   // reflect in the URL (adds a history entry)
   if (name === 'grid') loadPanes();
   else if (name === 'settings') initSettings();
-  else if (name === 'term') {
+  else if (name === 'herdr') {
     // the iframe was display:none (zero-size) while hidden — nudge xterm to refit
     // and hand it the keyboard.
     try { const w = document.getElementById('term').contentWindow; w.dispatchEvent(new Event('resize')); w.focus(); } catch (e) {}
   }
 }
 document.querySelectorAll('#left > .tabs .ltab').forEach(t => t.onclick = () => switchLeft(t.dataset.lview));
+// back/forward (and manual hash edits) drive the active tab without re-pushing it
+window.addEventListener('hashchange', () => switchLeft(location.hash.slice(1), true));
+// open straight to the tab named in the URL (defaults to Herdr); don't push on load
+switchLeft(location.hash.slice(1) || 'herdr', true);
 
 // ---- pane grid ----
 async function loadPanes() {
@@ -746,7 +755,7 @@ function paneCard(p) {
   d.title = [p.tab_label, p.cwd, p.pane_id].filter(Boolean).join('\n');
   d.onclick = (e) => {
     if (e.ctrlKey || e.metaKey || e.shiftKey) toggleSelect(p.pane_id);  // multi-select
-    else { clearSelection(); focusPane(p, d); switchLeft('term'); }      // plain click: focus + show terminal
+    else { clearSelection(); focusPane(p, d); switchLeft('herdr'); }      // plain click: focus + show terminal
   };
   d.oncontextmenu = (e) => { e.preventDefault(); openCtxMenu(e, p); };
   return d;
