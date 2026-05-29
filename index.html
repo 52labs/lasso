@@ -79,14 +79,10 @@
   .view { display: none; flex: 1 1 auto; min-height: 0; flex-direction: column; overflow: hidden; }
   .view.active { display: flex; }
 
-  /* settings view */
-  .settings { flex: 1 1 auto; overflow: auto; padding: 14px; }
-  .scard { border: 1px solid var(--border); border-radius: 8px; background: var(--bg);
-    padding: 14px 16px; max-width: 600px; }
-  .scard .stitle { color: var(--fg); font-size: 14px; margin-bottom: 6px; }
-  .scard .sdesc { color: var(--muted); font-size: 12px; line-height: 1.6; margin-bottom: 12px; }
-  .scard .sdesc code { background: var(--panel); border: 1px solid var(--border);
-    border-radius: 4px; padding: .05em .35em; }
+  /* the "latest · update available" pill becomes a click target that opens the
+     Terminal tab with `herdr update` pre-typed */
+  .pill.clickable { cursor: pointer; }
+  .pill.clickable:hover { background: var(--accent-dim); }
 
   /* pane grid */
   #panegrid { flex: 1 1 auto; overflow: auto; padding: 10px; display: grid;
@@ -339,12 +335,6 @@
           <button class="iconbtn" id="set-refresh" title="check for updates">⟳</button>
         </div>
       </header>
-      <div class="settings">
-        <div class="scard">
-          <div class="stitle">Updating herdr</div>
-          <p class="sdesc" style="margin-bottom:0">Open the <b>Terminal</b> tab in the right column and run <code>herdr update</code>. That terminal runs outside any herdr session and has a real TTY, so it can hand running sessions over to the new version live — something this panel can't do on its own.</p>
-        </div>
-      </div>
     </section>
   </div>
   <div id="splitter"></div>
@@ -1055,6 +1045,7 @@ function initSettings() {
 async function loadVersion() {
   const inst = $('#set-installed'), lat = $('#set-latest');
   inst.textContent = 'installed …'; lat.textContent = 'latest …'; lat.className = 'pill';
+  lat.onclick = null; lat.title = '';   // reset any prior clickable state
   try {
     const r = await fetch('/api/version');
     if (!r.ok) throw new Error(await r.text());
@@ -1063,6 +1054,12 @@ async function loadVersion() {
     if (d.latest) {
       lat.textContent = 'latest ' + d.latest + (d.update_available ? ' · update available' : ' · up to date');
       lat.className = 'pill ' + (d.update_available ? 'warn' : 'good');
+      if (d.update_available) {
+        // make the pill a shortcut: open the Terminal tab with `herdr update` typed
+        lat.classList.add('clickable');
+        lat.title = 'open the Terminal with `herdr update` ready (press Enter to run)';
+        lat.onclick = openUpdateInTerminal;
+      }
     } else {
       lat.textContent = 'latest unavailable'; lat.className = 'pill';
       lat.title = d.latest_error || '';
@@ -1072,6 +1069,27 @@ async function loadVersion() {
   }
 }
 $('#set-refresh').onclick = () => loadVersion();
+
+// openUpdateInTerminal reveals the right-column Terminal tab and types
+// `herdr update` into the out-of-herdr shell WITHOUT submitting it, so the user
+// can review and press Enter. We paste rather than synthesize keystrokes — the
+// same path the image-paste handler uses — which inserts text at the cursor.
+function openUpdateInTerminal() {
+  if ($('#app').classList.contains('collapsed')) $('#reopen').click();   // ensure the right column is visible
+  switchView('terminal');                                                // shows + focuses the shell
+  typeIntoShell('herdr update', 0);
+}
+function typeIntoShell(text, tries) {
+  try {
+    const w = $('#shellframe').contentWindow;
+    if (w && w.term && typeof w.term.paste === 'function') {
+      w.focus(); w.term.focus();
+      w.term.paste(text);
+      return;
+    }
+  } catch (e) { /* same-origin; ignore */ }
+  if (tries < 20) setTimeout(() => typeIntoShell(text, tries + 1), 150);   // xterm may still be loading
+}
 
 // ---- active pane (SSE) ----
 function applyActive(a) {
