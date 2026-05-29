@@ -843,17 +843,76 @@ func outsideHerdrEnv() []string {
 	return out
 }
 
-// serveVersion returns the installed herdr version (`herdr --version`) for the
-// Settings tab. Best effort — a non-zero exit with some output (e.g. a banner
-// on stderr) is still surfaced rather than failed.
+// herdrReleasesAPI is the GitHub "latest release" endpoint for herdr; the
+// Settings tab compares the installed version against its tag.
+const herdrReleasesAPI = "https://api.github.com/repos/ogulcancelik/herdr/releases/latest"
+
+// versionInfo is the /api/version payload: the installed herdr version, the
+// latest published release, and whether they differ. LatestError carries why the
+// GitHub lookup failed (offline, rate-limited) so the installed version still
+// shows even when the latest can't be fetched.
+type versionInfo struct {
+	Installed       string `json:"installed"`
+	Latest          string `json:"latest,omitempty"`
+	UpdateAvailable bool   `json:"update_available"`
+	LatestError     string `json:"latest_error,omitempty"`
+}
+
+// serveVersion reports the installed herdr version and the latest GitHub release
+// for the Settings tab. The installed lookup is local and reliable; the latest
+// lookup is best effort (network) and never fails the response.
 func serveVersion(w http.ResponseWriter, r *http.Request) {
+	vi := versionInfo{Installed: installedHerdrVersion()}
+	if latest, err := latestHerdrVersion(r.Context()); err != nil {
+		vi.LatestError = err.Error()
+	} else {
+		vi.Latest = latest
+		vi.UpdateAvailable = vi.Installed != "" && latest != "" && vi.Installed != latest
+	}
+	writeJSON(w, vi)
+}
+
+// installedHerdrVersion runs `herdr --version` and returns just the version
+// number (herdr prints "herdr 0.6.4"; we strip the name), "" if it can't be run.
+func installedHerdrVersion() string {
 	out, err := exec.Command(herdrBinary(), "--version").CombinedOutput()
 	v := strings.TrimSpace(string(out))
 	if err != nil && v == "" {
-		http.Error(w, "herdr --version: "+err.Error(), http.StatusBadGateway)
-		return
+		return ""
 	}
-	writeJSON(w, map[string]string{"version": v})
+	return strings.TrimSpace(strings.TrimPrefix(v, "herdr"))
+}
+
+// latestHerdrVersion fetches the latest release tag from GitHub, normalized to
+// match `herdr --version` (the tag is "v0.6.5"; we drop the leading "v").
+func latestHerdrVersion(ctx context.Context) (string, error) {
+	ctx, cancel := context.WithTimeout(ctx, 6*time.Second)
+	defer cancel()
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, herdrReleasesAPI, nil)
+	if err != nil {
+		return "", err
+	}
+	req.Header.Set("Accept", "application/vnd.github+json")
+	req.Header.Set("User-Agent", "herdr-viewer")
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return "", err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return "", fmt.Errorf("github: %s", resp.Status)
+	}
+	var rel struct {
+		TagName string `json:"tag_name"`
+	}
+	if err := json.NewDecoder(io.LimitReader(resp.Body, 1<<20)).Decode(&rel); err != nil {
+		return "", err
+	}
+	tag := strings.TrimSpace(rel.TagName)
+	if tag == "" {
+		return "", fmt.Errorf("github: empty tag_name")
+	}
+	return strings.TrimPrefix(tag, "v"), nil
 }
 
 // serveUpdate runs `herdr update` and returns its combined output. This is the
