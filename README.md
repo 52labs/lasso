@@ -10,9 +10,10 @@ A single Go binary that serves a two-column web UI:
     in the terminal, right-click to rename/close, ⌘/ctrl/shift-click to
     multi-select and bulk-close).
   - **Settings** — shows the installed herdr version and the latest published
-    release. To update, use the **Terminal** tab (see Right) and run
-    `herdr update` there — a real TTY is required for herdr to hand running
-    sessions over to the new version live.
+    release. When an update is available, the **latest** pill is clickable: it
+    opens the **Terminal** tab (see Right) with `herdr update` pre-typed (not
+    submitted) so you can run it there — a real TTY is required for herdr to
+    hand running sessions over to the new version live.
 - **Right** — four tabs:
   - **Diff** (default) — the git diff of the focused pane's repo, in the spirit
     of Fulcrum's diff view. Shows working-tree changes (empty when the tree is
