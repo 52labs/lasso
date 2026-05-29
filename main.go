@@ -17,6 +17,7 @@ import (
 	"crypto/subtle"
 	"embed"
 	"encoding/json"
+	"errors"
 	"flag"
 	"fmt"
 	"io/fs"
@@ -214,6 +215,22 @@ func startTtyd(ctx context.Context) error {
 // herdr socket client
 // ---------------------------------------------------------------------------
 
+// herdrError is a structured error returned by herdr's socket API
+// (e.g. {"code":"pane_not_found","message":"pane X not found"}). Callers can
+// inspect Code (via errors.As) to react to specific conditions — notably to
+// treat an already-gone pane as a no-op rather than a hard failure.
+type herdrError struct {
+	Code    string `json:"code"`
+	Message string `json:"message"`
+}
+
+func (e *herdrError) Error() string {
+	if e.Message != "" {
+		return fmt.Sprintf("herdr error %s: %s", e.Code, e.Message)
+	}
+	return "herdr error: " + e.Code
+}
+
 // herdrCall does one request/response round-trip on a fresh connection.
 func herdrCall(method string, params any) (json.RawMessage, error) {
 	conn, err := net.DialTimeout("unix", *herdrSock, 2*time.Second)
@@ -239,7 +256,11 @@ func herdrCall(method string, params any) (json.RawMessage, error) {
 		return nil, err
 	}
 	if resp.Error != nil {
-		return nil, fmt.Errorf("herdr error: %s", resp.Error)
+		he := &herdrError{}
+		if json.Unmarshal(resp.Error, he) != nil || he.Code == "" {
+			he.Message = string(resp.Error) // non-structured error: keep the raw payload
+		}
+		return nil, he
 	}
 	return resp.Result, nil
 }
@@ -589,9 +610,79 @@ func serveRename(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, map[string]any{"ok": true})
 }
 
+// Bulk-close resilience knobs. Closing a pane makes herdr recompute layout /
+// shift focus / maybe close the tab, so a burst of pane.close calls can race
+// that reconfiguration and fail transiently — hence retries plus a little
+// pacing so herdr settles between calls. Tuned to stay snappy for a handful of
+// panes while clearing the flakiness that used to need a manual retry.
+const closeAttempts = 4 // total tries per pane
+
+// vars (not consts) so tests can shrink the waits.
+var (
+	closeBackoffBase = 40 * time.Millisecond  // 1st retry wait; doubles each time
+	closeBackoffMax  = 400 * time.Millisecond // cap per-retry wait
+	closePace        = 25 * time.Millisecond  // breather between distinct panes
+)
+
+// paneCloser performs a single pane.close round-trip. A package var so tests can
+// substitute a fake herdr without a live socket.
+var paneCloser = func(id string) error {
+	_, err := herdrCall("pane.close", map[string]any{"pane_id": id})
+	return err
+}
+
+// closePane closes one pane, absorbing the two flaky cases: a transient herdr
+// error (retried with exponential backoff) and a pane that's already gone —
+// e.g. cascade-closed when its tab's last sibling was closed — which is treated
+// as success since the goal (pane gone) is met. invalid_request is our own bug,
+// so it fails fast without burning retries. Honors ctx so a client that walks
+// away (closed tab / navigation) doesn't keep us hammering herdr.
+func closePane(ctx context.Context, id string) error {
+	var last error
+	for attempt := 0; attempt < closeAttempts; attempt++ {
+		if attempt > 0 {
+			wait := closeBackoffBase << (attempt - 1)
+			if wait > closeBackoffMax {
+				wait = closeBackoffMax
+			}
+			if !sleepCtx(ctx, wait) {
+				return ctx.Err()
+			}
+		}
+		err := paneCloser(id)
+		if err == nil {
+			return nil
+		}
+		var he *herdrError
+		if errors.As(err, &he) {
+			switch he.Code {
+			case "pane_not_found":
+				return nil // already gone — idempotent success
+			case "invalid_request":
+				return err // malformed on our side; retrying won't help
+			}
+		}
+		last = err // transient (dial/timeout/herdr busy): back off and retry
+	}
+	return last
+}
+
+// sleepCtx waits for d, returning false if ctx is cancelled first.
+func sleepCtx(ctx context.Context, d time.Duration) bool {
+	t := time.NewTimer(d)
+	defer t.Stop()
+	select {
+	case <-t.C:
+		return true
+	case <-ctx.Done():
+		return false
+	}
+}
+
 // serveClose closes one or more panes (pane.close per id). Closing the last
-// pane in a tab closes the tab too. Returns which ids closed and any errors,
-// so a partial failure in a bulk close is still reported.
+// pane in a tab closes the tab too. Calls are serialized with retries + pacing
+// (see closePane) so a bulk close is resilient to herdr's reconfiguration
+// races; any pane that still can't be closed is reported per-id.
 func serveClose(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		http.Error(w, "POST only", http.StatusMethodNotAllowed)
@@ -608,10 +699,14 @@ func serveClose(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "pane_ids required", http.StatusBadRequest)
 		return
 	}
+	ctx := r.Context()
 	closed := make([]string, 0, len(req.PaneIDs))
 	errs := map[string]string{}
-	for _, id := range req.PaneIDs {
-		if _, err := herdrCall("pane.close", map[string]any{"pane_id": id}); err != nil {
+	for i, id := range req.PaneIDs {
+		if i > 0 && !sleepCtx(ctx, closePace) { // backpressure between panes
+			break
+		}
+		if err := closePane(ctx, id); err != nil {
 			errs[id] = err.Error()
 		} else {
 			closed = append(closed, id)

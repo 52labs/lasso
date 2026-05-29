@@ -141,11 +141,17 @@ by the `workspace.updated` event, with the 2 s poll as a backstop.
 
 **Multi-select** with ⌘/ctrl/shift-click (a plain click still just focuses).
 Selected cards get an accent ring + ✓ badge, and a selection bar appears with
-**Close selected** (and **Clear**). Bulk close calls `pane.close` per id and
-reports any partial failures; the selection is pruned to still-present panes on
-every refresh, so a pane that vanished underneath you is closed cleanly (its
-stale id just comes back as a reported error). Close is **confirmed** first
-since it terminates the terminal — and any agent running in it.
+**Close selected** (and **Clear**). Bulk close calls `pane.close` per id,
+**serialized with retries and a little pacing** so it's resilient to herdr's
+reconfiguration races: closing a pane shifts focus / recomputes layout / may
+close the tab, and firing the next close into that churn used to fail
+transiently (the old "just retry it" flakiness). Now each pane is retried with
+exponential backoff, and a pane that's **already gone** — e.g. cascade-closed
+when its tab's last sibling was closed — counts as a successful close rather
+than an error (herdr's `pane_not_found` is treated as idempotent success). Only
+a pane that still can't be closed after retries is reported per-id. The
+selection is also pruned to still-present panes on every refresh. Close is
+**confirmed** first since it terminates the terminal — and any agent running in it.
 
 ## File viewer
 
