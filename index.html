@@ -87,10 +87,16 @@
      no overflow:hidden on the card either: it collapses the card's content
      contribution so the auto grid row undersizes and the next group overlaps.
      The text lines below clip themselves (overflow+ellipsis). */
-  .pcard { border: 1px solid var(--border); border-radius: 6px; padding: 8px 9px; cursor: pointer;
-    background: var(--bg); transition: border-color .12s, background .12s; }
+  .pcard { position: relative; border: 1px solid var(--border); border-radius: 6px;
+    padding: 8px 9px; cursor: pointer; background: var(--bg);
+    transition: border-color .12s, background .12s; }
   .pcard:hover { border-color: var(--accent); background: var(--hover); }
   .pcard.focused { border-color: var(--accent); background: var(--accent-dim); }
+  /* multi-select (ctrl/⌘/shift-click) — distinct from .focused: an accent ring + ✓ badge */
+  .pcard.selected { outline: 2px solid var(--accent); outline-offset: -2px; background: var(--accent-dim); }
+  .pcard.selected::after { content: '✓'; position: absolute; top: 3px; right: 5px;
+    color: var(--accent); font-size: 11px; line-height: 1; }
+  .pcard.selected .ptitle { padding-right: 12px; }   /* keep the title clear of the badge */
   .pcard .ptitle { color: var(--fg); font-size: 12px; white-space: nowrap; overflow: hidden;
     text-overflow: ellipsis; }
   .pcard .pmeta { color: var(--muted); font-size: 10px; white-space: nowrap; overflow: hidden;
@@ -99,6 +105,28 @@
   .pcard .pagent.working { color: var(--warn); }
   .pcard .pagent.blocked { color: var(--bad); }
   .pcard .pagent.idle, .pcard .pagent.done { color: var(--good); }
+
+  /* selection action bar (shown when ≥1 pane is selected) */
+  .selbar { margin-top: 6px; }
+  .selbtn { background: var(--hover); color: var(--muted); border: 1px solid var(--border);
+    border-radius: 4px; padding: 3px 9px; font: inherit; font-size: 11px; cursor: pointer; }
+  .selbtn:hover { color: var(--accent); border-color: var(--accent); }
+  .selbtn.danger:hover { color: var(--bg); background: var(--bad); border-color: var(--bad); }
+
+  /* right-click context menu */
+  .ctxmenu { position: fixed; z-index: 50; display: none; min-width: 150px; padding: 4px;
+    background: var(--panel); border: 1px solid var(--border); border-radius: 6px;
+    box-shadow: 0 4px 16px rgba(0,0,0,.45); font-size: 12px; }
+  .ctxmenu.open { display: block; }
+  .ctxmenu .mi { padding: 6px 10px; border-radius: 4px; cursor: pointer; color: var(--fg);
+    white-space: nowrap; }
+  .ctxmenu .mi:hover { background: var(--hover); }
+  .ctxmenu .mi.danger { color: var(--bad); }
+  .ctxmenu .mi.danger:hover { background: var(--bad); color: var(--bg); }
+
+  /* footer hint under the pane grid */
+  .hint { flex: 0 0 auto; padding: 6px 12px; border-top: 1px solid var(--border);
+    color: var(--muted); font-size: 10px; background: var(--bg); }
 
   header.bar { padding: 8px 12px; border-bottom: 1px solid var(--border); background: var(--bg); }
   .row { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
@@ -197,10 +225,17 @@
           <span class="pill" id="panes-msg" style="display:none"></span>
           <button class="iconbtn" id="panes-refresh" title="refresh pane list">⟳</button>
         </div>
+        <div class="row selbar" id="selbar" style="display:none">
+          <span class="pill ws" id="selcount">0 selected</span>
+          <button class="selbtn danger" id="sel-close">Close selected</button>
+          <button class="selbtn" id="sel-clear">Clear</button>
+        </div>
       </header>
       <div id="panegrid"><div class="empty">loading panes…</div></div>
+      <div class="hint" id="panes-hint">click to focus · ⌘/ctrl/shift-click to multi-select · right-click for rename / close</div>
     </section>
   </div>
+  <div class="ctxmenu" id="ctxmenu"></div>
 </div>
 
 <script>
@@ -211,6 +246,8 @@ let activePaneID = null;   // pane_id of herdr's focused pane
 let selected = null;
 let curView = 'files';     // which right-column view is showing
 let paneEls = {};          // pane_id -> grid card element (for focus highlighting)
+let paneData = {};         // pane_id -> pane object (for context-menu actions)
+let selectedPanes = new Set(); // pane_ids selected for bulk actions
 
 // ---- file list ----
 async function loadDir(path) {
@@ -323,7 +360,10 @@ function renderPanes(panes) {
   $('#panes-count').textContent = panes.length + ' pane' + (panes.length === 1 ? '' : 's');
   g.innerHTML = '';
   paneEls = {};
-  if (!panes.length) { g.innerHTML = '<div class="empty">no panes</div>'; return; }
+  paneData = {};
+  const present = new Set(panes.map(p => p.pane_id));        // drop selections for vanished panes
+  for (const id of [...selectedPanes]) if (!present.has(id)) selectedPanes.delete(id);
+  if (!panes.length) { g.innerHTML = '<div class="empty">no panes</div>'; updateSelBar(); return; }
   let curWs = null;
   for (const p of panes) {
     if (p.workspace_id !== curWs) {                          // workspace group header
@@ -335,13 +375,15 @@ function renderPanes(panes) {
     }
     const card = paneCard(p);
     paneEls[p.pane_id] = card;
+    paneData[p.pane_id] = p;
     g.appendChild(card);
   }
+  updateSelBar();
 }
 
 function paneCard(p) {
   const d = document.createElement('div');
-  d.className = 'pcard' + (p.focused ? ' focused' : '');
+  d.className = 'pcard' + (p.focused ? ' focused' : '') + (selectedPanes.has(p.pane_id) ? ' selected' : '');
   const title = p.tab_label || p.pane_id;
   const cwd = (p.cwd || '').replace(/^\/home\/[^/]+/, '~');
   let agent = '';
@@ -353,7 +395,11 @@ function paneCard(p) {
     '<div class="ptitle">' + escapeHtml(title) + '</div>' +
     (cwd ? '<div class="pmeta">' + escapeHtml(cwd) + '</div>' : '') + agent;
   d.title = [p.tab_label, p.cwd, p.pane_id].filter(Boolean).join('\n');
-  d.onclick = () => focusPane(p, d);
+  d.onclick = (e) => {
+    if (e.ctrlKey || e.metaKey || e.shiftKey) toggleSelect(p.pane_id);  // multi-select
+    else { clearSelection(); focusPane(p, d); }                          // plain click: focus
+  };
+  d.oncontextmenu = (e) => { e.preventDefault(); openCtxMenu(e, p); };
   return d;
 }
 
@@ -371,6 +417,98 @@ async function focusPane(p, el) {
   } catch (e) {
     showPaneMsg('focus failed: ' + e.message, true);
   }
+}
+
+// ---- multi-select ----
+function toggleSelect(paneId) {
+  if (selectedPanes.has(paneId)) selectedPanes.delete(paneId);
+  else selectedPanes.add(paneId);
+  const el = paneEls[paneId];
+  if (el) el.classList.toggle('selected', selectedPanes.has(paneId));
+  updateSelBar();
+}
+function clearSelection() {
+  selectedPanes.clear();
+  document.querySelectorAll('.pcard.selected').forEach(c => c.classList.remove('selected'));
+  updateSelBar();
+}
+function updateSelBar() {
+  const n = selectedPanes.size;
+  $('#selbar').style.display = n ? '' : 'none';
+  $('#selcount').textContent = n + ' selected';
+}
+$('#sel-clear').onclick = () => clearSelection();
+$('#sel-close').onclick = () => closePanes([...selectedPanes]);
+
+// ---- right-click context menu ----
+function openCtxMenu(e, p) {
+  const menu = $('#ctxmenu');
+  menu.innerHTML = '';
+  const multi = selectedPanes.size > 1 && selectedPanes.has(p.pane_id);
+  if (multi) {
+    addMI(menu, 'Close ' + selectedPanes.size + ' panes', () => closePanes([...selectedPanes]), true);
+  } else {
+    addMI(menu, 'Rename…', () => renameTab(p));
+    addMI(menu, 'Close pane', () => closePanes([p.pane_id]), true);
+  }
+  menu.style.left = '0px'; menu.style.top = '0px'; menu.classList.add('open');  // measure then clamp
+  const r = menu.getBoundingClientRect();
+  const x = Math.min(e.clientX, innerWidth - r.width - 4);
+  const y = Math.min(e.clientY, innerHeight - r.height - 4);
+  menu.style.left = x + 'px'; menu.style.top = y + 'px';
+}
+function addMI(menu, label, fn, danger) {
+  const d = document.createElement('div');
+  d.className = 'mi' + (danger ? ' danger' : '');
+  d.textContent = label;
+  d.onclick = (ev) => { ev.stopPropagation(); closeCtxMenu(); fn(); };
+  menu.appendChild(d);
+}
+function closeCtxMenu() { $('#ctxmenu').classList.remove('open'); }
+document.addEventListener('click', closeCtxMenu);
+document.addEventListener('keydown', (e) => { if (e.key === 'Escape') closeCtxMenu(); });
+document.addEventListener('contextmenu', (e) => { if (!e.target.closest('.pcard')) closeCtxMenu(); });
+$('#panegrid').addEventListener('scroll', closeCtxMenu);
+
+// ---- rename / close ----
+async function renameTab(p) {
+  const cur = p.tab_label || '';
+  const name = prompt('Rename tab', cur);
+  if (name == null) return;
+  const label = name.trim();
+  if (!label || label === cur) return;
+  try {
+    const r = await fetch('/api/rename', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ tab_id: p.tab_id, label }),
+    });
+    if (!r.ok) throw new Error(await r.text());
+    showPaneMsg('');
+    loadPanes();
+  } catch (e) { showPaneMsg('rename failed: ' + e.message, true); }
+}
+
+async function closePanes(paneIds) {
+  paneIds = [...new Set(paneIds)].filter(Boolean);
+  if (!paneIds.length) return;
+  const n = paneIds.length;
+  const names = paneIds.map(id => (paneData[id] && paneData[id].tab_label) || id).slice(0, 5).join(', ');
+  if (!confirm('Close ' + n + ' pane' + (n === 1 ? '' : 's') + '?\n' + names +
+               (n > 5 ? ', …' : '') + '\n\nThis terminates the terminal' + (n === 1 ? '' : 's') +
+               ' (and any agent running in ' + (n === 1 ? 'it' : 'them') + ').')) return;
+  try {
+    const r = await fetch('/api/close', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ pane_ids: paneIds }),
+    });
+    if (!r.ok) throw new Error(await r.text());
+    const res = await r.json();
+    clearSelection();
+    loadPanes();
+    const nErr = res.errors ? Object.keys(res.errors).length : 0;
+    if (nErr) showPaneMsg('closed ' + (res.closed ? res.closed.length : 0) + ', ' + nErr + ' failed', true);
+    else showPaneMsg('');
+  } catch (e) { showPaneMsg('close failed: ' + e.message, true); }
 }
 
 function showPaneMsg(msg, bad) {

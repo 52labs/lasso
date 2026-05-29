@@ -4,8 +4,9 @@ A single Go binary that serves a two-column web UI:
 
 - **Left** — `herdr` running inside a `ttyd` terminal, embedded in an `<iframe>`.
 - **Right** — two tabs: a **Files** view that follows herdr's **focused pane**
-  `cwd` live, and a **Panes** view (a grid of every herdr pane that focuses one
-  in the terminal when clicked). Collapsible via the `»` button in the tab strip
+  `cwd` live, and a **Panes** view (a grid of every herdr pane — click to focus
+  it in the terminal, right-click to rename/close, ⌘/ctrl/shift-click to
+  multi-select and bulk-close). Collapsible via the `»` button in the tab strip
   (the terminal then fills the width); a floating `«` button brings it back. The
   state persists in `localStorage`. The divider between the panes is also
   drag-resizable.
@@ -93,11 +94,28 @@ The focused pane is highlighted, and that highlight stays in sync with herdr
 however focus changes — clicking a card, or navigating directly in the terminal
 (the highlight follows the same SSE focus stream the Files view uses).
 
-Clicking a card focuses that pane in the terminal. herdr's socket has **no
+**Click** a card to focus that pane in the terminal. herdr's socket has **no
 `pane.focus`** method, so the server focuses a pane by calling `workspace.focus`
 then `tab.focus` (panes are one-per-tab in the common case; for a split tab this
 focuses the tab the pane belongs to). The grid is fetched on tab open and via
 its **⟳** refresh button.
+
+**Right-click** a card for a context menu:
+
+- **Rename…** prompts for a new name and calls `tab.rename` — the cards are
+  labeled by their *tab*, and `pane.rename` sets a pane name herdr never
+  surfaces, so renaming the tab is what actually relabels the card (the change
+  shows up in herdr's own tab bar too).
+- **Close pane** closes that pane (`pane.close`); closing the last pane in a tab
+  closes the tab.
+
+**Multi-select** with ⌘/ctrl/shift-click (a plain click still just focuses).
+Selected cards get an accent ring + ✓ badge, and a selection bar appears with
+**Close selected** (and **Clear**). Bulk close calls `pane.close` per id and
+reports any partial failures; the selection is pruned to still-present panes on
+every refresh, so a pane that vanished underneath you is closed cleanly (its
+stale id just comes back as a reported error). Close is **confirmed** first
+since it terminates the terminal — and any agent running in it.
 
 ## Expose over Tailscale (plain HTTP, tailnet-only)
 
@@ -138,3 +156,5 @@ Then from any tailnet device: `http://<host>:8090/` (MagicDNS) — e.g.
 - `GET /api/file?path=` — file preview (2 MiB cap)
 - `GET /api/panes` — every pane with workspace/tab labels, agent, and focus state
 - `POST /api/focus` — focus a pane `{workspace_id, tab_id}` (→ `workspace.focus` + `tab.focus`)
+- `POST /api/rename` — rename a tab `{tab_id, label}` (→ `tab.rename`)
+- `POST /api/close` — close panes `{pane_ids: [...]}` (→ `pane.close` each); returns `{closed, errors}`

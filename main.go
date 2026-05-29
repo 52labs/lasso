@@ -110,6 +110,8 @@ func main() {
 	mux.HandleFunc("/api/file", serveFile)
 	mux.HandleFunc("/api/panes", servePanes)
 	mux.HandleFunc("/api/focus", serveFocus)
+	mux.HandleFunc("/api/rename", serveRename)
+	mux.HandleFunc("/api/close", serveClose)
 	mux.HandleFunc("/", serveIndex)
 
 	handler := withAuth(mux, authUser, authPass, hasAuth)
@@ -490,6 +492,64 @@ func serveFocus(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, map[string]any{"ok": true})
+}
+
+// serveRename renames the tab a pane lives in. The grid labels each card with
+// its tab label, so renaming the *tab* is what visibly relabels the card
+// (pane.rename sets a pane name that herdr never surfaces in pane.list).
+func serveRename(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "POST only", http.StatusMethodNotAllowed)
+		return
+	}
+	var req struct {
+		TabID string `json:"tab_id"`
+		Label string `json:"label"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, "bad json", http.StatusBadRequest)
+		return
+	}
+	if req.TabID == "" || strings.TrimSpace(req.Label) == "" {
+		http.Error(w, "tab_id and non-empty label required", http.StatusBadRequest)
+		return
+	}
+	if _, err := herdrCall("tab.rename", map[string]any{"tab_id": req.TabID, "label": req.Label}); err != nil {
+		http.Error(w, err.Error(), http.StatusBadGateway)
+		return
+	}
+	writeJSON(w, map[string]any{"ok": true})
+}
+
+// serveClose closes one or more panes (pane.close per id). Closing the last
+// pane in a tab closes the tab too. Returns which ids closed and any errors,
+// so a partial failure in a bulk close is still reported.
+func serveClose(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "POST only", http.StatusMethodNotAllowed)
+		return
+	}
+	var req struct {
+		PaneIDs []string `json:"pane_ids"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, "bad json", http.StatusBadRequest)
+		return
+	}
+	if len(req.PaneIDs) == 0 {
+		http.Error(w, "pane_ids required", http.StatusBadRequest)
+		return
+	}
+	closed := make([]string, 0, len(req.PaneIDs))
+	errs := map[string]string{}
+	for _, id := range req.PaneIDs {
+		if _, err := herdrCall("pane.close", map[string]any{"pane_id": id}); err != nil {
+			errs[id] = err.Error()
+		} else {
+			closed = append(closed, id)
+		}
+	}
+	writeJSON(w, map[string]any{"closed": closed, "errors": errs})
 }
 
 // subscribeFocus opens a long-lived connection subscribed to focus events and
