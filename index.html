@@ -6,9 +6,18 @@
 <title>herdr + file viewer</title>
 <style>
   :root {
-    --bg: #0d1117; --panel: #161b22; --border: #30363d; --fg: #c9d1d9;
-    --muted: #8b949e; --accent: #58a6ff; --accent-dim: #1f6feb33;
-    --dir: #58a6ff; --good: #3fb950; --warn: #d29922; --bad: #f85149;
+    /* Rosé Pine */
+    --bg: #191724;        /* base — matches terminal bg */
+    --panel: #1f1d2e;     /* surface */
+    --border: #26233a;    /* overlay */
+    --fg: #e0def4;        /* text */
+    --muted: #6e6a86;     /* muted */
+    --accent: #9ccfd8;    /* foam */
+    --accent-dim: #9ccfd826;
+    --dir: #c4a7e7;       /* iris */
+    --good: #9ccfd8;      /* foam */
+    --warn: #f6c177;      /* gold */
+    --bad: #eb6f92;       /* love */
   }
   * { box-sizing: border-box; }
   html, body { margin: 0; height: 100%; background: var(--bg); color: var(--fg);
@@ -17,7 +26,7 @@
 
   /* left: terminal */
   #left { flex: 1 1 60%; min-width: 240px; display: flex; flex-direction: column; }
-  #left iframe { border: 0; width: 100%; height: 100%; display: block; background: #000; }
+  #left iframe { border: 0; width: 100%; height: 100%; display: block; background: #191724; }
 
   /* drag handle */
   #splitter { flex: 0 0 6px; cursor: col-resize; background: var(--border);
@@ -28,7 +37,7 @@
   #right { flex: 1 1 40%; min-width: 280px; display: flex; flex-direction: column;
     background: var(--panel); border-left: 1px solid var(--border); overflow: hidden; }
 
-  header.bar { padding: 8px 12px; border-bottom: 1px solid var(--border); background: #0d1117; }
+  header.bar { padding: 8px 12px; border-bottom: 1px solid var(--border); background: #191724; }
   .row { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
   .pill { padding: 1px 7px; border-radius: 10px; border: 1px solid var(--border);
     font-size: 11px; color: var(--muted); white-space: nowrap; }
@@ -49,7 +58,7 @@
   #files { flex: 1 1 auto; overflow: auto; }
   .entry { display: flex; align-items: center; gap: 8px; padding: 3px 12px; cursor: pointer;
     white-space: nowrap; }
-  .entry:hover { background: #1f242c; }
+  .entry:hover { background: #21202e; }
   .entry.sel { background: var(--accent-dim); }
   .entry .nm { overflow: hidden; text-overflow: ellipsis; }
   .entry.d .nm { color: var(--dir); }
@@ -57,9 +66,9 @@
   .ico { width: 14px; text-align: center; opacity: .8; }
 
   #preview { flex: 0 0 auto; max-height: 45%; overflow: auto; border-top: 1px solid var(--border);
-    display: none; background: #0d1117; }
+    display: none; background: #191724; }
   #preview.open { display: block; }
-  #preview .phdr { position: sticky; top: 0; background: #0d1117; padding: 6px 12px;
+  #preview .phdr { position: sticky; top: 0; background: #191724; padding: 6px 12px;
     border-bottom: 1px solid var(--border); display: flex; gap: 8px; align-items: center; }
   #preview .phdr .x { margin-left: auto; cursor: pointer; color: var(--muted); }
   #preview pre { margin: 0; padding: 10px 12px; white-space: pre; font-size: 12px; }

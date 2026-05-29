@@ -123,6 +123,18 @@ func main() {
 // ttyd child process
 // ---------------------------------------------------------------------------
 
+// rosePineXtermTheme is an xterm.js ITheme (background/foreground/cursor + the
+// 16 ANSI colors) matching Rosé Pine, so the terminal palette lines up with
+// herdr's theme and the sidebar. Passed to ttyd via `-t theme=<json>`, which
+// forwards it to xterm.js in the browser.
+const rosePineXtermTheme = `{` +
+	`"background":"#191724","foreground":"#e0def4",` +
+	`"cursor":"#e0def4","cursorAccent":"#191724","selectionBackground":"#403d52",` +
+	`"black":"#26233a","red":"#eb6f92","green":"#31748f","yellow":"#f6c177",` +
+	`"blue":"#9ccfd8","magenta":"#c4a7e7","cyan":"#ebbcba","white":"#e0def4",` +
+	`"brightBlack":"#6e6a86","brightRed":"#eb6f92","brightGreen":"#31748f","brightYellow":"#f6c177",` +
+	`"brightBlue":"#9ccfd8","brightMagenta":"#c4a7e7","brightCyan":"#ebbcba","brightWhite":"#e0def4"}`
+
 func startTtyd(ctx context.Context) error {
 	args := []string{
 		"-i", "lo", // loopback only
@@ -131,6 +143,7 @@ func startTtyd(ctx context.Context) error {
 		"-W",                           // writable
 		"-t", "disableLeaveAlert=true", // no confirm dialog inside the iframe
 		"-t", "fontSize=13",
+		"-t", "theme=" + rosePineXtermTheme,
 	}
 	args = append(args, strings.Fields(*termCmd)...)
 	cmd := exec.Command("ttyd", args...)
