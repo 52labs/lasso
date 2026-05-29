@@ -39,12 +39,13 @@ import (
 var staticFS embed.FS
 
 var (
-	listenAddr = flag.String("listen", "127.0.0.1:8090", "address for the web server (loopback by default — the terminal is a writable shell)")
-	ttydPort   = flag.Int("ttyd-port", 7682, "loopback port ttyd listens on")
-	herdrSock  = flag.String("herdr-sock", defaultSock(), "path to the herdr unix socket")
-	termCmd    = flag.String("term-cmd", "herdr", "command ttyd runs in the terminal")
-	spawnTtyd  = flag.Bool("spawn-ttyd", true, "spawn and supervise ttyd as a child process")
-	pollEvery  = flag.Duration("poll", 2*time.Second, "fallback poll interval for cwd changes")
+	listenAddr  = flag.String("listen", "127.0.0.1:8090", "address for the web server (loopback by default — the terminal is a writable shell)")
+	ttydPort    = flag.Int("ttyd-port", 7682, "loopback port ttyd listens on")
+	herdrSock   = flag.String("herdr-sock", defaultSock(), "path to the herdr unix socket")
+	termCmd     = flag.String("term-cmd", "herdr", "command ttyd runs in the terminal")
+	spawnTtyd   = flag.Bool("spawn-ttyd", true, "spawn and supervise ttyd as a child process")
+	pollEvery   = flag.Duration("poll", 2*time.Second, "fallback poll interval for cwd changes")
+	allowNoAuth = flag.Bool("insecure-no-auth", false, "permit a non-loopback bind without auth (tailnet-only use; never on a public interface)")
 )
 
 func defaultSock() string {
@@ -63,9 +64,9 @@ func main() {
 	// non-loopback address without auth, so this can't accidentally expose a
 	// writable shell on a public interface again.
 	authUser, authPass, hasAuth := parseAuth(os.Getenv("UI_AUTH"))
-	if !isLoopback(*listenAddr) && !hasAuth {
-		log.Fatalf("refusing to listen on non-loopback %q without auth — set UI_AUTH=user:pass "+
-			"(or front it with `tailscale serve` and keep -listen on 127.0.0.1)", *listenAddr)
+	if !isLoopback(*listenAddr) && !hasAuth && !*allowNoAuth {
+		log.Fatalf("refusing to listen on non-loopback %q without auth — set UI_AUTH=user:pass, "+
+			"or pass -insecure-no-auth to bind bare (only safe on a private interface like tailscale0)", *listenAddr)
 	}
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
@@ -102,9 +103,12 @@ func main() {
 		_ = srv.Shutdown(sh)
 	}()
 
-	if hasAuth {
+	switch {
+	case hasAuth:
 		log.Printf("auth:     enabled (basic, user %q)", authUser)
-	} else {
+	case !isLoopback(*listenAddr):
+		log.Printf("auth:     DISABLED on non-loopback %s (-insecure-no-auth) — relies on the network being private", *listenAddr)
+	default:
 		log.Printf("auth:     DISABLED (loopback only)")
 	}
 	log.Printf("UI:       http://%s", *listenAddr)

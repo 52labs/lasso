@@ -38,7 +38,10 @@ is the *public* internet). Bind to the **tailscale interface IP** instead — on
 your tailnet can reach it. Auth is required for any non-loopback bind (guard).
 
 ```bash
-# basic-auth creds via env (never argv), then bind to the tailscale IP:
+# tailnet-only, no auth (WireGuard already encrypts + authenticates the tailnet):
+./ttyd-iframe-demo -listen "$(tailscale ip -4):8090" -insecure-no-auth
+
+# or, to require a login as well, set creds via env (never argv) and drop the flag:
 UI_AUTH="herdr:$(cat .authpass)" ./ttyd-iframe-demo -listen "$(tailscale ip -4):8090"
 ```
 
@@ -49,9 +52,13 @@ Then from any tailnet device: `http://<host>:8090/` (MagicDNS) — e.g.
 
 - Binds to **loopback** by default; the terminal (ttyd) always stays on loopback.
 - `UI_AUTH=user:pass` enables HTTP basic auth across the page, terminal, SSE and
-  file APIs. The server **refuses to start** on a non-loopback `-listen` without it.
-- `/api/file` reads any absolute path as the running user — keep auth on, or
-  confine it before widening access.
+  file APIs. The server **refuses to start** on a non-loopback `-listen` unless
+  either `UI_AUTH` is set or `-insecure-no-auth` is passed — so it can never
+  *accidentally* expose a bare writable shell on a public interface.
+- `-insecure-no-auth` is intended only for a private interface (e.g. `tailscale0`),
+  where the network itself provides authentication. Never use it on a public IP.
+- `/api/file` reads any absolute path as the running user — fine on a private
+  tailnet; confine it before widening access.
 
 ## Endpoints
 
