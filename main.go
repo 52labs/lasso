@@ -1044,13 +1044,12 @@ func gitOut(dir string, args ...string) (string, error) {
 	return string(out), nil
 }
 
-// serveDiff returns the git diff for the repo containing ?path=. It mirrors the
-// way Fulcrum builds its diff view. Two modes, selected by ?mode=:
-//   - working (default): show working-tree changes (unstaged + staged), and if
-//     the tree is clean fall back to the branch diff against the merge-base with
-//     the default branch (so a finished feature branch still shows its work).
-//   - branch: always diff merge-base(base, HEAD)..HEAD, ignoring the working
-//     tree — useful for seeing the whole branch vs the primary branch.
+// serveDiff returns the git diff for the repo containing ?path=. Two modes,
+// selected by ?mode=:
+//   - working (default): show working-tree changes (unstaged + staged) only —
+//     empty when the tree is clean.
+//   - branch: diff merge-base(base, HEAD)..HEAD, ignoring the working tree —
+//     useful for seeing the whole branch vs the primary branch.
 //
 // Optional ?ignoreWhitespace, ?includeUntracked, and ?baseBranch (override the
 // branch the comparison runs against) toggles. The response always reports the
@@ -1095,6 +1094,8 @@ func serveDiff(w http.ResponseWriter, r *http.Request) {
 		combined, baseBranch, files, _ = branchVsBase(root, branch, baseOverride, wsArg)
 		isBranchDiff = true
 	} else {
+		// Working-tree changes only — when the tree is clean this is empty. The
+		// branch-vs-base comparison is opt-in via mode=branch, not a fallback.
 		combined = mustGit(root, wsArg("diff", "--cached")...) + mustGit(root, wsArg("diff")...)
 		files = status
 		if includeUntracked {
@@ -1102,12 +1103,6 @@ func serveDiff(w http.ResponseWriter, r *http.Request) {
 				if f.Status == "untracked" {
 					combined += untrackedDiff(root, f.Path)
 				}
-			}
-		}
-		if strings.TrimSpace(combined) == "" {
-			if bd, base, bfiles, ok := branchVsBase(root, branch, baseOverride, wsArg); ok && strings.TrimSpace(bd) != "" {
-				combined, baseBranch, files = bd, base, bfiles
-				isBranchDiff = true
 			}
 		}
 	}

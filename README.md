@@ -14,10 +14,10 @@ A single Go binary that serves a two-column web UI:
     *inside* a session) and shows the installed version.
 - **Right** — three tabs:
   - **Diff** (default) — the git diff of the focused pane's repo, in the spirit
-    of Fulcrum's diff view. Shows working-tree changes (falling back to the
-    branch-vs-base diff when the tree is clean), or flip **vs primary branch** to
-    always diff the whole branch against the primary branch. The tab carries an
-    amber badge with the count of uncommitted changes whenever the tree is dirty.
+    of Fulcrum's diff view. Shows working-tree changes (empty when the tree is
+    clean), or flip **vs primary branch** to diff the whole branch against the
+    primary branch instead. The tab carries an amber badge with the count of
+    uncommitted changes whenever the tree is dirty.
   - **Files** — a file browser that follows herdr's **focused pane** `cwd` live;
     click a file to open it full-screen with rich markdown preview and syntax
     highlighting (see [File viewer](#file-viewer)).
@@ -227,12 +227,11 @@ root (`git rev-parse --show-toplevel`) from that directory and builds the diff
 the way Fulcrum's diff view does:
 
 - **Working-tree changes** (default) — staged (`git diff --cached`) + unstaged
-  (`git diff`). If the tree is clean, it falls back to the branch-vs-base diff
-  against the merge-base with the default branch (`origin/HEAD`, else
-  `main`/`master`), so a finished feature branch still shows its work.
-- **vs primary branch** — toggle it on to *always* diff the whole branch
-  (`merge-base(base, HEAD)..HEAD`) against the primary branch, regardless of
-  whether the tree is dirty — useful for reviewing everything a branch adds over
+  (`git diff`) only. When the tree is clean there's nothing to show (no files,
+  no diff) — the branch comparison is opt-in, not a fallback.
+- **vs primary branch** — toggle it on to diff the whole branch
+  (`merge-base(base, HEAD)..HEAD`) against the primary branch (`origin/HEAD`,
+  else `main`/`master`) — useful for reviewing everything a branch adds over
   `main`. A `vs <base>` pill marks this mode and **untracked** is disabled (there
   are no working-tree files to add).
 
