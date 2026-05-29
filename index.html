@@ -374,7 +374,7 @@
         <span class="vbadge" id="v-trunc" style="display:none">truncated</span>
         <span class="vspace"></span>
         <button class="vbtn" id="v-mode" style="display:none" title="toggle rendered / raw">Raw</button>
-        <button class="vbtn" id="v-wrap" style="display:none" title="toggle line wrap">Wrap</button>
+        <button class="vbtn on" id="v-wrap" style="display:none" title="toggle line wrap">Wrap</button>
         <button class="vbtn" id="v-open" title="open raw file in a new tab">↗</button>
         <button class="vbtn" id="v-close" title="close (Esc)">✕</button>
       </header>
@@ -598,10 +598,13 @@ function closeViewer() {
 $('#v-back').onclick = closeViewer;
 $('#v-close').onclick = closeViewer;
 $('#v-mode').onclick = () => { mdRendered = !mdRendered; renderMarkdown(); };
+// line wrapping is on by default; the toggle persists across files and reloads
+try { if (localStorage.getItem('codeWrap') === '0') $('#v-wrap').classList.remove('on'); } catch (e) {}
 $('#v-wrap').onclick = () => {
   const on = $('#v-wrap').classList.toggle('on');
   const pre = $('#v-body').querySelector('pre.vcode');
   if (pre) pre.classList.toggle('wrap', on);
+  try { localStorage.setItem('codeWrap', on ? '1' : '0'); } catch (e) {}
 };
 $('#v-open').onclick = () => { if (viewerFile) window.open('/api/file?path=' + encodeURIComponent(viewerFile.path), '_blank'); };
 document.addEventListener('keydown', e => { if (e.key === 'Escape' && $('#viewer').classList.contains('open')) closeViewer(); });

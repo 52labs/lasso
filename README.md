@@ -149,7 +149,8 @@ list), modeled on Fulcrum's replace-view editor:
   [highlight.js](https://highlightjs.org): the language is picked from the file
   extension (falling back to auto-detect), and the tokens are colored from the
   active herdr theme's palette — not a fixed highlight.js stylesheet — so the code
-  matches everything else. A **Wrap** toggle controls line wrapping.
+  matches everything else. Line wrapping is **on by default**; a **Wrap** toggle
+  flips it (the choice persists in `localStorage`).
 - **Images** render inline (on a checkerboard so transparency is visible).
 - **↗** opens the raw file in a new browser tab.
 
