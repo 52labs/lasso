@@ -152,6 +152,7 @@
   .goto button:hover { color: var(--accent); border-color: var(--accent); }
   .dot { width: 7px; height: 7px; border-radius: 50%; background: var(--muted); display: inline-block; }
   .dot.live { background: var(--good); box-shadow: 0 0 6px var(--good); }
+  .dot.down { background: var(--warn); box-shadow: 0 0 6px var(--warn); }
 
   .cwd { margin-top: 6px; display: flex; align-items: center; gap: 6px; }
   .cwd .crumbs { color: var(--fg); word-break: break-all; }
@@ -949,7 +950,12 @@ $('#br-open').onclick = () => { const u = $('#br-url').value.trim(); if (u) wind
 
 // ---- active pane (SSE) ----
 function applyActive(a) {
-  $('#live').classList.add('live');
+  const up = a.herdr_up !== false;   // tolerate older/primed payloads lacking the field
+  const dot = $('#live');
+  dot.classList.toggle('live', up);
+  dot.classList.toggle('down', !up);
+  dot.title = up ? 'herdr connected'
+                 : 'herdr disconnected — showing last-known state';
   $('#ws').textContent = 'ws: ' + (a.workspace_label || a.workspace_id || '—');
   $('#tab').textContent = 'tab: ' + (a.tab_label || a.tab_id || '—');
   const ag = $('#agent');
@@ -1031,7 +1037,7 @@ function applyTermTheme(theme, tries) {
 function connectSSE() {
   const es = new EventSource('/api/events');
   es.addEventListener('active', e => applyActive(JSON.parse(e.data)));
-  es.onerror = () => { $('#live').classList.remove('live'); };
+  es.onerror = () => { const d = $('#live'); d.classList.remove('live'); d.classList.remove('down'); };
 }
 
 // wireTerminalIframe attaches behavior to the same-origin ttyd iframe document:

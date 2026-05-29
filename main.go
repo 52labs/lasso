@@ -383,6 +383,7 @@ type Active struct {
 	AgentStatus    string `json:"agent_status"`
 	PanesRev       int    `json:"panes_rev"` // bumps when the pane-grid layout (workspace order/membership) changes
 	ThemeRev       int    `json:"theme_rev"` // bumps when herdr's resolved theme changes (config.toml edited)
+	HerdrUp        bool   `json:"herdr_up"`  // false when herdr's socket is unreachable; the rest of the struct is then last-known (stale)
 }
 
 // fetchActive returns the focused-pane state plus a layout signature. The
@@ -1146,7 +1147,9 @@ type hub struct {
 // newHub seeds the hub's theme with the one resolved at startup, so the first
 // poll only bumps themeRev if config.toml has actually changed since boot.
 func newHub() *hub {
-	return &hub{curTheme: theme, clients: map[chan Active]struct{}{}}
+	// Seed HerdrUp=true so a browser connecting before the first poll doesn't
+	// briefly flash the "herdr disconnected" state.
+	return &hub{cur: Active{HerdrUp: true}, curTheme: theme, clients: map[chan Active]struct{}{}}
 }
 
 func (h *hub) snapshot() Active             { h.mu.RLock(); defer h.mu.RUnlock(); return h.cur }
@@ -1161,8 +1164,29 @@ func (h *hub) run(ctx context.Context) {
 	refresh := func() {
 		a, sig, err := fetchActive()
 		if err != nil {
+			// herdr's socket is unreachable (closed in the terminal). Keep the
+			// last-known state but mark it stale, and notify clients once on the
+			// up->down transition so the sidebar can show a disconnected cue.
+			h.mu.Lock()
+			var down Active
+			var clients []chan Active
+			if h.cur.HerdrUp {
+				h.cur.HerdrUp = false
+				down = h.cur
+				for c := range h.clients {
+					clients = append(clients, c)
+				}
+			}
+			h.mu.Unlock()
+			for _, c := range clients {
+				select {
+				case c <- down:
+				default:
+				}
+			}
 			return
 		}
+		a.HerdrUp = true
 		// Re-resolve herdr's theme from config.toml every tick (cheap file read +
 		// parse) so an edit to [theme].name is picked up live. Done outside the
 		// lock to avoid holding it during I/O.
