@@ -51,12 +51,15 @@ Open <http://localhost:8090>.
 
 Both panes adopt whichever theme you've selected in `~/.config/herdr/config.toml`
 (`[theme].name`), so the demo matches herdr instead of hardcoding one palette.
-herdr exposes no theme method on its socket, so the server resolves the theme at
-startup the same way herdr does: it reads the configured **name**, applies any
-`[theme.custom]` per-token overrides, then the legacy `[ui].accent`. Built-ins:
+herdr exposes no theme method on its socket, so the server resolves the theme
+the same way herdr does: it reads the configured **name**, applies any
+`[theme.custom]` per-token overrides, then the legacy `[ui].accent`. All of
+herdr 0.6.4's built-ins are supported, dark and light:
 `catppuccin`, `tokyo-night`, `dracula`, `nord`, `gruvbox`, `one-dark`,
-`solarized`, `kanagawa`, `rose-pine`, `vesper`, `terminal` (unknown → catppuccin,
-herdr's default).
+`solarized`, `kanagawa`, `rose-pine`, `vesper`, `terminal`, `catppuccin-latte`,
+`tokyo-night-day`, `gruvbox-light`, `one-light`, `solarized-light`,
+`kanagawa-lotus`, `rose-pine-dawn` — plus herdr's alternate spellings (`latte`,
+`dawn`, `lotus`, `tokyonight-day`, …). Unknown → catppuccin (herdr's default).
 
 - The **sidebar** CSS variables come from herdr's own 16-token UI palette
   (transcribed from herdr's source), so the chrome matches herdr's chrome.

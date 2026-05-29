@@ -1,6 +1,7 @@
 package main
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -54,14 +55,26 @@ func TestEveryThemeResolves(t *testing.T) {
 
 func TestAliasesAndUnknown(t *testing.T) {
 	cases := map[string]string{
-		"Rosé Pine":   "rose-pine", // note: not a real alias; spaces/accents -> falls back
-		"rosepine":    "rose-pine",
-		"Tokyo Night": "tokyo-night",
-		"tokyo_night": "tokyo-night",
+		"Rosé Pine":        "rose-pine", // note: not a real alias; spaces/accents -> falls back
+		"rosepine":         "rose-pine",
+		"Tokyo Night":      "tokyo-night",
+		"tokyo_night":      "tokyo-night",
 		"catppuccin-mocha": "catppuccin",
 		"gruvbox-dark":     "gruvbox",
 		"onedark":          "one-dark",
 		"totally-bogus":    "catppuccin", // unknown -> herdr default
+		// light variants + herdr's alternate spellings for them
+		"tokyo-night-day": "tokyo-night-day",
+		"Tokyo Night Day": "tokyo-night-day",
+		"tokyonight-day":  "tokyo-night-day",
+		"latte":           "catppuccin-latte",
+		"dawn":            "rose-pine-dawn",
+		"rosepine-dawn":   "rose-pine-dawn",
+		"lotus":           "kanagawa-lotus",
+		"gruvbox-light":   "gruvbox-light",
+		"one-light":       "one-light",
+		"onelight":        "one-light",
+		"solarized-light": "solarized-light",
 	}
 	for in, want := range cases {
 		got := normalizeThemeName(in)
@@ -70,6 +83,36 @@ func TestAliasesAndUnknown(t *testing.T) {
 		}
 		if got != want && !(in == "Rosé Pine") { // accented form legitimately won't match
 			t.Errorf("normalize(%q) = %q, want %q", in, got, want)
+		}
+	}
+}
+
+// TestLightThemesAreLight guards the light variants: their background (panel_bg)
+// must be clearly brighter than their text, and the xterm bg/fg must agree — so a
+// swapped or mis-transcribed value (e.g. a dark bg) is caught.
+func TestLightThemesAreLight(t *testing.T) {
+	lum := func(hex string) float64 {
+		if len(hex) != 7 || hex[0] != '#' {
+			t.Fatalf("bad hex %q", hex)
+		}
+		var r, g, b int
+		_, err := fmt.Sscanf(hex, "#%02x%02x%02x", &r, &g, &b)
+		if err != nil {
+			t.Fatalf("parse %q: %v", hex, err)
+		}
+		return (0.299*float64(r) + 0.587*float64(g) + 0.114*float64(b)) / 255
+	}
+	for _, name := range []string{
+		"catppuccin-latte", "tokyo-night-day", "gruvbox-light", "one-light",
+		"solarized-light", "kanagawa-lotus", "rose-pine-dawn",
+	} {
+		rt := loadHerdrTheme(name)
+		bg, fg := lum(rt.ui.PanelBg), lum(rt.ui.Text)
+		if bg < 0.6 {
+			t.Errorf("%s: panel_bg %s not light (luma %.2f)", name, rt.ui.PanelBg, bg)
+		}
+		if bg <= fg {
+			t.Errorf("%s: panel_bg %s should be brighter than text %s (%.2f <= %.2f)", name, rt.ui.PanelBg, rt.ui.Text, bg, fg)
 		}
 	}
 }

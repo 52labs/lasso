@@ -206,19 +206,131 @@ var themes = map[string]themeDef{
 			BrightBlue: "#5c5cff", BrightMagenta: "#ff00ff", BrightCyan: "#00ffff", BrightWhite: "#ffffff",
 		},
 	},
+
+	// Light variants (herdr 0.6.4). UI tokens transcribed verbatim from herdr's
+	// src/app/state.rs (the *_latte/_day/_light/_lotus/_dawn Palette fns); ANSI
+	// 16 from each scheme's canonical Alacritty export — same provenance as the
+	// dark themes above. On these the bg is light and the text is dark.
+	"catppuccin-latte": {
+		ui: uiPalette{
+			Accent: "#1e66f5", PanelBg: "#eff1f5", Surface0: "#ccd0da", Surface1: "#bcc0cc",
+			SurfaceDim: "#e6e9ef", Overlay0: "#9ca0b0", Overlay1: "#8c8fa1", Text: "#4c4f69",
+			Subtext0: "#6c6f85", Mauve: "#8839ef", Green: "#40a02b", Yellow: "#df8e1d",
+			Red: "#d20f39", Blue: "#1e66f5", Teal: "#179299", Peach: "#fe640b",
+		},
+		ansi: ansiPalette{
+			Sel: "#acb0be", Black: "#5c5f77", Red: "#d20f39", Green: "#40a02b", Yellow: "#df8e1d",
+			Blue: "#1e66f5", Magenta: "#ea76cb", Cyan: "#179299", White: "#acb0be",
+			BrightBlack: "#6c6f85", BrightRed: "#de293e", BrightGreen: "#49af3d", BrightYellow: "#eea02d",
+			BrightBlue: "#456eff", BrightMagenta: "#fe85d8", BrightCyan: "#2d9fa8", BrightWhite: "#bcc0cc",
+		},
+	},
+	"tokyo-night-day": {
+		ui: uiPalette{
+			Accent: "#2e7de9", PanelBg: "#e1e2e7", Surface0: "#c4c8da", Surface1: "#a8aecb",
+			SurfaceDim: "#d2d3da", Overlay0: "#8990b3", Overlay1: "#68709a", Text: "#3760bf",
+			Subtext0: "#6172b0", Mauve: "#7847bd", Green: "#587539", Yellow: "#8c6c3e",
+			Red: "#f52a65", Blue: "#2e7de9", Teal: "#118c74", Peach: "#b15c00",
+		},
+		ansi: ansiPalette{
+			Sel: "#99a7df", Black: "#e9e9ed", Red: "#f52a65", Green: "#587539", Yellow: "#8c6c3e",
+			Blue: "#2e7de9", Magenta: "#9854f1", Cyan: "#007197", White: "#6172b0",
+			BrightBlack: "#a1a6c5", BrightRed: "#f52a65", BrightGreen: "#587539", BrightYellow: "#8c6c3e",
+			BrightBlue: "#2e7de9", BrightMagenta: "#9854f1", BrightCyan: "#007197", BrightWhite: "#3760bf",
+		},
+	},
+	"gruvbox-light": {
+		ui: uiPalette{
+			Accent: "#076678", PanelBg: "#fbf1c7", Surface0: "#ebdbb2", Surface1: "#d5c4a1",
+			SurfaceDim: "#f2e5bc", Overlay0: "#928374", Overlay1: "#7c6f64", Text: "#3c3836",
+			Subtext0: "#504945", Mauve: "#8f3f71", Green: "#79740e", Yellow: "#b57614",
+			Red: "#9d0006", Blue: "#076678", Teal: "#427b58", Peach: "#af3a03",
+		},
+		ansi: ansiPalette{
+			Sel: "#3c3836", Black: "#fbf1c7", Red: "#cc241d", Green: "#98971a", Yellow: "#d79921",
+			Blue: "#458588", Magenta: "#b16286", Cyan: "#689d6a", White: "#7c6f64",
+			BrightBlack: "#928374", BrightRed: "#9d0006", BrightGreen: "#79740e", BrightYellow: "#b57614",
+			BrightBlue: "#076678", BrightMagenta: "#8f3f71", BrightCyan: "#427b58", BrightWhite: "#3c3836",
+		},
+	},
+	"one-light": {
+		ui: uiPalette{
+			Accent: "#4078f2", PanelBg: "#fafafa", Surface0: "#f0f0f1", Surface1: "#e5e5e6",
+			SurfaceDim: "#f5f5f6", Overlay0: "#a0a1a7", Overlay1: "#686b77", Text: "#383a42",
+			Subtext0: "#686b77", Mauve: "#a626a4", Green: "#50a14f", Yellow: "#c18401",
+			Red: "#e45649", Blue: "#4078f2", Teal: "#0184bc", Peach: "#986801",
+		},
+		ansi: ansiPalette{
+			Sel: "#ededed", Black: "#000000", Red: "#de3e35", Green: "#3f953a", Yellow: "#d2b67c",
+			Blue: "#2f5af3", Magenta: "#950095", Cyan: "#3f953a", White: "#bbbbbb",
+			BrightBlack: "#000000", BrightRed: "#de3e35", BrightGreen: "#3f953a", BrightYellow: "#d2b67c",
+			BrightBlue: "#2f5af3", BrightMagenta: "#a00095", BrightCyan: "#3f953a", BrightWhite: "#ffffff",
+		},
+	},
+	"solarized-light": {
+		ui: uiPalette{
+			Accent: "#268bd2", PanelBg: "#fdf6e3", Surface0: "#eee8d5", Surface1: "#93a1a1",
+			SurfaceDim: "#eee8d5", Overlay0: "#93a1a1", Overlay1: "#586e75", Text: "#657b83",
+			Subtext0: "#839496", Mauve: "#d33682", Green: "#859900", Yellow: "#b58900",
+			Red: "#dc322f", Blue: "#268bd2", Teal: "#2aa198", Peach: "#cb4b16",
+		},
+		ansi: ansiPalette{
+			Sel: "#eee8d5", Black: "#073642", Red: "#dc322f", Green: "#859900", Yellow: "#b58900",
+			Blue: "#268bd2", Magenta: "#d33682", Cyan: "#2aa198", White: "#bbb5a2",
+			BrightBlack: "#002b36", BrightRed: "#cb4b16", BrightGreen: "#586e75", BrightYellow: "#657b83",
+			BrightBlue: "#839496", BrightMagenta: "#6c71c4", BrightCyan: "#93a1a1", BrightWhite: "#fdf6e3",
+		},
+	},
+	"kanagawa-lotus": {
+		ui: uiPalette{
+			Accent: "#4d699b", PanelBg: "#f2ecbc", Surface0: "#dcd5ac", Surface1: "#c9cbd1",
+			SurfaceDim: "#d5cea3", Overlay0: "#a09cac", Overlay1: "#8a8980", Text: "#545464",
+			Subtext0: "#43436c", Mauve: "#624c83", Green: "#6f894e", Yellow: "#77713f",
+			Red: "#c84053", Blue: "#4d699b", Teal: "#4e8ca2", Peach: "#cc6d00",
+		},
+		ansi: ansiPalette{
+			Sel: "#545464", Black: "#1f1f28", Red: "#c84053", Green: "#6f894e", Yellow: "#77713f",
+			Blue: "#4d699b", Magenta: "#b35b79", Cyan: "#597b75", White: "#545464",
+			BrightBlack: "#8a8980", BrightRed: "#d7474b", BrightGreen: "#6e915f", BrightYellow: "#836f4a",
+			BrightBlue: "#6693bf", BrightMagenta: "#624c83", BrightCyan: "#5e857a", BrightWhite: "#43436c",
+		},
+	},
+	"rose-pine-dawn": {
+		ui: uiPalette{
+			Accent: "#907aa9", PanelBg: "#faf4ed", Surface0: "#f2e9e1", Surface1: "#fffaf3",
+			SurfaceDim: "#f2e9e1", Overlay0: "#9893a5", Overlay1: "#797593", Text: "#464261",
+			Subtext0: "#797593", Mauve: "#907aa9", Green: "#286983", Yellow: "#ea9d34",
+			Red: "#b4637a", Blue: "#286983", Teal: "#56949f", Peach: "#d7827e",
+		},
+		ansi: ansiPalette{
+			Sel: "#dfdad9", Black: "#f2e9e1", Red: "#b4637a", Green: "#286983", Yellow: "#ea9d34",
+			Blue: "#56949f", Magenta: "#907aa9", Cyan: "#d7827e", White: "#575279",
+			BrightBlack: "#9893a5", BrightRed: "#b4637a", BrightGreen: "#286983", BrightYellow: "#ea9d34",
+			BrightBlue: "#56949f", BrightMagenta: "#907aa9", BrightCyan: "#d7827e", BrightWhite: "#575279",
+		},
+	},
 }
 
-// themeAliases maps herdr's accepted names to our canonical keys (the dark
-// variants we support). Light variants and unknowns fall back to catppuccin,
-// matching herdr's own behavior.
+// themeAliases maps herdr's alternate theme spellings to our canonical keys,
+// mirroring herdr's from_name match arms (src/app/state.rs) so every name herdr
+// accepts resolves to the same palette here. Unknown names fall back to
+// catppuccin, matching herdr (its from_name returns None → default).
 var themeAliases = map[string]string{
 	"catppuccin-mocha": "catppuccin",
 	"mocha":            "catppuccin",
+	"latte":            "catppuccin-latte",
+	"light":            "catppuccin-latte",
 	"tokyonight":       "tokyo-night",
+	"tokyo-day":        "tokyo-night-day",
+	"tokyonight-day":   "tokyo-night-day",
 	"gruvbox-dark":     "gruvbox",
 	"onedark":          "one-dark",
+	"onelight":         "one-light",
 	"solarized-dark":   "solarized",
 	"rosepine":         "rose-pine",
+	"rosepine-dawn":    "rose-pine-dawn",
+	"dawn":             "rose-pine-dawn",
+	"lotus":            "kanagawa-lotus",
 }
 
 // resolvedTheme is a concrete palette after applying config overrides.

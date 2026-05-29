@@ -55,7 +55,7 @@ var (
 	pollEvery   = flag.Duration("poll", 2*time.Second, "fallback poll interval for cwd changes")
 	allowNoAuth = flag.Bool("insecure-no-auth", false, "permit a non-loopback bind without auth (tailnet-only use; never on a public interface)")
 	procCwd     = flag.Bool("proc-cwd", true, "for agent panes, recover the real cwd from the agent process via /proc (herdr reports the stale shell cwd)")
-	themeName   = flag.String("theme", "auto", "color theme: \"auto\" reads herdr's config.toml, or force one of catppuccin/tokyo-night/dracula/nord/gruvbox/one-dark/solarized/kanagawa/rose-pine/vesper/terminal")
+	themeName   = flag.String("theme", "auto", "color theme: \"auto\" follows herdr's config.toml live, or force a herdr theme name — dark: catppuccin/tokyo-night/dracula/nord/gruvbox/one-dark/solarized/kanagawa/rose-pine/vesper/terminal; light: catppuccin-latte/tokyo-night-day/gruvbox-light/one-light/solarized-light/kanagawa-lotus/rose-pine-dawn")
 )
 
 // theme is resolved at startup (mirroring herdr's config) and drives both the
