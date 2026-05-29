@@ -27,8 +27,8 @@ for plain `cd`s — then pushes active-pane state to the browser over SSE.
 ## Run
 
 ```bash
-go build -o ttyd-iframe-demo .
-./ttyd-iframe-demo            # spawns ttyd+herdr on loopback, serves UI on 127.0.0.1:8090
+go build -o herdr-viewer .
+./herdr-viewer            # spawns ttyd+herdr on loopback, serves UI on 127.0.0.1:8090
 ```
 
 Open <http://localhost:8090>.
@@ -222,10 +222,10 @@ your tailnet can reach it. Auth is required for any non-loopback bind (guard).
 
 ```bash
 # tailnet-only, no auth (WireGuard already encrypts + authenticates the tailnet):
-./ttyd-iframe-demo -listen "$(tailscale ip -4):8090" -insecure-no-auth
+./herdr-viewer -listen "$(tailscale ip -4):8090" -insecure-no-auth
 
 # or, to require a login as well, set creds via env (never argv) and drop the flag:
-UI_AUTH="herdr:$(cat .authpass)" ./ttyd-iframe-demo -listen "$(tailscale ip -4):8090"
+UI_AUTH="herdr:$(cat .authpass)" ./herdr-viewer -listen "$(tailscale ip -4):8090"
 ```
 
 Then from any tailnet device: `http://<host>:8090/` (MagicDNS) — e.g.

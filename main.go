@@ -1,4 +1,4 @@
-// Command ttyd-iframe-demo serves a two-column web UI:
+// Command herdr-viewer serves a two-column web UI:
 //
 //	left  = herdr running inside a ttyd terminal (embedded in an iframe)
 //	right = a file viewer that follows herdr's *focused pane* cwd, live
