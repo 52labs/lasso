@@ -1,123 +1,119 @@
-<!--
-Draft GitHub issue for ogulcancelik/herdr.
-Per CONTRIBUTING.md, keep `/i-intend-to-pr` at the bottom only if you actually
-plan to implement it (a maintainer then replies `/approve`). Remove that line to
-file as a pure report/proposal.
--->
+# `pane.cwd` reports the shell's cwd, not the foreground process's — wrong for agent panes
 
-# `pane.cwd` is stale for agent panes — track the foreground process group's cwd
+Note: I LOVE herdr. I'm building a companion native and web application with a tree viewer and file
+editor which requires knowledge of the active pane. This issue addresses a critical shortcoming in building that solution. I read CONTRIBUTING.md -- I'm happy to contribute a PR if approved.
+
+Without further ado...
 
 ## Summary
 
 A pane's reported `cwd` reflects the **shell's** working directory, not the
-directory of whatever process currently owns the terminal. The moment a
-long-running foreground program (an AI coding agent, an editor, any TUI) takes
-over the PTY, the shell stops emitting `OSC 7`, so `pane.cwd` freezes at the
-shell's last-known directory — typically the dir the shell was launched in. For
-agent panes this is usually wrong, which breaks any tooling that asks herdr
-"what directory is this pane working in?"
+directory of whatever process currently owns the terminal. When a long-running
+foreground program (an AI coding agent, an editor, any TUI) is the pane's
+foreground process and its cwd differs from the shell's last-reported cwd,
+`pane.cwd` is wrong — it reports the shell's dir, not the program's. For agent
+panes this is the common case, and it breaks any tooling that asks herdr "what
+directory is this agent working in?"
 
-## Current behavior
+## What herdr already does (so this isn't a duplicate of #269 / #332 / #300)
 
-`pane.list` / `pane.get` / `agent.list` return a `cwd` that tracks the shell via
-`OSC 7`. For an interactive shell sitting at a prompt this is accurate and live
-(e.g. it follows `cd` into subdirectories). But for a pane running an agent, the
-agent process is the terminal's foreground process and its working directory is
-not reflected.
+To be precise about scope, since this area has had recent fixes:
 
-Observed on a real `claude` agent pane:
+- **#269 / #332** fixed which *shell* cwd is surfaced — the live runtime cwd
+  (`cwd_for_pane` / `display_name_from`) instead of the frozen `identity_cwd`.
+  Both are shell-derived (updated when the shell emits `OSC 7` on `cd`).
+- **#300** reads the pane's **foreground process group** (`tcgetpgrp`) — but only
+  to *identify which agent* is running, not to read its working directory.
+
+None of these track the **foreground process's cwd**. That's the gap here, and
+it's orthogonal to the shell-cwd labeling fixed in #269/#332.
+
+## Current behavior (reproduced on v0.6.4, latest release)
+
+Real `claude` agent pane:
 
 ```jsonc
-// herdr pane.get
-{ "pane_id": "…", "agent": "claude", "agent_status": "working",
-  "cwd": "/home/stephan" }            // shell's launch dir
-
+// herdr pane.get / agent.list
+{ "agent": "claude", "agent_status": "working", "cwd": "/home/stephan" }
 // the agent process actually owning that terminal:
-//   readlink /proc/<agent-pid>/cwd  ->  /home/stephan/projects/<the-real-project>
+//   readlink /proc/<agent-pid>/cwd  ->  /home/stephan/.../<the-real-project>
 ```
 
-`cwd` says `/home/stephan`; the agent is working in a project directory. They
-disagree because the shell launched in `$HOME`, then started the agent, and no
-further `OSC 7` was emitted.
-
-Minimal deterministic repro (no agent needed — any foreground process that
-changes its own cwd without emitting `OSC 7`):
+Minimal deterministic repro on a herdr-**native** pane (rules out any external
+pty/mirroring) — launch a process whose cwd diverges from its launch dir:
 
 ```bash
-# inside a herdr pane:
-cd /tmp                                          # OSC 7 fires -> herdr cwd = /tmp
-python3 -c 'import os; os.chdir("/var"); input()'  # foreground proc cwd = /var, no OSC 7
+herdr agent start probe --cwd /tmp -- \
+  python3 -c 'import os,sys; os.chdir("/usr"); sys.stdin.read()'
 
-# from anywhere:
-herdr pane get <pane_id>                         # still reports "cwd":"/tmp", not "/var"
+herdr pane get <pane_id>          # => "cwd":"/tmp"
+readlink /proc/<probe-pid>/cwd    # => /usr   (the process is really in /usr)
 ```
+
+Verified on v0.6.4: the process's real cwd was `/usr`, herdr's API reported
+`/tmp`. The shell-derived value never moves because a non-shell foreground
+process emits no `OSC 7`.
 
 ## Desired change
 
-Make `pane.cwd` reflect the directory of the PTY's **foreground process group
-leader** (the process actually in control of the terminal), rather than only the
-shell's `OSC 7` value. When an agent is running, that's the agent's cwd; when the
-shell is at a prompt, the foreground process *is* the shell, so behavior for
-plain shell panes is unchanged.
+Make a pane's reported `cwd` reflect the directory of the PTY's **foreground
+process group leader** (the process actually in control of the terminal). When
+the shell is at a prompt the foreground process *is* the shell, so plain shell
+panes are unchanged; when an agent is running, you get the agent's cwd.
 
 Two options, not mutually exclusive:
 
-1. **(Preferred — fully fixes it) herdr resolves the foreground cwd itself.**
-   herdr already owns each pane's PTY master fd and child PID, so it can:
-   - get the foreground process group of the pty master: `tcgetpgrp(master_fd)`;
-   - read that leader's cwd:
-     - Linux: `std::fs::read_link("/proc/{pgid}/cwd")`
-     - macOS: `proc_pidinfo(pid, PROC_PIDVNODEPATHINFO, …)` (libproc)
-   - use this as the canonical `cwd`, falling back to the `OSC 7` value only when
-     the platform lookup is unavailable.
-   This requires no cooperation from the shell or the agent and is correct for
-   every foreground program, not just agents.
+1. **(Preferred) herdr resolves the foreground cwd itself.** herdr already
+   obtains the foreground pgid via `tcgetpgrp(master_fd)` for agent detection
+   (#300), so it has the leader PID — it just needs to read that leader's cwd:
+   - Linux: `std::fs::read_link("/proc/{pid}/cwd")`
+   - macOS: `proc_pidinfo(pid, PROC_PIDVNODEPATHINFO, …)` (libproc) — the
+     `foreground_job()` path from #100
+   Use this as the canonical `cwd` (it's correct for any foreground program),
+   falling back to the shell/`OSC 7` value only when the platform lookup is
+   unavailable. This is a small extension of machinery that already exists.
 
-2. **(Minimal — unblocks external tooling) expose the PID(s) in `pane_info`.**
-   Add `pid` (the pane's leader) and/or `foreground_pid` to `pane.get` /
-   `pane.list` / `agent.list`. Consumers can then resolve cwd (and anything else)
-   themselves. This is a smaller, non-opinionated change; today there is **no
-   key at all** linking a pane to its OS process, so external tools cannot do
-   this even as a workaround.
+2. **(Minimal) expose the PID(s) in `pane_info`.** Add `pid` and/or
+   `foreground_pid` to `pane.get` / `pane.list` / `agent.list` so consumers can
+   resolve cwd (and more) themselves. Today there is **no key at all** linking a
+   pane to its OS process, so external tools can't even work around it.
 
 Option 1 is the real fix; option 2 is a cheap, low-risk improvement that also
-helps integrations regardless.
+unblocks integrations regardless.
 
 ## Why this belongs in herdr
 
 herdr is a terminal workspace manager **for AI coding agents** — and agent panes
-are precisely the foreground-process case where `OSC 7` never fires. "Which
+are exactly the foreground-process case the shell-cwd path misses. "Which
 directory is this agent working in?" is a first-class question for agent
-workflows (file viewers, repo/branch context, "open folder", routing), and
-herdr is the only component positioned to answer it accurately, because it holds
-the PTY and PID. Accurate per-pane cwd is core to the product's stated purpose,
-not a niche edge case.
+workflows (file viewers, repo/branch context, "open folder", routing), and herdr
+is the only component positioned to answer it accurately, because it holds the
+PTY and the foreground PID.
 
 ## What it affects
 
-- **Socket API / data model:** `cwd` semantics on `pane.*` / `agent.*`
-  (more accurate; same field, no breaking shape change). Option 2 adds fields.
-- **Workflow / integrations:** anything consuming `pane.cwd` (external tools,
-  agent routing) becomes correct for agent panes.
-- **UI:** only if herdr surfaces pane cwd anywhere in its own UI — it would
-  become accurate there too. No new visual language or interaction model.
+- **Socket API / data model:** `cwd` semantics on `pane.*` / `agent.*` become
+  accurate for foreground processes (same field, no breaking shape change).
+  Option 2 adds fields.
+- **Workflow / integrations:** anything consuming `pane.cwd` becomes correct for
+  agent panes.
+- **UI:** if herdr surfaces pane cwd in its own UI it becomes accurate there too;
+  no new visual language or interaction model.
 
 ## Environment
 
-- herdr 0.6.4 (protocol 11)
-- Linux 6.8 (x86_64)
-- Agents launched as foreground processes within panes (e.g. `claude`).
+- herdr 0.6.4 (protocol 11) — latest release at time of writing
+- Linux 6.8 (x86_64); confirmed on a herdr-native pane (not an attached/mirrored pty)
 
 ## Notes for implementation
 
 - The distinction that matters is **foreground process group leader vs session
-  leader (shell)**: polling the shell's `/proc/<pid>/cwd` would still return the
-  launch dir; it must be the fg pgrp (`tcgetpgrp`). Worth confirming against
-  herdr's current pty/process handling.
-- Resolution can be lazy (on `pane.get`/`pane.list`) rather than polled, to avoid
-  overhead; or refreshed on focus events.
-- `OSC 7` remains a useful fast-path/hint; the process cwd is the source of truth
-  when they diverge.
+  leader (shell)**: reading the shell's `/proc/<pid>/cwd` still returns the
+  launch dir; it must be the fg pgrp leader (`tcgetpgrp`).
+- For multi-process groups (e.g. `sh -c claude`), walk to the deepest/most
+  specific member, as #300 already contemplates for transitions.
+- Resolution can be lazy (on `pane.get`/`pane.list`) to avoid overhead, or
+  refreshed on focus; `OSC 7` remains a fine fast-path hint, with the process
+  cwd as source of truth when they diverge.
 
-<!-- Keep the next line only if you plan to implement this yourself: -->
 /i-intend-to-pr
