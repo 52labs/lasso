@@ -34,6 +34,11 @@
   #splitter { flex: 0 0 6px; cursor: col-resize; background: var(--border);
     transition: background .15s; }
   #splitter:hover, #splitter.dragging { background: var(--accent); }
+  /* while dragging, let the iframe ignore the mouse so the parent keeps getting
+     mousemove events (otherwise the terminal swallows them and you can only
+     drag toward the sidebar, never back over the terminal) */
+  #app.dragging { cursor: col-resize; user-select: none; }
+  #app.dragging #left iframe { pointer-events: none; }
 
   /* small icon button (collapse toggle in the header) */
   .iconbtn { margin-left: auto; background: var(--hover); color: var(--muted);
@@ -275,13 +280,13 @@ $('#jump').onclick = () => { if (activeCwd) loadDir(activeCwd); };
 (function () {
   const sp = $('#splitter'), app = $('#app'), left = $('#left');
   let drag = false;
-  sp.onmousedown = e => { drag = true; sp.classList.add('dragging'); e.preventDefault(); };
+  sp.onmousedown = e => { drag = true; sp.classList.add('dragging'); app.classList.add('dragging'); e.preventDefault(); };
   window.onmousemove = e => {
     if (!drag) return;
     const pct = Math.min(85, Math.max(15, (e.clientX / app.clientWidth) * 100));
     left.style.flex = '0 0 ' + pct + '%';
   };
-  window.onmouseup = () => { drag = false; sp.classList.remove('dragging'); };
+  window.onmouseup = () => { drag = false; sp.classList.remove('dragging'); app.classList.remove('dragging'); };
 })();
 
 // ---- collapsible sidebar ----
