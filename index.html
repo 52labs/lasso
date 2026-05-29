@@ -39,7 +39,7 @@
      mousemove events (otherwise the terminal swallows them and you can only
      drag toward the sidebar, never back over the terminal) */
   #app.dragging { cursor: col-resize; user-select: none; }
-  #app.dragging #left iframe { pointer-events: none; }
+  #app.dragging iframe { pointer-events: none; }
 
   /* small icon button (collapse toggle in the header) */
   .iconbtn { margin-left: auto; background: var(--hover); color: var(--muted);
@@ -87,16 +87,6 @@
   .scard .sdesc { color: var(--muted); font-size: 12px; line-height: 1.6; margin-bottom: 12px; }
   .scard .sdesc code { background: var(--panel); border: 1px solid var(--border);
     border-radius: 4px; padding: .05em .35em; }
-  .srow { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
-  .sbtn { background: var(--hover); color: var(--accent); border: 1px solid var(--accent);
-    border-radius: 5px; padding: 6px 14px; font: inherit; font-size: 12px; cursor: pointer; }
-  .sbtn:hover { background: var(--accent-dim); }
-  .sbtn:disabled { color: var(--muted); border-color: var(--border); background: var(--hover); cursor: default; }
-  .smsg { font-size: 11px; color: var(--muted); }
-  .smsg.bad { color: var(--bad); } .smsg.good { color: var(--good); }
-  .sout { margin-top: 12px; max-height: 340px; overflow: auto; background: var(--panel);
-    border: 1px solid var(--border); border-radius: 6px; padding: 10px 12px; font-size: 12px;
-    line-height: 1.5; white-space: pre-wrap; word-break: break-word; color: var(--fg); }
 
   /* pane grid */
   #panegrid { flex: 1 1 auto; overflow: auto; padding: 10px; display: grid;
@@ -305,6 +295,8 @@
     border-radius: 4px; padding: 3px 8px; font: inherit; font-size: 12px; cursor: pointer; white-space: nowrap; }
   .brbtn:hover { color: var(--accent); border-color: var(--accent); }
   #brframe { flex: 1 1 auto; min-height: 0; width: 100%; border: 0; background: var(--bg); }
+  /* out-of-herdr shell terminal (right-column Terminal tab) */
+  #shellframe { flex: 1 1 auto; min-height: 0; width: 100%; border: 0; background: var(--bg); }
 </style>
 <!--THEME-->
 </head>
@@ -349,11 +341,8 @@
       </header>
       <div class="settings">
         <div class="scard">
-          <div class="srow">
-            <button class="sbtn" id="set-update">Update herdr</button>
-            <span class="smsg" id="set-status"></span>
-          </div>
-          <pre class="sout" id="set-output" style="display:none"></pre>
+          <div class="stitle">Updating herdr</div>
+          <p class="sdesc" style="margin-bottom:0">Open the <b>Terminal</b> tab in the right column and run <code>herdr update</code>. That terminal runs outside any herdr session and has a real TTY, so it can hand running sessions over to the new version live — something this panel can't do on its own.</p>
         </div>
       </div>
     </section>
@@ -365,6 +354,7 @@
       <button class="tab active" data-view="diff">Diff<span class="tbadge" id="diff-dirty" style="display:none"></span></button>
       <button class="tab" data-view="files">Files</button>
       <button class="tab" data-view="browser">Browser</button>
+      <button class="tab" data-view="terminal">Terminal</button>
       <button class="iconbtn" id="collapse" title="collapse sidebar">»</button>
     </nav>
 
@@ -413,6 +403,10 @@
         <button class="brbtn" id="br-open" title="open in new tab">↗</button>
       </div>
       <iframe id="brframe" title="browser preview" referrerpolicy="no-referrer"></iframe>
+    </section>
+
+    <section class="view" id="view-terminal">
+      <iframe id="shellframe" src="/shell/" title="Terminal (outside herdr)"></iframe>
     </section>
 
     <div id="viewer">
@@ -671,6 +665,11 @@ function switchView(name) {
   document.querySelectorAll('#right > .view').forEach(v => v.classList.toggle('active', v.id === 'view-' + name));
   if (name === 'diff') loadDiff();
   else if (name === 'browser') initBrowser();
+  else if (name === 'terminal') {
+    // the iframe was display:none (zero-size) while hidden — nudge xterm to refit
+    // and hand it the keyboard, same as the herdr terminal.
+    try { const w = $('#shellframe').contentWindow; w.dispatchEvent(new Event('resize')); w.focus(); } catch (e) {}
+  }
 }
 document.querySelectorAll('#right > .tabs .tab').forEach(t => t.onclick = () => switchView(t.dataset.view));
 
@@ -1047,7 +1046,7 @@ $('#br-url').addEventListener('keydown', e => { if (e.key === 'Enter') navBrowse
 $('#br-reload').onclick = () => { const f = $('#brframe'); f.src = f.src; };
 $('#br-open').onclick = () => { const u = $('#br-url').value.trim(); if (u) window.open(/^https?:\/\//i.test(u) ? u : 'http://' + u, '_blank'); };
 
-// ---- settings: herdr version + update ----
+// ---- settings: herdr version (installed + latest) ----
 function initSettings() {
   if (settingsInit) return;
   settingsInit = true;
@@ -1073,27 +1072,6 @@ async function loadVersion() {
   }
 }
 $('#set-refresh').onclick = () => loadVersion();
-$('#set-update').onclick = async () => {
-  const btn = $('#set-update'), st = $('#set-status'), out = $('#set-output');
-  btn.disabled = true;
-  st.className = 'smsg'; st.textContent = 'updating… downloading the latest release';
-  out.style.display = 'none'; out.textContent = '';
-  try {
-    const r = await fetch('/api/update', { method: 'POST' });
-    const d = await r.json().catch(() => ({}));   // 409/plain-text errors aren't JSON
-    if (d.output) { out.style.display = ''; out.textContent = d.output; }
-    if (r.ok && d.ok) {
-      st.className = 'smsg good';
-      st.textContent = 'updated — running sessions handed off live to the new version';
-      loadVersion();
-    } else {
-      st.className = 'smsg bad';
-      st.textContent = 'update failed' + (d.error ? ': ' + d.error : (r.ok ? '' : ' (' + r.status + ')'));
-    }
-  } catch (e) {
-    st.className = 'smsg bad'; st.textContent = 'update failed: ' + e.message;
-  } finally { btn.disabled = false; }
-};
 
 // ---- active pane (SSE) ----
 function applyActive(a) {
@@ -1160,17 +1138,25 @@ async function refreshTheme() {
   applyTermTheme(t.xterm, 0);
 }
 
-// applyTermTheme sets xterm.js's theme on the terminal running inside the ttyd
-// iframe. ttyd 1.7.4 exposes the Terminal instance as window.term, and the
-// iframe is same-origin (proxied under /terminal/), so the parent can reach it.
-// The terminal may not be ready when a theme event arrives (iframe still
-// loading / ws not yet open), so retry a few times.
+// applyTermTheme sets xterm.js's theme on every terminal iframe (the herdr
+// terminal and the out-of-herdr shell). ttyd 1.7.4 exposes the Terminal instance
+// as window.term, and the iframes are same-origin (proxied under /terminal/ and
+// /shell/), so the parent can reach them. A terminal may not be ready when a
+// theme event arrives (iframe still loading / ws not yet open), so retry a few
+// times until each one takes the theme.
+const TERM_FRAMES = ['term', 'shellframe'];
 function applyTermTheme(theme, tries) {
-  try {
-    const w = document.getElementById('term').contentWindow;
-    if (w && w.term && w.term.options) { w.term.options.theme = theme; return; }
-  } catch (e) { /* same-origin: shouldn't throw, but never let it break the SSE */ }
-  if (tries < 20) setTimeout(() => applyTermTheme(theme, tries + 1), 250);
+  let pending = false;
+  for (const id of TERM_FRAMES) {
+    const el = document.getElementById(id);
+    if (!el) continue;
+    try {
+      const w = el.contentWindow;
+      if (w && w.term && w.term.options) { w.term.options.theme = theme; continue; }
+    } catch (e) { /* same-origin: shouldn't throw, but never let it break the SSE */ }
+    pending = true;   // this frame's xterm isn't ready yet
+  }
+  if (pending && tries < 20) setTimeout(() => applyTermTheme(theme, tries + 1), 250);
 }
 
 function connectSSE() {
@@ -1178,20 +1164,23 @@ function connectSSE() {
   es.addEventListener('active', e => applyActive(JSON.parse(e.data)));
 }
 
-// wireTerminalIframe attaches behavior to the same-origin ttyd iframe document:
-//   (1) suppress the native context menu so right-click only triggers herdr's
-//       own handling (the mousedown/mouseup xterm forwards to herdr is untouched);
+// wireTerminalIframe attaches behavior to a same-origin ttyd iframe document:
+//   (1) for the herdr terminal only, suppress the native context menu so
+//       right-click only triggers herdr's own handling (the mousedown/mouseup
+//       xterm forwards to herdr is untouched). The plain shell keeps its native
+//       menu so copy/paste works there;
 //   (2) intercept image paste — save the image server-side and insert its path
-//       at the cursor, since xterm can only paste text.
+//       at the cursor, since xterm can only paste text (handy for both: pasting
+//       a screenshot path to an agent, or to a command in the shell).
 // Each iframe (re)load yields a fresh document, so it's re-run from the load
 // handler below; __herdrWired guards against double-attaching on one document.
-function wireTerminalIframe() {
-  let doc;
-  try { doc = document.getElementById('term').contentWindow.document; } catch (e) { return; }
+function wireTerminalIframe(id, suppressContext) {
+  let win, doc;
+  try { win = document.getElementById(id).contentWindow; doc = win.document; } catch (e) { return; }
   if (!doc || doc.__herdrWired) return;
   doc.__herdrWired = true;
 
-  doc.addEventListener('contextmenu', e => e.preventDefault(), true);
+  if (suppressContext) doc.addEventListener('contextmenu', e => e.preventDefault(), true);
 
   doc.addEventListener('paste', async (e) => {
     const items = e.clipboardData && e.clipboardData.items;
@@ -1209,20 +1198,26 @@ function wireTerminalIframe() {
       });
       if (!res.ok) return;
       const { path } = await res.json();
-      const w = document.getElementById('term').contentWindow;
-      if (w && w.term && typeof w.term.paste === 'function') w.term.paste(path + ' ');
+      if (win && win.term && typeof win.term.paste === 'function') win.term.paste(path + ' ');
     } catch (err) { /* swallow: never break the terminal */ }
   }, true);                                       // capture phase: run before xterm
 }
 
-// If the terminal iframe reloads (e.g. ttyd reconnects), the fresh xterm starts
+// If a terminal iframe reloads (e.g. ttyd reconnects), the fresh xterm starts
 // from ttyd's startup theme — reapply the latest one so it stays in sync, and
-// re-wire the fresh document.
-document.getElementById('term').addEventListener('load', () => {
-  if (lastXtermTheme) applyTermTheme(lastXtermTheme, 0);
-  wireTerminalIframe();
-});
-wireTerminalIframe();   // in case the iframe already loaded before this ran
+// re-wire the fresh document. The herdr terminal suppresses its context menu;
+// the shell keeps its own.
+function bootTermFrame(id, suppressContext) {
+  const el = document.getElementById(id);
+  if (!el) return;
+  el.addEventListener('load', () => {
+    if (lastXtermTheme) applyTermTheme(lastXtermTheme, 0);
+    wireTerminalIframe(id, suppressContext);
+  });
+  wireTerminalIframe(id, suppressContext);   // in case the iframe already loaded before this ran
+}
+bootTermFrame('term', true);
+bootTermFrame('shellframe', false);
 
 $('#follow').onchange = () => { if ($('#follow').checked && activeCwd) loadDir(activeCwd); };
 

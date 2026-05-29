@@ -55,6 +55,7 @@ var (
 	ttydPort    = flag.Int("ttyd-port", 7682, "loopback port ttyd listens on")
 	herdrSock   = flag.String("herdr-sock", defaultSock(), "path to the herdr unix socket")
 	termCmd     = flag.String("term-cmd", "herdr", "command ttyd runs in the terminal")
+	shellCmd    = flag.String("shell-cmd", "", "command for the out-of-herdr Terminal tab (right column); empty = $SHELL, then bash, then sh")
 	spawnTtyd   = flag.Bool("spawn-ttyd", true, "spawn and supervise ttyd as a child process")
 	pollEvery   = flag.Duration("poll", 2*time.Second, "fallback poll interval for cwd changes")
 	allowNoAuth = flag.Bool("insecure-no-auth", false, "permit a non-loopback bind without auth (tailnet-only use; never on a public interface)")
@@ -120,9 +121,15 @@ func main() {
 	// external-ttyd path (-spawn-ttyd=false) still uses *ttydPort. We resolve the
 	// path here (the proxy needs it) but defer the spawn until after the web port
 	// binds, so a startup failure doesn't leak an orphaned ttyd.
-	var ttydSock string
+	// Two ttyds when we spawn our own: the herdr terminal (/terminal/) and a plain
+	// out-of-herdr shell (/shell/, the right-column Terminal tab). Each gets its
+	// own private unix socket keyed by PID. The external-ttyd path
+	// (-spawn-ttyd=false) only wires the herdr terminal to *ttydPort; the shell
+	// terminal is viewer-spawned only, so it's absent in that mode.
+	var ttydSock, shellSock string
 	if *spawnTtyd {
 		ttydSock = filepath.Join(os.TempDir(), fmt.Sprintf("herdr-viewer-ttyd-%d.sock", os.Getpid()))
+		shellSock = filepath.Join(os.TempDir(), fmt.Sprintf("herdr-viewer-shell-%d.sock", os.Getpid()))
 	}
 
 	hub := newHub()
@@ -131,15 +138,7 @@ func main() {
 	// handles WS upgrade natively (the hijacked conn is dialed via Transport too)
 	var proxy *httputil.ReverseProxy
 	if *spawnTtyd {
-		// Reach our own ttyd over its private unix socket. The host in the URL is
-		// a placeholder — the custom DialContext ignores it and dials the socket.
-		proxy = httputil.NewSingleHostReverseProxy(&url.URL{Scheme: "http", Host: "ttyd.sock"})
-		proxy.Transport = &http.Transport{
-			DialContext: func(ctx context.Context, _, _ string) (net.Conn, error) {
-				var d net.Dialer
-				return d.DialContext(ctx, "unix", ttydSock)
-			},
-		}
+		proxy = unixSocketProxy(ttydSock)
 	} else {
 		target, _ := url.Parse(fmt.Sprintf("http://127.0.0.1:%d", *ttydPort))
 		proxy = httputil.NewSingleHostReverseProxy(target)
@@ -147,6 +146,9 @@ func main() {
 
 	mux := http.NewServeMux()
 	mux.Handle("/terminal/", proxy)
+	if *spawnTtyd {
+		mux.Handle("/shell/", unixSocketProxy(shellSock))
+	}
 	mux.HandleFunc("/api/active", func(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, hub.snapshot())
 	})
@@ -170,7 +172,6 @@ func main() {
 	mux.HandleFunc("/api/paste-image", servePasteImage)
 	mux.HandleFunc("/api/diff", serveDiff)
 	mux.HandleFunc("/api/version", serveVersion)
-	mux.HandleFunc("/api/update", serveUpdate)
 	if *devMode {
 		// Serve the vendored libs from disk too, so an edit there shows on refresh.
 		mux.Handle("/static/", http.StripPrefix("/static/", noCache(http.FileServer(http.Dir(devStaticDir)))))
@@ -202,8 +203,14 @@ func main() {
 	// never leaves an orphaned ttyd behind (its cleanup is tied to ctx, which
 	// log.Fatalf bypasses).
 	if *spawnTtyd {
-		if err := startTtyd(ctx, ttydSock); err != nil {
+		// herdr terminal: inherits the viewer's env (so it joins the same session).
+		if err := startTtyd(ctx, ttydSock, "/terminal", *termCmd, nil); err != nil {
 			log.Fatalf("ttyd: %v", err)
+		}
+		// Out-of-herdr shell: env stripped of the HERDR_* session markers so
+		// commands like `herdr update` (which refuse to run inside a session) work.
+		if err := startTtyd(ctx, shellSock, "/shell", shellCommand(), outsideHerdrEnv()); err != nil {
+			log.Fatalf("ttyd (shell): %v", err)
 		}
 	}
 
@@ -226,6 +233,7 @@ func main() {
 	log.Printf("UI:       http://%s", *listenAddr)
 	if *spawnTtyd {
 		log.Printf("terminal: ttyd@%s running %q (proxied at /terminal/)", ttydSock, *termCmd)
+		log.Printf("shell:    ttyd@%s running %q (proxied at /shell/)", shellSock, shellCommand())
 	} else {
 		log.Printf("terminal: ttyd@127.0.0.1:%d (external) running %q (proxied at /terminal/)", *ttydPort, *termCmd)
 	}
@@ -265,7 +273,40 @@ func listenWithFallback(addr string, dev bool, span int) (net.Listener, string, 
 // ttyd child process
 // ---------------------------------------------------------------------------
 
-func startTtyd(ctx context.Context, sock string) error {
+// unixSocketProxy reverse-proxies to one of our ttyds over its private unix
+// socket. The host in the URL is a placeholder — the custom DialContext ignores
+// it and dials the socket. WS upgrades work because the hijacked conn is dialed
+// through the same Transport.
+func unixSocketProxy(sock string) *httputil.ReverseProxy {
+	p := httputil.NewSingleHostReverseProxy(&url.URL{Scheme: "http", Host: "ttyd.sock"})
+	p.Transport = &http.Transport{
+		DialContext: func(ctx context.Context, _, _ string) (net.Conn, error) {
+			var d net.Dialer
+			return d.DialContext(ctx, "unix", sock)
+		},
+	}
+	return p
+}
+
+// shellCommand resolves the command for the out-of-herdr Terminal tab:
+// -shell-cmd if set, else $SHELL, else bash, else sh.
+func shellCommand() string {
+	if c := strings.TrimSpace(*shellCmd); c != "" {
+		return c
+	}
+	if sh := os.Getenv("SHELL"); sh != "" {
+		return sh
+	}
+	if _, err := exec.LookPath("bash"); err == nil {
+		return "bash"
+	}
+	return "sh"
+}
+
+// startTtyd spawns one ttyd serving command under basePath on its own private
+// unix socket. env, if non-nil, overrides the child environment (the shell
+// terminal passes outsideHerdrEnv); nil inherits the viewer's env.
+func startTtyd(ctx context.Context, sock, basePath, command string, env []string) error {
 	// Bind a private unix socket (one per instance) rather than a shared TCP
 	// port, so concurrent prod/dev instances can't collide or cross-connect.
 	// Clear any stale socket left by a crashed prior run with this PID so ttyd
@@ -278,20 +319,21 @@ func startTtyd(ctx context.Context, sock string) error {
 	// which forwards it to xterm.js in the browser.
 	args := []string{
 		"-i", sock, // private unix socket (ttyd accepts a socket path here)
-		"-b", "/terminal", // base path so assets/ws resolve under the proxy
+		"-b", basePath, // base path so assets/ws resolve under the proxy
 		"-W",                           // writable
 		"-t", "disableLeaveAlert=true", // no confirm dialog inside the iframe
 		"-t", "fontSize=13",
 		"-t", "theme=" + theme.xtermJSON(),
 	}
-	args = append(args, strings.Fields(*termCmd)...)
+	args = append(args, strings.Fields(command)...)
 	cmd := exec.Command("ttyd", args...)
 	cmd.Stdout, cmd.Stderr = os.Stderr, os.Stderr
+	cmd.Env = env                                         // nil → inherit
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true} // own process group so we can kill cleanly
 	if err := cmd.Start(); err != nil {
 		return err
 	}
-	log.Printf("spawned ttyd (pid %d)", cmd.Process.Pid)
+	log.Printf("spawned ttyd (pid %d) %q @ %s", cmd.Process.Pid, command, basePath)
 	go func() {
 		<-ctx.Done()
 		// kill the whole process group (ttyd + the shell it spawned)
@@ -820,16 +862,12 @@ func herdrBinary() string {
 	return "herdr"
 }
 
-// updateMu serializes herdr updates so two clicks can't race two installs onto
-// the same on-disk binary.
-var updateMu sync.Mutex
-
 // outsideHerdrEnv returns the current environment minus the markers herdr uses
 // to detect it's running *inside* a session (HERDR_ENV is set to "1" in every
-// pane; HERDR_PANE_ID / HERDR_SESSION identify the pane/session). `herdr update`
-// refuses to self-update from inside a session — but the viewer supervises ttyd
-// from outside it, so we strip these in case the viewer itself was launched from
-// a herdr pane and inherited them.
+// pane; HERDR_PANE_ID / HERDR_SESSION identify the pane/session). The viewer's
+// out-of-herdr shell terminal runs with this env so commands that refuse to run
+// inside a session — notably `herdr update` — work there, even when the viewer
+// itself was launched from a herdr pane and inherited the markers.
 func outsideHerdrEnv() []string {
 	drop := map[string]bool{"HERDR_ENV": true, "HERDR_PANE_ID": true, "HERDR_SESSION": true}
 	src := os.Environ()
@@ -915,43 +953,11 @@ func latestHerdrVersion(ctx context.Context) (string, error) {
 	return strings.TrimPrefix(tag, "v"), nil
 }
 
-// serveUpdate runs `herdr update --handoff` and returns its combined output.
-// This is the supported out-of-session update path: `herdr update` refuses to
-// run from *inside* a herdr session, but the viewer is a separate process
-// supervising ttyd — so it installs the new binary cleanly.
-//
-// --handoff is what makes this work without a TTY. When a newer release would
-// require running herdr servers to restart, a plain non-interactive
-// `herdr update` aborts ("run from an interactive terminal, or stop those
-// targets"). --handoff is the non-interactive equivalent of the interactive
-// prompt: it performs a live server handoff for every target that supports it
-// (protocol 11+), so the update lands without anyone stopping a session.
-// Targets too old to hand off still block the update — those genuinely have to
-// be stopped first, and the command's own output says which ones; we pass it
-// straight through.
-func serveUpdate(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodPost {
-		http.Error(w, "POST only", http.StatusMethodNotAllowed)
-		return
-	}
-	if !updateMu.TryLock() {
-		http.Error(w, "an update is already running", http.StatusConflict)
-		return
-	}
-	defer updateMu.Unlock()
-
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
-	defer cancel()
-	cmd := exec.CommandContext(ctx, herdrBinary(), "update", "--handoff")
-	cmd.Stdin = nil             // no TTY/stdin: run non-interactively, never block on a prompt
-	cmd.Env = outsideHerdrEnv() // see helper: makes update run as an out-of-session process
-	out, err := cmd.CombinedOutput()
-	resp := map[string]any{"ok": err == nil, "output": string(out)}
-	if err != nil {
-		resp["error"] = err.Error()
-	}
-	writeJSON(w, resp)
-}
+// Updating herdr happens in the out-of-herdr shell terminal (the right-column
+// Terminal tab) by running `herdr update` interactively — that path has a real
+// TTY, so it can prompt about (and perform) live handoff of running sessions,
+// which a non-interactive server-side invocation cannot. The viewer only
+// surfaces the installed/latest versions (see serveVersion).
 
 // ---------------------------------------------------------------------------
 // image paste: save a clipboard image to disk so the agent in the focused
