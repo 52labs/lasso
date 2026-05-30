@@ -339,6 +339,7 @@
       <header class="bar">
         <div class="row">
           <span class="pill ws path" id="diff-branch">—</span>
+          <span class="pill" id="diff-state" style="display:none"></span>
           <span class="pill" id="diff-base" style="display:none"></span>
           <span class="pill" id="diff-files" style="display:none"></span>
           <span class="pill good" id="diff-add" style="display:none"></span>
@@ -859,7 +860,10 @@ async function loadDiff() {
     $('#diff-branch').textContent = diffCwd || '—';
     $('#diff-base').style.display = 'none';
     setDirtyBadge(0);
-    setDiffStats(0, 0, 0, false);
+    $('#diff-state').style.display = 'none';
+    $('#diff-files').style.display = 'none';
+    $('#diff-add').style.display = 'none';
+    $('#diff-del').style.display = 'none';
     showDiffMsg('');
   } finally {
     diffLoading = false;
@@ -875,13 +879,21 @@ function setDirtyBadge(n) {
   else b.style.display = 'none';
 }
 
-// status pills under the branch path: the file count for the shown diff (labelled
-// "dirty" for the working tree, "files" for a branch comparison) plus the total
-// additions/deletions. Each pill hides when its count is zero.
-function setDiffStats(n, add, del, isBranch) {
-  const fEl = $('#diff-files'), aEl = $('#diff-add'), dEl = $('#diff-del');
-  if (n > 0) { fEl.style.display = ''; fEl.textContent = isBranch ? n + (n === 1 ? ' file' : ' files') : n + ' dirty'; }
+// status pills next to the branch path:
+//   - state: amber "N dirty" when the working tree has uncommitted changes, foam
+//     "clean" when it doesn't — always shown, so the tree's state is unambiguous.
+//   - files: the changed-file count, only in branch mode (in working mode the
+//     "N dirty" state pill already carries it).
+//   - add/del: total additions/deletions for the shown diff (hidden when zero).
+function setDiffStats(dirty, n, add, del, isBranch) {
+  const sEl = $('#diff-state');
+  sEl.style.display = '';
+  if (dirty > 0) { sEl.className = 'pill warn'; sEl.textContent = dirty + ' dirty'; sEl.title = dirty + ' uncommitted change' + (dirty === 1 ? '' : 's'); }
+  else { sEl.className = 'pill good'; sEl.textContent = 'clean'; sEl.title = 'working tree clean'; }
+  const fEl = $('#diff-files');
+  if (isBranch && n > 0) { fEl.style.display = ''; fEl.textContent = n + (n === 1 ? ' file' : ' files'); }
   else fEl.style.display = 'none';
+  const aEl = $('#diff-add'), dEl = $('#diff-del');
   if (add > 0) { aEl.style.display = ''; aEl.textContent = '+' + add; } else aEl.style.display = 'none';
   if (del > 0) { dEl.style.display = ''; dEl.textContent = '−' + del; } else dEl.style.display = 'none';
 }
@@ -904,7 +916,7 @@ function renderDiff(data) {
   const files = parseDiff(data.diff || '');
   let add = 0, del = 0;
   for (const f of files) { add += f.add; del += f.del; }
-  setDiffStats(files.length, add, del, data.isBranchDiff);
+  setDiffStats(data.dirty || 0, files.length, add, del, data.isBranchDiff);
   const list = $('#difflist');
   if (!files.length) {
     const msg = data.isBranchDiff
