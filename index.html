@@ -1221,6 +1221,62 @@ function wireTerminalIframe(id, suppressContext) {
       if (win && win.term && typeof win.term.paste === 'function') win.term.paste(path + ' ');
     } catch (err) { /* swallow: never break the terminal */ }
   }, true);                                       // capture phase: run before xterm
+
+  wireShiftEnter(id, 0);
+}
+
+// xterm.js sends a bare CR (\r) for BOTH Enter and Shift+Enter, so a line
+// editor (Claude Code, the REPL kind) can't tell them apart — Shift+Enter
+// submits instead of opening a new line. We intercept Shift+Enter and instead
+// emit backslash+CR ("\\\r"): a trailing backslash is Claude Code's
+// line-continuation, so it inserts a newline and swallows the backslash, never
+// submitting. (A bare LF / Ctrl+J doesn't work — Claude submits on it.)
+//
+// Two non-obvious pieces, both essential:
+//   1. preventDefault() in the handler (see below) — without it the browser
+//      still runs Enter's default action on the helper textarea, which xterm
+//      re-reads as a SECOND Enter, submitting the line.
+//   2. We can't route the bytes through term.paste() — paste() normalizes line
+//      endings and wraps them in bracketed-paste markers. The public
+//      term.input() sends raw data but isn't in ttyd 1.7.4's xterm.js, so we
+//      fall back to its coreService.triggerDataEvent, which emits them unwrapped.
+//
+// term may not exist yet at wire time (xterm still loading), so retry like
+// applyTermTheme; __herdrShiftEnter guards against double-attaching on one term.
+const NEWLINE_SEQ = '\\\r';   // backslash + CR — Claude Code line-continuation → newline
+function sendNewline(term) {
+  if (typeof term.input === 'function') { term.input(NEWLINE_SEQ); return; }   // public API (newer xterm)
+  try {
+    const cs = term._core && term._core.coreService;                          // ttyd 1.7.4 fallback
+    if (cs && typeof cs.triggerDataEvent === 'function') cs.triggerDataEvent(NEWLINE_SEQ, true);
+  } catch (e) { /* private API moved: better to no-op than to throw */ }
+}
+function wireShiftEnter(id, tries) {
+  let term;
+  try { term = document.getElementById(id).contentWindow.term; } catch (e) { return; }
+  if (term && typeof term.attachCustomKeyEventHandler === 'function') {
+    if (!term.__herdrShiftEnter) {
+      term.__herdrShiftEnter = true;
+      term.attachCustomKeyEventHandler(e => {
+        const enterish = e.key === 'Enter' || e.code === 'Enter' ||
+                         e.code === 'NumpadEnter' || e.keyCode === 13;
+        if (e.type === 'keydown' && enterish && e.shiftKey &&
+            !e.ctrlKey && !e.altKey && !e.metaKey) {
+          // preventDefault is essential: returning false skips xterm's *key*
+          // handling but NOT the browser's default Enter action on the helper
+          // textarea — which xterm then re-reads as a SECOND Enter (a stray \r),
+          // submitting the line. (Synthetic key events don't fire default
+          // actions, which is why this only bit real, isTrusted keypresses.)
+          if (e.preventDefault) e.preventDefault();
+          sendNewline(term);   // newline (backslash+CR), not xterm's default \r (submit)
+          return false;        // swallow xterm's own \r
+        }
+        return true;
+      });
+    }
+    return;
+  }
+  if (tries < 20) setTimeout(() => wireShiftEnter(id, tries + 1), 150);
 }
 
 // If a terminal iframe reloads (e.g. ttyd reconnects), the fresh xterm starts
