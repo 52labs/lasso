@@ -1,3 +1,3 @@
-module herdr-viewer
+module lasso
 
 go 1.25.3

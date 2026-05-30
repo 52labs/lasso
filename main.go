@@ -1,4 +1,4 @@
-// Command herdr-viewer serves a two-column web UI:
+// Command lasso serves a two-column web UI:
 //
 //	left  = herdr running inside a ttyd terminal (embedded in an iframe)
 //	right = a file viewer that follows herdr's *focused pane* cwd, live
@@ -127,8 +127,8 @@ func main() {
 	// terminal is viewer-spawned only, so it's absent in that mode.
 	var ttydSock, shellSock string
 	if *spawnTtyd {
-		ttydSock = filepath.Join(os.TempDir(), fmt.Sprintf("herdr-viewer-ttyd-%d.sock", os.Getpid()))
-		shellSock = filepath.Join(os.TempDir(), fmt.Sprintf("herdr-viewer-shell-%d.sock", os.Getpid()))
+		ttydSock = filepath.Join(os.TempDir(), fmt.Sprintf("lasso-ttyd-%d.sock", os.Getpid()))
+		shellSock = filepath.Join(os.TempDir(), fmt.Sprintf("lasso-shell-%d.sock", os.Getpid()))
 	}
 
 	hub := newHub()
@@ -930,7 +930,7 @@ func latestHerdrVersion(ctx context.Context) (string, error) {
 		return "", err
 	}
 	req.Header.Set("Accept", "application/vnd.github+json")
-	req.Header.Set("User-Agent", "herdr-viewer")
+	req.Header.Set("User-Agent", "lasso")
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
 		return "", err
@@ -985,7 +985,7 @@ func pasteImageDir() string {
 	if err != nil {
 		base = os.TempDir()
 	}
-	return filepath.Join(base, "herdr-viewer", "pasted-images")
+	return filepath.Join(base, "lasso", "pasted-images")
 }
 
 // servePasteImage accepts a raw image body (Content-Type set to the image MIME

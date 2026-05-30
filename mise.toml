@@ -1,11 +1,11 @@
-# mise tasks for herdr-viewer.
+# mise tasks for lasso.
 #   mise run dev    — serve on the tailscale interface with frontend hot reload
 #   mise run build  — build the binary
 #   mise run test   — run the Go tests
 
 [tasks.build]
-description = "Build the herdr-viewer binary"
-run = "go build -o herdr-viewer ."
+description = "Build the lasso binary"
+run = "go build -o lasso ."
 
 [tasks.test]
 description = "Run the Go test suite"
@@ -17,8 +17,8 @@ depends = ["build"]
 run = '''
 ip="$(tailscale ip -4 | head -n1)"
 [ -n "$ip" ] || { echo "no tailscale IPv4 found — is tailscale up? (tailscale status)" >&2; exit 1; }
-echo "herdr-viewer (dev) on $ip — requesting :8090 (auto-picks the next free port if busy)"
+echo "lasso (dev) on $ip — requesting :8090 (auto-picks the next free port if busy)"
 echo "see the 'UI: http://...' line below for the actual URL · frontend hot reload ON"
 echo "edit index.html and the browser refreshes; restart this task for Go changes."
-exec ./herdr-viewer -listen "$ip:8090" -insecure-no-auth -dev
+exec ./lasso -listen "$ip:8090" -insecure-no-auth -dev
 '''

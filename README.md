@@ -42,8 +42,8 @@ for plain `cd`s — then pushes active-pane state to the browser over SSE.
 ## Run
 
 ```bash
-go build -o herdr-viewer .
-./herdr-viewer            # spawns ttyd+herdr on loopback, serves UI on 127.0.0.1:8090
+go build -o lasso .
+./lasso            # spawns ttyd+herdr on loopback, serves UI on 127.0.0.1:8090
 ```
 
 Open <http://localhost:8090>.
@@ -66,9 +66,9 @@ build` and `mise run test`.
 Each instance spawns its **own** ttyds on private unix sockets, not shared TCP
 ports — so a prod instance and any number of dev instances run side by side
 without ever colliding on a port or proxying onto each other's terminal. There
-are two: the herdr terminal (`$TMPDIR/herdr-viewer-ttyd-<pid>.sock`, proxied at
+are two: the herdr terminal (`$TMPDIR/lasso-ttyd-<pid>.sock`, proxied at
 `/terminal/`) and the out-of-herdr shell behind the Terminal tab
-(`$TMPDIR/herdr-viewer-shell-<pid>.sock`, proxied at `/shell/`). Both sockets are
+(`$TMPDIR/lasso-shell-<pid>.sock`, proxied at `/shell/`). Both sockets are
 removed on exit. (The `-ttyd-port` flag only applies with `-spawn-ttyd=false`,
 where you point the proxy at an externally-run ttyd for the herdr terminal; the
 shell terminal is viewer-spawned only and is absent in that mode.)
@@ -284,10 +284,10 @@ your tailnet can reach it. Auth is required for any non-loopback bind (guard).
 
 ```bash
 # tailnet-only, no auth (WireGuard already encrypts + authenticates the tailnet):
-./herdr-viewer -listen "$(tailscale ip -4):8090" -insecure-no-auth
+./lasso -listen "$(tailscale ip -4):8090" -insecure-no-auth
 
 # or, to require a login as well, set creds via env (never argv) and drop the flag:
-UI_AUTH="herdr:$(cat .authpass)" ./herdr-viewer -listen "$(tailscale ip -4):8090"
+UI_AUTH="herdr:$(cat .authpass)" ./lasso -listen "$(tailscale ip -4):8090"
 ```
 
 Then from any tailnet device: `http://<host>:8090/` (MagicDNS) — e.g.
