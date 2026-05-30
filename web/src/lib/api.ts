@@ -33,13 +33,27 @@ export interface DirListing {
   entries: FileEntry[]
 }
 
+// One changed file in the diff metadata. The line-by-line diff is fetched
+// lazily per file (api.diffFile) when the user expands it.
+export interface DiffFileMeta {
+  path: string
+  status: string
+  staged?: boolean
+  add: number
+  del: number
+}
+
 export interface DiffPayload {
   branch?: string
   baseBranch?: string
   isBranchDiff?: boolean
   dirty?: number
-  diff?: string
-  truncated?: boolean
+  files: DiffFileMeta[]
+}
+
+export interface FileDiff {
+  diff: string
+  truncated: boolean
 }
 
 export interface VersionInfo {
@@ -91,14 +105,33 @@ export const api = {
     return r.text()
   },
 
+  // Diff metadata: the complete changed-file list with per-file counts (no diff
+  // text — that's fetched per file via diffFile).
   diff: (path: string) => {
     const params = new URLSearchParams({
       path,
       mode: "auto",
       ignoreWhitespace: "true",
-      includeUntracked: "true",
     })
     return getJSON<DiffPayload>("/api/diff?" + params)
+  },
+
+  // The unified diff for a single file, pinned to the same comparison the list
+  // is showing (mode "branch" | "working", plus the base branch in branch mode).
+  diffFile: (
+    path: string,
+    file: string,
+    mode: "branch" | "working",
+    baseBranch?: string,
+  ) => {
+    const params = new URLSearchParams({
+      path,
+      file,
+      mode,
+      ignoreWhitespace: "true",
+    })
+    if (baseBranch) params.set("baseBranch", baseBranch)
+    return getJSON<FileDiff>("/api/diff-file?" + params)
   },
 
   focus: (workspace_id?: string, tab_id?: string) =>

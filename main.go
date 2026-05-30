@@ -166,6 +166,7 @@ func main() {
 	mux.HandleFunc("/api/close", serveClose)
 	mux.HandleFunc("/api/paste-image", servePasteImage)
 	mux.HandleFunc("/api/diff", serveDiff)
+	mux.HandleFunc("/api/diff-file", serveDiffFile)
 	mux.HandleFunc("/api/version", serveVersion)
 	dist, err := fs.Sub(distFS, "web/dist")
 	if err != nil {
@@ -1026,11 +1027,17 @@ func servePasteImage(w http.ResponseWriter, r *http.Request) {
 // git diff: working-tree (or branch-vs-base) diff for the active pane's repo
 // ---------------------------------------------------------------------------
 
-// diffFile is one changed file in `git status`/`git diff --name-status`.
+// diffFile is one changed file in the diff metadata: path, status, and per-file
+// line counts (from `git diff --numstat`). The actual line-by-line diff is
+// fetched lazily per file from /api/diff-file when the user expands it, so the
+// file list is always complete (never byte-capped) and we never ship a multi-MB
+// blob just to render collapsed headers.
 type diffFile struct {
 	Path   string `json:"path"`
 	Status string `json:"status"` // added | deleted | modified | renamed | untracked
 	Staged bool   `json:"staged"`
+	Add    int    `json:"add"` // added lines (numstat); 0 for binary
+	Del    int    `json:"del"` // deleted lines (numstat); 0 for binary
 }
 
 const (
@@ -1077,6 +1084,8 @@ func serveDiff(w http.ResponseWriter, r *http.Request) {
 	mode := r.URL.Query().Get("mode")               // "branch" forces the base-branch comparison
 	baseOverride := r.URL.Query().Get("baseBranch") // optional explicit base for the comparison
 
+	_ = includeUntracked // untracked files are always included in the metadata list
+
 	root, err := gitOut(path, "rev-parse", "--show-toplevel")
 	if err != nil {
 		http.Error(w, "not a git repo: "+err.Error(), http.StatusBadGateway)
@@ -1097,43 +1106,89 @@ func serveDiff(w http.ResponseWriter, r *http.Request) {
 	status := parseStatus(mustGit(root, "status", "--short"))
 	dirty := len(status)
 
-	var combined string
 	var files []diffFile
-	isBranchDiff := false
 	baseBranch := ""
 
 	// auto (default): show the working tree when it's dirty, otherwise fall back to
 	// the branch-vs-base comparison. ?mode=branch / ?mode=working force one or the
 	// other.
-	showBranch := mode == "branch" || (mode != "working" && dirty == 0)
+	isBranchDiff := mode == "branch" || (mode != "working" && dirty == 0)
+	if isBranchDiff {
+		files, baseBranch = branchFiles(root, branch, baseOverride, wsArg)
+		if baseBranch == "" {
+			isBranchDiff = false // no base to compare against → show the working tree
+		}
+	}
+	if !isBranchDiff {
+		files = workingFiles(root, status, wsArg)
+	}
 
-	if showBranch {
-		combined, baseBranch, files, _ = branchVsBase(root, branch, baseOverride, wsArg)
-		isBranchDiff = true
-	} else {
-		// Working-tree changes only (unstaged + staged), optionally with untracked.
-		combined = mustGit(root, wsArg("diff", "--cached")...) + mustGit(root, wsArg("diff")...)
-		files = status
-		if includeUntracked {
-			for _, f := range files {
-				if f.Status == "untracked" {
-					combined += untrackedDiff(root, f.Path)
-				}
+	writeJSON(w, map[string]any{
+		"repo": root, "branch": branch, "files": files,
+		"isBranchDiff": isBranchDiff, "baseBranch": baseBranch, "dirty": dirty,
+	})
+}
+
+// serveDiffFile returns the unified diff for a SINGLE file (?file=, repo-relative)
+// — fetched lazily when the user expands that file in the Diff view, so the file
+// list itself is never byte-capped. ?mode= pins the comparison to what the list
+// is showing (branch vs working); the per-file diff is capped at maxDiff (a
+// single genuinely huge file), reported via "truncated".
+func serveDiffFile(w http.ResponseWriter, r *http.Request) {
+	q := r.URL.Query()
+	path := filepath.Clean(q.Get("path"))
+	file := q.Get("file")
+	if !filepath.IsAbs(path) {
+		http.Error(w, "path must be absolute", http.StatusBadRequest)
+		return
+	}
+	if file == "" {
+		http.Error(w, "file is required", http.StatusBadRequest)
+		return
+	}
+	ignoreWS := q.Get("ignoreWhitespace") == "true"
+	mode := q.Get("mode")
+	baseOverride := q.Get("baseBranch")
+
+	root, err := gitOut(path, "rev-parse", "--show-toplevel")
+	if err != nil {
+		http.Error(w, "not a git repo: "+err.Error(), http.StatusBadGateway)
+		return
+	}
+	root = strings.TrimSpace(root)
+	branch := strings.TrimSpace(mustGit(root, "rev-parse", "--abbrev-ref", "HEAD"))
+	wsArg := func(base ...string) []string {
+		if ignoreWS {
+			return append(base, "-w")
+		}
+		return base
+	}
+
+	var d string
+	if mode == "branch" {
+		base := baseOverride
+		if base == "" {
+			base = defaultBranch(root, branch)
+		}
+		if base != "" {
+			if mb := strings.TrimSpace(mustGit(root, "merge-base", base, "HEAD")); mb != "" {
+				d = mustGit(root, wsArg("diff", mb+"..HEAD", "--", file)...)
 			}
+		}
+	} else {
+		// working tree vs HEAD (staged + unstaged combined); empty ⇒ untracked.
+		d = mustGit(root, wsArg("diff", "HEAD", "--", file)...)
+		if d == "" {
+			d = untrackedDiff(root, file)
 		}
 	}
 
 	truncated := false
-	if len(combined) > maxDiff {
-		combined = combined[:maxDiff]
+	if len(d) > maxDiff {
+		d = d[:maxDiff]
 		truncated = true
 	}
-
-	writeJSON(w, map[string]any{
-		"repo": root, "branch": branch, "diff": combined, "files": files,
-		"isBranchDiff": isBranchDiff, "baseBranch": baseBranch, "truncated": truncated,
-		"dirty": dirty,
-	})
+	writeJSON(w, map[string]any{"diff": d, "truncated": truncated})
 }
 
 // branchVsBase returns the diff of merge-base(base, HEAD)..HEAD, the resolved
@@ -1141,21 +1196,105 @@ func serveDiff(w http.ResponseWriter, r *http.Request) {
 // branch (override wins when non-empty). ok is false when no base branch exists
 // (e.g. HEAD already is the primary branch) — baseBranch is still returned so
 // the caller can report what it tried to compare against.
-func branchVsBase(root, current, override string, wsArg func(...string) []string) (diff, baseBranch string, files []diffFile, ok bool) {
-	baseBranch = override
-	if baseBranch == "" {
-		baseBranch = defaultBranch(root, current)
+// branchFiles lists the files changed on this branch vs its base, with per-file
+// counts. Returns ("", nil) base when there's no base branch to compare against.
+func branchFiles(root, current, override string, wsArg func(...string) []string) ([]diffFile, string) {
+	base := override
+	if base == "" {
+		base = defaultBranch(root, current)
 	}
-	if baseBranch == "" {
-		return "", "", nil, false
+	if base == "" {
+		return nil, ""
 	}
-	mb := strings.TrimSpace(mustGit(root, "merge-base", baseBranch, "HEAD"))
+	mb := strings.TrimSpace(mustGit(root, "merge-base", base, "HEAD"))
 	if mb == "" {
-		return "", baseBranch, nil, false
+		return nil, base
 	}
-	diff = mustGit(root, append(wsArg("diff"), mb+"..HEAD")...)
-	files = parseNameStatus(mustGit(root, "diff", "--name-status", mb+"..HEAD"))
-	return diff, baseBranch, files, true
+	return fileList(root, wsArg, mb+"..HEAD"), base
+}
+
+// workingFiles lists the working-tree changes (staged + unstaged vs HEAD) with
+// counts, then appends untracked files (which `git diff` omits).
+func workingFiles(root string, status []diffFile, wsArg func(...string) []string) []diffFile {
+	files := fileList(root, wsArg, "HEAD")
+	for _, f := range status {
+		if f.Status == "untracked" {
+			files = append(files, diffFile{Path: f.Path, Status: "untracked", Add: countAddedLines(root, f.Path)})
+		}
+	}
+	return files
+}
+
+// fileList builds the changed-file list for a comparison (rangeArgs, e.g. "HEAD"
+// or "<merge-base>..HEAD"): paths + per-file +/- from `--numstat`, statuses from
+// `--name-status`. --no-renames keeps paths plain so the two outputs align (a
+// rename shows as delete+add). Whitespace-only modifications (with -w) collapse
+// to 0/0 and are dropped, matching the per-file view that would show nothing.
+func fileList(root string, wsArg func(...string) []string, rangeArgs ...string) []diffFile {
+	num := wsArg(append([]string{"diff", "--numstat", "--no-renames"}, rangeArgs...)...)
+	name := append([]string{"diff", "--name-status", "--no-renames"}, rangeArgs...)
+	counts, order := parseNumstat(mustGit(root, num...))
+	statuses := parseNameStatusMap(mustGit(root, name...))
+	var files []diffFile
+	for _, p := range order {
+		c := counts[p]
+		st := statuses[p]
+		if st == "" {
+			st = "modified"
+		}
+		if st == "modified" && c[0] == 0 && c[1] == 0 {
+			continue // whitespace-only under -w, or a no-op entry
+		}
+		files = append(files, diffFile{Path: p, Status: st, Add: c[0], Del: c[1]})
+	}
+	return files
+}
+
+// parseNumstat turns `git diff --numstat` ("<add>\t<del>\t<path>", with "-" for
+// binary) into a path→[add,del] map plus the original file order.
+func parseNumstat(out string) (map[string][2]int, []string) {
+	m := map[string][2]int{}
+	var order []string
+	for _, line := range strings.Split(out, "\n") {
+		parts := strings.Split(line, "\t")
+		if len(parts) < 3 || parts[2] == "" {
+			continue
+		}
+		p := parts[2]
+		if _, seen := m[p]; !seen {
+			order = append(order, p)
+		}
+		m[p] = [2]int{numOrZero(parts[0]), numOrZero(parts[1])}
+	}
+	return m, order
+}
+
+func numOrZero(s string) int {
+	n, err := strconv.Atoi(strings.TrimSpace(s))
+	if err != nil {
+		return 0 // "-" (binary) or malformed
+	}
+	return n
+}
+
+// countAddedLines returns the line count of a small text file, for an untracked
+// file's "+N" count (git omits untracked files from numstat). Mirrors the cap in
+// untrackedDiff so we never read a huge or binary file just to count lines.
+func countAddedLines(root, rel string) int {
+	full := filepath.Join(root, rel)
+	info, err := os.Stat(full)
+	if err != nil || info.IsDir() || info.Size() > maxUntracked {
+		return 0
+	}
+	data, err := os.ReadFile(full)
+	if err != nil || isBinary(data) {
+		return 0
+	}
+	s := strings.TrimSuffix(string(data), "\n")
+	if s == "" {
+		return 0
+	}
+	return strings.Count(s, "\n") + 1
 }
 
 // mustGit runs a git command, returning "" on error (the diff endpoint treats
@@ -1193,10 +1332,11 @@ func parseStatus(s string) []diffFile {
 	return out
 }
 
-// parseNameStatus turns `git diff --name-status` into file entries (used for the
-// branch-vs-base fallback, where there's no working-tree status to read).
-func parseNameStatus(s string) []diffFile {
-	var out []diffFile
+// parseNameStatusMap turns `git diff --name-status --no-renames` into a
+// path→status map (A/D → added/deleted, else modified). Used to label the files
+// listed by parseNumstat.
+func parseNameStatusMap(s string) map[string]string {
+	m := map[string]string{}
 	for _, line := range strings.Split(s, "\n") {
 		parts := strings.Split(strings.TrimSpace(line), "\t")
 		if len(parts) < 2 || parts[0] == "" {
@@ -1208,12 +1348,10 @@ func parseNameStatus(s string) []diffFile {
 			st = "added"
 		case 'D':
 			st = "deleted"
-		case 'R':
-			st = "renamed"
 		}
-		out = append(out, diffFile{Path: parts[len(parts)-1], Status: st})
+		m[parts[len(parts)-1]] = st
 	}
-	return out
+	return m
 }
 
 // defaultBranch resolves the repo's base branch for a branch-vs-base diff:
