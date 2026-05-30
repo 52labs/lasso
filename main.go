@@ -160,6 +160,8 @@ func main() {
 	mux.HandleFunc("/api/events", hub.serveSSE)
 	mux.HandleFunc("/api/files", serveFiles)
 	mux.HandleFunc("/api/file", serveFile)
+	mux.HandleFunc("/api/file-delete", serveFileDelete)
+	mux.HandleFunc("/api/file-rename", serveFileRename)
 	mux.HandleFunc("/api/panes", servePanes)
 	mux.HandleFunc("/api/focus", serveFocus)
 	mux.HandleFunc("/api/rename", serveRename)
@@ -1656,6 +1658,70 @@ func serveFiles(w http.ResponseWriter, r *http.Request) {
 		return strings.ToLower(out[i].Name) < strings.ToLower(out[j].Name)
 	})
 	writeJSON(w, map[string]any{"path": path, "parent": filepath.Dir(path), "entries": out})
+}
+
+// serveFileDelete removes a file or directory (directories recursively). It
+// mirrors serveFiles' "any absolute path" trust model — lasso already exposes
+// the whole filesystem for browsing, so delete carries the same reach.
+func serveFileDelete(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "POST required", http.StatusMethodNotAllowed)
+		return
+	}
+	var req struct {
+		Path string `json:"path"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	path := filepath.Clean(req.Path)
+	if !filepath.IsAbs(path) {
+		http.Error(w, "path must be absolute", http.StatusBadRequest)
+		return
+	}
+	if err := os.RemoveAll(path); err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	writeJSON(w, map[string]any{"ok": true})
+}
+
+// serveFileRename renames an entry in place: the new name is a bare basename
+// (no separators), kept in the same parent directory.
+func serveFileRename(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "POST required", http.StatusMethodNotAllowed)
+		return
+	}
+	var req struct {
+		Path string `json:"path"`
+		Name string `json:"name"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	path := filepath.Clean(req.Path)
+	if !filepath.IsAbs(path) {
+		http.Error(w, "path must be absolute", http.StatusBadRequest)
+		return
+	}
+	name := strings.TrimSpace(req.Name)
+	if name == "" || name == "." || name == ".." || strings.ContainsRune(name, '/') {
+		http.Error(w, "invalid name", http.StatusBadRequest)
+		return
+	}
+	dst := filepath.Join(filepath.Dir(path), name)
+	if _, err := os.Lstat(dst); err == nil {
+		http.Error(w, "a file with that name already exists", http.StatusConflict)
+		return
+	}
+	if err := os.Rename(path, dst); err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	writeJSON(w, map[string]any{"ok": true, "path": dst})
 }
 
 const maxPreview = 2 << 20 // 2 MiB

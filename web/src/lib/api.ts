@@ -105,6 +105,14 @@ export const api = {
     return r.text()
   },
 
+  // Delete a file or directory (directories recursively).
+  deleteFile: (path: string) =>
+    postJSON<{ ok: boolean }>("/api/file-delete", { path }),
+
+  // Rename an entry in place; `name` is a bare basename kept in the same dir.
+  renameFile: (path: string, name: string) =>
+    postJSON<{ ok: boolean; path: string }>("/api/file-rename", { path, name }),
+
   // Diff metadata: the complete changed-file list with per-file counts (no diff
   // text — that's fetched per file via diffFile).
   diff: (path: string) => {
