@@ -1,24 +1,57 @@
 # mise tasks for lasso.
-#   mise run dev    — serve on the tailscale interface with frontend hot reload
-#   mise run build  — build the binary
+#   mise run dev    — Vite dev server (frontend HMR) proxying to the Go backend
+#   mise run build  — build the frontend (web/dist) then the binary
 #   mise run test   — run the Go tests
 
+[tasks."build:web"]
+description = "Build the React/shadcn frontend into web/dist (embedded by Go)"
+dir = "web"
+run = "bun install && bun run build"
+
 [tasks.build]
-description = "Build the lasso binary"
+description = "Build the frontend then the lasso binary"
+depends = ["build:web"]
 run = "go build -o lasso ."
 
 [tasks.test]
 description = "Run the Go test suite"
-run = "go test ./..."
+run = "go test ."
 
 [tasks.dev]
-description = "Serve on the tailscale IP (:8090, no auth) with frontend hot reload"
+description = "Frontend hot reload (Vite) on the tailscale IP, proxying /api + terminals to the Go backend"
 depends = ["build"]
+shell = "bash -c"
 run = '''
 ip="$(tailscale ip -4 | head -n1)"
 [ -n "$ip" ] || { echo "no tailscale IPv4 found — is tailscale up? (tailscale status)" >&2; exit 1; }
-echo "lasso (dev) on $ip — requesting :8090 (auto-picks the next free port if busy)"
-echo "see the 'UI: http://...' line below for the actual URL · frontend hot reload ON"
-echo "edit index.html and the browser refreshes; restart this task for Go changes."
-exec ./lasso -listen "$ip:8090" -insecure-no-auth -dev
+
+# Backend on loopback, on a dedicated DEV port (8190) — deliberately distinct
+# from the production default (8090) so a dev instance never shares a port
+# number with a real one, even across interfaces. With -dev it monotonically
+# bumps to the next free port if 8190 is taken (e.g. a second dev instance), so
+# several can run at once. We read the port it actually bound from its log and
+# point Vite's proxy at that. (ttyd needs no port here: spawn mode gives each
+# lasso its own per-PID unix sockets.)
+logf="$(mktemp)"
+./lasso -listen 127.0.0.1:8190 -insecure-no-auth -dev >"$logf" 2>&1 &
+backend=$!
+trap 'kill "$backend" 2>/dev/null; rm -f "$logf"' EXIT
+
+port=""
+for _ in $(seq 1 100); do
+  port="$(sed -n 's#.*UI:[[:space:]]*http://127\.0\.0\.1:\([0-9][0-9]*\).*#\1#p' "$logf" | head -n1)"
+  [ -n "$port" ] && break
+  kill -0 "$backend" 2>/dev/null || { echo "backend exited before binding a port:" >&2; cat "$logf" >&2; exit 1; }
+  sleep 0.1
+done
+[ -n "$port" ] || { echo "backend never reported its port; log:" >&2; cat "$logf" >&2; exit 1; }
+
+# Surface the backend's own logs (port bumps, theme reloads) in the foreground.
+tail -n +1 -f "$logf" & tailpid=$!
+trap 'kill "$backend" "$tailpid" 2>/dev/null; rm -f "$logf"' EXIT
+
+echo "lasso (dev): backend on 127.0.0.1:$port · Vite UI on http://$ip (frontend hot reload ON)"
+echo "edit anything under web/src and the browser hot-reloads; restart this task for Go changes."
+# Vite auto-bumps its own port (5173→5174→…) if busy and prints the chosen URL.
+cd web && env LASSO_BACKEND="http://127.0.0.1:$port" bun run dev --host "$ip"
 '''

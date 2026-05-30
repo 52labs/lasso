@@ -35,20 +35,19 @@ import (
 	"strconv"
 	"strings"
 	"sync"
-	"sync/atomic"
 	"syscall"
 	"time"
 )
 
-//go:embed index.html
-var staticFS embed.FS
-
-// staticAssets holds vendored client libraries (marked, highlight.js, DOMPurify)
-// served under /static/ — so the file viewer's markdown rendering and syntax
-// highlighting work without a build step or any runtime CDN dependency.
+// distFS holds the built React + shadcn/ui frontend (web/dist), embedded into
+// the binary so a single executable still serves the whole UI. The `all:`
+// prefix includes files whose names begin with "_" or "." Build the frontend
+// (`bun run build` in web/) before `go build` — `mise run build` enforces that
+// order. Favicons live in the build (copied from web/public), so there's no
+// separate /static/ route anymore.
 //
-//go:embed static
-var staticAssets embed.FS
+//go:embed all:web/dist
+var distFS embed.FS
 
 var (
 	listenAddr  = flag.String("listen", "127.0.0.1:8090", "address for the web server (loopback by default — the terminal is a writable shell)")
@@ -105,9 +104,6 @@ func main() {
 		log.Printf("theme:    %q -> %s (+custom overrides)", theme.Name, theme.Resolved)
 	} else {
 		log.Printf("theme:    %q -> %s", theme.Name, theme.Resolved)
-	}
-	if err := renderIndex(); err != nil {
-		log.Fatalf("render index: %v", err)
 	}
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
@@ -171,18 +167,19 @@ func main() {
 	mux.HandleFunc("/api/paste-image", servePasteImage)
 	mux.HandleFunc("/api/diff", serveDiff)
 	mux.HandleFunc("/api/version", serveVersion)
-	if *devMode {
-		// Serve the vendored libs from disk too, so an edit there shows on refresh.
-		mux.Handle("/static/", http.StripPrefix("/static/", noCache(http.FileServer(http.Dir(devStaticDir)))))
-		mux.HandleFunc("/api/livereload", serveLiveReload)
-		go watchFrontend(ctx)
-		log.Printf("dev:      ON — serving index.html + %s/ from disk, livereload enabled", devStaticDir)
-	} else if sub, err := fs.Sub(staticAssets, "static"); err == nil {
-		mux.Handle("/static/", http.StripPrefix("/static/", cacheControl(http.FileServer(http.FS(sub)))))
-	} else {
-		log.Fatalf("static fs: %v", err)
+	dist, err := fs.Sub(distFS, "web/dist")
+	if err != nil {
+		log.Fatalf("dist fs: %v", err)
 	}
-	mux.HandleFunc("/", serveIndex)
+	// Hashed, content-addressed build assets are immutable → long cache. Every
+	// other path falls through to the SPA entry (index.html). In -dev the live
+	// frontend is the Vite dev server (HMR) proxied onto these API routes; this
+	// embedded copy is what the production binary serves.
+	mux.Handle("/assets/", cacheControl(http.FileServer(http.FS(dist))))
+	mux.Handle("/", serveDist(dist))
+	if *devMode {
+		log.Printf("dev:      ON — backend only; run the Vite dev server in web/ for the frontend (mise run dev)")
+	}
 
 	handler := withAuth(mux, authUser, authPass, hasAuth)
 
@@ -1554,49 +1551,9 @@ func serveFile(w http.ResponseWriter, r *http.Request) {
 // misc
 // ---------------------------------------------------------------------------
 
-// indexHTML is index.html with the active theme's CSS variables injected,
-// rendered once at startup (the served copy in normal mode; -dev re-renders
-// from disk per request).
-var indexHTML []byte
-
-// devIndexPath/devStaticDir are the on-disk frontend, served live in -dev mode.
-const (
-	devIndexPath = "index.html"
-	devStaticDir = "static"
-)
-
-// renderIndexFrom injects a <style> block (overriding the static :root fallback)
-// carrying the resolved theme's CSS variables, in place of the <!--THEME-->
-// marker (or appended before </head> if the marker is absent). In -dev mode it
-// also injects a livereload client just before </body>.
-func renderIndexFrom(b []byte) []byte {
-	style := "<style id=\"herdr-theme\">/* resolved from herdr theme: " + theme.Resolved +
-		" */\n  :root {\n" + theme.cssVars() + "  }</style>"
-	s := string(b)
-	if strings.Contains(s, "<!--THEME-->") {
-		s = strings.Replace(s, "<!--THEME-->", style, 1)
-	} else {
-		s = strings.Replace(s, "</head>", style+"\n</head>", 1)
-	}
-	if *devMode {
-		s = strings.Replace(s, "</body>", liveReloadSnippet+"\n</body>", 1)
-	}
-	return []byte(s)
-}
-
-// renderIndex renders the embedded index.html once at startup (normal mode).
-func renderIndex() error {
-	b, err := staticFS.ReadFile("index.html")
-	if err != nil {
-		return err
-	}
-	indexHTML = renderIndexFrom(b)
-	return nil
-}
-
-// cacheControl adds a modest cache lifetime to the vendored static assets (they
-// change only when the binary is rebuilt; a short max-age avoids re-fetching the
-// viewer libs on every page load).
+// cacheControl gives content-addressed build assets (Vite's /assets/*, whose
+// names carry a content hash) a long cache lifetime — they only change when the
+// binary is rebuilt, and a new build yields new filenames.
 func cacheControl(h http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Cache-Control", "public, max-age=3600")
@@ -1604,108 +1561,34 @@ func cacheControl(h http.Handler) http.Handler {
 	})
 }
 
-// noCache disables caching — used for disk-served assets in -dev mode so edits
-// always show on refresh.
-func noCache(h http.Handler) http.Handler {
-	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Cache-Control", "no-store")
-		h.ServeHTTP(w, r)
-	})
+// serveDist serves the embedded SPA build: a real file when one exists for the
+// request path (favicons at the root, etc.), otherwise index.html — so the
+// single-page app loads for any path. index.html itself is served no-store so a
+// new build is always picked up; its hashed asset references handle caching.
+func serveDist(dist fs.FS) http.HandlerFunc {
+	files := http.FileServer(http.FS(dist))
+	return func(w http.ResponseWriter, r *http.Request) {
+		name := strings.TrimPrefix(r.URL.Path, "/")
+		if name != "" && fs.ValidPath(name) {
+			if f, err := dist.Open(name); err == nil {
+				_ = f.Close()
+				files.ServeHTTP(w, r)
+				return
+			}
+		}
+		serveSPAIndex(w, dist)
+	}
 }
 
-func serveIndex(w http.ResponseWriter, r *http.Request) {
-	if r.URL.Path != "/" {
-		http.NotFound(w, r)
+func serveSPAIndex(w http.ResponseWriter, dist fs.FS) {
+	b, err := fs.ReadFile(dist, "index.html")
+	if err != nil {
+		http.Error(w, "frontend build missing (run `bun run build` in web/)", http.StatusInternalServerError)
 		return
-	}
-	body := indexHTML
-	if *devMode {
-		// Live: re-read from disk and re-render so frontend edits show on refresh.
-		if b, err := os.ReadFile(devIndexPath); err == nil {
-			body = renderIndexFrom(b)
-		} else {
-			log.Printf("dev: reading %s failed, serving embedded copy: %v", devIndexPath, err)
-		}
-		w.Header().Set("Cache-Control", "no-store")
 	}
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
-	_, _ = w.Write(body)
-}
-
-// ---------------------------------------------------------------------------
-// dev livereload: watch index.html on disk and refresh the browser on change.
-// Active only under -dev; serves no purpose (and isn't injected) otherwise.
-// ---------------------------------------------------------------------------
-
-// liveReloadSnippet is injected before </body> in -dev mode. It reloads the
-// page when /api/livereload signals a change. A full reload also reconnects the
-// terminal iframe (ttyd respawns the herdr client, which re-attaches to the
-// persistent server) — acceptable for a dev loop on frontend edits.
-const liveReloadSnippet = `<script>/* dev livereload */
-(function () {
-  var es = new EventSource('/api/livereload');
-  es.addEventListener('reload', function () { location.reload(); });
-})();</script>`
-
-// devReloadGen bumps whenever index.html changes on disk; livereload clients
-// poll it and reload when it moves.
-var devReloadGen int64
-
-// watchFrontend polls index.html's mtime and bumps devReloadGen on change.
-func watchFrontend(ctx context.Context) {
-	var last time.Time
-	t := time.NewTicker(300 * time.Millisecond)
-	defer t.Stop()
-	for {
-		select {
-		case <-ctx.Done():
-			return
-		case <-t.C:
-			fi, err := os.Stat(devIndexPath)
-			if err != nil {
-				continue
-			}
-			if m := fi.ModTime(); m.After(last) {
-				if !last.IsZero() {
-					atomic.AddInt64(&devReloadGen, 1)
-					log.Printf("dev: %s changed → reloading browsers", devIndexPath)
-				}
-				last = m
-			}
-		}
-	}
-}
-
-// serveLiveReload is an SSE stream that emits a "reload" event when index.html
-// changes. Dev-only.
-func serveLiveReload(w http.ResponseWriter, r *http.Request) {
-	if !*devMode {
-		http.NotFound(w, r)
-		return
-	}
-	fl, ok := w.(http.Flusher)
-	if !ok {
-		http.Error(w, "no flush", http.StatusInternalServerError)
-		return
-	}
-	w.Header().Set("Content-Type", "text/event-stream")
 	w.Header().Set("Cache-Control", "no-store")
-	w.Header().Set("Connection", "keep-alive")
-	last := atomic.LoadInt64(&devReloadGen)
-	t := time.NewTicker(250 * time.Millisecond)
-	defer t.Stop()
-	for {
-		select {
-		case <-r.Context().Done():
-			return
-		case <-t.C:
-			if cur := atomic.LoadInt64(&devReloadGen); cur != last {
-				last = cur
-				fmt.Fprintf(w, "event: reload\ndata: %d\n\n", cur)
-				fl.Flush()
-			}
-		}
-	}
+	_, _ = w.Write(b)
 }
 
 func writeJSON(w http.ResponseWriter, v any) {
