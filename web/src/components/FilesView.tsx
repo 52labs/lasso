@@ -1,7 +1,7 @@
 import * as React from "react"
 import { toast } from "sonner"
 
-import { api, type DirListing } from "@/lib/api"
+import { api, type FileEntry } from "@/lib/api"
 import { useApp } from "@/lib/app-store"
 import { fmtSize } from "@/lib/format"
 import { cn } from "@/lib/utils"
@@ -32,13 +32,18 @@ import {
   AlertDialogTitle,
 } from "@/components/ui/alert-dialog"
 
-// An entry the user has targeted with a context-menu action.
-type Target = { name: string; full: string; dir: boolean }
+// An entry the user has targeted with a context-menu action. `parent` is the
+// directory holding it — refreshed after the action so the tree updates.
+type Target = { name: string; full: string; dir: boolean; parent: string }
 
-// The Files tab: a directory browser that (by default) follows herdr's active
-// pane. Clicking a directory navigates into it; clicking a file opens it in the
-// full-column viewer (owned by the parent so its highlight clears on close).
-// Right-clicking an entry offers rename / delete.
+const INDENT = 14 // px added to the row's left padding per nesting level
+
+const join = (dir: string, name: string) => dir.replace(/\/$/, "") + "/" + name
+
+// The Files tab: an inline, lazily-loaded directory tree rooted at herdr's
+// active pane (by default). Clicking a directory expands/collapses it in place;
+// clicking a file opens it in the full-column viewer (owned by the parent so
+// its highlight clears on close). Right-clicking an entry offers rename/delete.
 export function FilesView({
   viewerPath,
   onOpenFile,
@@ -49,48 +54,109 @@ export function FilesView({
   const { activeCwd } = useApp()
   const [curPath, setCurPath] = React.useState<string | null>(null)
   const [follow, setFollow] = React.useState(true)
-  const [listing, setListing] = React.useState<DirListing | null>(null)
-  const [error, setError] = React.useState<string | null>(null)
   const [pathValue, setPathValue] = React.useState("")
-  const [reloadNonce, setReloadNonce] = React.useState(0)
+  // The canonical root path (as the server cleaned it) and its parent, for the
+  // ".." re-root row.
+  const [rootPath, setRootPath] = React.useState<string | null>(null)
+  const [rootParent, setRootParent] = React.useState<string | null>(null)
+  // Per-directory lazy state, all keyed by absolute path.
+  const [expanded, setExpanded] = React.useState<Set<string>>(new Set())
+  const [childrenByPath, setChildrenByPath] = React.useState<
+    Record<string, FileEntry[]>
+  >({})
+  const [errorByPath, setErrorByPath] = React.useState<Record<string, string>>(
+    {},
+  )
   const [renameTarget, setRenameTarget] = React.useState<Target | null>(null)
   const [renameValue, setRenameValue] = React.useState("")
   const [deleteTarget, setDeleteTarget] = React.useState<Target | null>(null)
   const inputRef = React.useRef<HTMLInputElement>(null)
-
-  const reload = () => setReloadNonce((n) => n + 1)
 
   // Follow the active pane's cwd while "follow" is on.
   React.useEffect(() => {
     if (follow && activeCwd && activeCwd !== curPath) setCurPath(activeCwd)
   }, [follow, activeCwd, curPath])
 
-  // Load the listing whenever the current directory changes (or we reload).
+  // (Re)load the root whenever it changes — collapse everything and refetch.
   React.useEffect(() => {
     if (!curPath) return
     let cancelled = false
+    setExpanded(new Set())
+    setChildrenByPath({})
+    setErrorByPath({})
+    setRootPath(null)
     api
       .files(curPath)
       .then((data) => {
         if (cancelled) return
-        setError(null)
-        setListing(data)
+        setRootPath(data.path)
+        setRootParent(
+          data.parent && data.parent !== data.path ? data.parent : null,
+        )
+        setChildrenByPath({ [data.path]: data.entries })
         if (document.activeElement !== inputRef.current) setPathValue(data.path)
       })
       .catch((e: Error) => {
         if (cancelled) return
-        setError(e.message)
-        setListing(null)
+        setRootPath(curPath)
+        setRootParent(null)
+        setErrorByPath({ [curPath]: e.message })
       })
     return () => {
       cancelled = true
     }
-  }, [curPath, reloadNonce])
+  }, [curPath])
+
+  // Fetch a directory's children into the cache (used on expand and refresh).
+  const loadDir = React.useCallback(async (dir: string) => {
+    try {
+      const data = await api.files(dir)
+      setChildrenByPath((prev) => ({ ...prev, [dir]: data.entries }))
+      setErrorByPath((prev) => {
+        if (!(dir in prev)) return prev
+        const next = { ...prev }
+        delete next[dir]
+        return next
+      })
+    } catch (e) {
+      setErrorByPath((prev) => ({ ...prev, [dir]: (e as Error).message }))
+    }
+  }, [])
+
+  const toggleDir = (full: string) => {
+    setExpanded((prev) => {
+      const next = new Set(prev)
+      if (next.has(full)) {
+        next.delete(full)
+      } else {
+        next.add(full)
+        if (!(full in childrenByPath) && !(full in errorByPath)) void loadDir(full)
+      }
+      return next
+    })
+  }
+
+  // Re-root the tree (the ".." row and the path input). This is the user
+  // steering, so stop following the active pane.
+  const navigate = (path: string) => {
+    setFollow(false)
+    setCurPath(path)
+  }
 
   const onPathKeyDown = (e: React.KeyboardEvent<HTMLInputElement>) => {
     const v = e.currentTarget.value.trim()
-    if (e.key === "Enter" && v) setCurPath(v)
+    if (e.key === "Enter" && v) navigate(v)
   }
+
+  // Drop a path and any of its descendants from the expanded set (after the
+  // entry is renamed or deleted).
+  const pruneExpanded = (prefix: string) =>
+    setExpanded((prev) => {
+      const next = new Set<string>()
+      for (const p of prev)
+        if (p !== prefix && !p.startsWith(prefix + "/")) next.add(p)
+      return next
+    })
 
   const submitRename = async () => {
     if (!renameTarget) return
@@ -101,8 +167,9 @@ export function FilesView({
     }
     try {
       await api.renameFile(renameTarget.full, name)
+      pruneExpanded(renameTarget.full)
       setRenameTarget(null)
-      reload()
+      void loadDir(renameTarget.parent)
     } catch (e) {
       toast.error((e as Error).message)
     }
@@ -112,16 +179,48 @@ export function FilesView({
     if (!deleteTarget) return
     try {
       await api.deleteFile(deleteTarget.full)
+      pruneExpanded(deleteTarget.full)
       setDeleteTarget(null)
-      reload()
+      void loadDir(deleteTarget.parent)
     } catch (e) {
       toast.error((e as Error).message)
     }
   }
 
-  const entries = listing?.entries ?? []
-  const showParent =
-    listing?.parent && listing.parent !== listing.path ? listing.parent : null
+  // Recursively render a directory's entries. `dir` is absolute; `depth` drives
+  // indentation. Children render only for expanded directories.
+  const renderDir = (dir: string, depth: number): React.ReactNode => {
+    const err = errorByPath[dir]
+    if (err) return <Note depth={depth}>{err}</Note>
+    const entries = childrenByPath[dir]
+    if (!entries) return <Note depth={depth}>loading…</Note>
+    if (entries.length === 0) return <Note depth={depth}>(empty)</Note>
+    return entries.map((e) => {
+      const full = join(dir, e.name)
+      const open = e.dir && expanded.has(full)
+      return (
+        <React.Fragment key={e.name}>
+          <FileRow
+            name={e.name}
+            dir={e.dir}
+            size={e.size}
+            depth={depth}
+            expanded={open}
+            selected={full === viewerPath}
+            onClick={() => (e.dir ? toggleDir(full) : onOpenFile(full))}
+            onRename={() => {
+              setRenameTarget({ name: e.name, full, dir: e.dir, parent: dir })
+              setRenameValue(e.name)
+            }}
+            onDelete={() =>
+              setDeleteTarget({ name: e.name, full, dir: e.dir, parent: dir })
+            }
+          />
+          {open && renderDir(full, depth + 1)}
+        </React.Fragment>
+      )
+    })
+  }
 
   return (
     <div className="flex min-h-0 flex-1 flex-col">
@@ -149,45 +248,22 @@ export function FilesView({
       </header>
 
       <div className="filelist">
-        {error ? (
-          <div className="empty">
-            cannot read {curPath}
-            <br />
-            {error}
-          </div>
-        ) : !listing ? (
+        {!curPath ? (
           <div className="empty">waiting for herdr…</div>
+        ) : !rootPath ? (
+          <div className="empty">loading…</div>
         ) : (
           <>
-            {showParent && (
+            {rootParent && (
               <FileRow
                 name=".."
                 dir
                 isUp
-                onClick={() => setCurPath(showParent)}
+                depth={0}
+                onClick={() => navigate(rootParent)}
               />
             )}
-            {entries.length === 0 && <div className="empty">(empty)</div>}
-            {entries.map((e) => {
-              const full = listing.path.replace(/\/$/, "") + "/" + e.name
-              return (
-                <FileRow
-                  key={e.name}
-                  name={e.name}
-                  dir={e.dir}
-                  size={e.size}
-                  selected={full === viewerPath}
-                  onClick={() => (e.dir ? setCurPath(full) : onOpenFile(full))}
-                  onRename={() => {
-                    setRenameTarget({ name: e.name, full, dir: e.dir })
-                    setRenameValue(e.name)
-                  }}
-                  onDelete={() =>
-                    setDeleteTarget({ name: e.name, full, dir: e.dir })
-                  }
-                />
-              )
-            })}
+            {renderDir(rootPath, 0)}
           </>
         )}
       </div>
@@ -199,7 +275,9 @@ export function FilesView({
       >
         <DialogContent className="sm:max-w-sm">
           <DialogHeader>
-            <DialogTitle>Rename {renameTarget?.dir ? "folder" : "file"}</DialogTitle>
+            <DialogTitle>
+              Rename {renameTarget?.dir ? "folder" : "file"}
+            </DialogTitle>
           </DialogHeader>
           <Input
             autoFocus
@@ -228,7 +306,8 @@ export function FilesView({
         <AlertDialogContent>
           <AlertDialogHeader>
             <AlertDialogTitle>
-              Delete {deleteTarget?.dir ? "folder" : "file"} “{deleteTarget?.name}”?
+              Delete {deleteTarget?.dir ? "folder" : "file"} “
+              {deleteTarget?.name}”?
             </AlertDialogTitle>
             <AlertDialogDescription className="min-w-0">
               <span className="block font-mono text-xs break-all">
@@ -252,10 +331,28 @@ export function FilesView({
   )
 }
 
+// A muted, depth-indented status line (loading / empty / error) shown in place
+// of a directory's children.
+function Note({
+  depth,
+  children,
+}: {
+  depth: number
+  children: React.ReactNode
+}) {
+  return (
+    <div className="empty" style={{ paddingLeft: 12 + depth * INDENT }}>
+      {children}
+    </div>
+  )
+}
+
 function FileRow({
   name,
   dir,
   size,
+  depth,
+  expanded,
   isUp,
   selected,
   onClick,
@@ -265,6 +362,8 @@ function FileRow({
   name: string
   dir: boolean
   size?: number
+  depth: number
+  expanded?: boolean
   isUp?: boolean
   selected?: boolean
   onClick: () => void
@@ -274,9 +373,12 @@ function FileRow({
   const row = (
     <div
       className={cn("entry", dir ? "d" : "f", selected && "sel")}
+      style={{ paddingLeft: 12 + depth * INDENT }}
       onClick={onClick}
     >
-      <span className="ico">{dir ? (isUp ? "↑" : "▸") : "·"}</span>
+      <span className="ico">
+        {dir ? (isUp ? "↑" : expanded ? "▾" : "▸") : "·"}
+      </span>
       <span className="nm">{name}</span>
       {!dir && <span className="sz">{fmtSize(size)}</span>}
     </div>
