@@ -35,7 +35,7 @@ function Field({
 
 // The Settings tab: herdr's installed/latest version (top) plus the "New Agent"
 // creator configuration. The creator defaults (where to scan for repos, the
-// default agent/prefix, the scratch setup script) and each repo's
+// default agent, the scratch setup script) and each repo's
 // files-to-copy + setup commands live here because they describe the repo and
 // environment — not a one-off agent — so they persist in ~/.lasso/config.yaml.
 export function SettingsTab({
@@ -143,7 +143,6 @@ function AgentCreatorSettings({ active }: { active: boolean }) {
   // Global defaults.
   const [reposRoot, setReposRoot] = React.useState("")
   const [defaultAgent, setDefaultAgent] = React.useState("claude")
-  const [branchPrefix, setBranchPrefix] = React.useState("")
   const [scratchSetup, setScratchSetup] = React.useState("")
   const [savingDefaults, setSavingDefaults] = React.useState(false)
 
@@ -172,7 +171,6 @@ function AgentCreatorSettings({ active }: { active: boolean }) {
       .then((c) => {
         setReposRoot(c.repos_root || "")
         setDefaultAgent(c.default_agent || "claude")
-        setBranchPrefix(c.branch_prefix || "")
         setScratchSetup(c.scratch_setup || "")
       })
       .catch(() => {
@@ -195,7 +193,6 @@ function AgentCreatorSettings({ active }: { active: boolean }) {
       await api.saveAgentConfig({
         repos_root: reposRoot,
         default_agent: defaultAgent,
-        branch_prefix: branchPrefix,
         scratch_setup: scratchSetup,
       })
       // Repos root may have changed — rescan.
@@ -264,15 +261,6 @@ function AgentCreatorSettings({ active }: { active: boolean }) {
             <option value="claude">Claude Code</option>
             <option value="codex">Codex</option>
           </select>
-        </Field>
-
-        <Field label="Branch prefix" htmlFor="settings-branch-prefix">
-          <Input
-            id="settings-branch-prefix"
-            value={branchPrefix}
-            onChange={(e) => setBranchPrefix(e.target.value)}
-            placeholder="feat/"
-          />
         </Field>
 
         <Field
