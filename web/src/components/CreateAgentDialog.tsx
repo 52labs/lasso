@@ -420,7 +420,10 @@ export function CreateAgentDialog({
                   id="agent-files"
                   type="file"
                   multiple
-                  className="text-muted-foreground text-sm"
+                  className={cn(
+                    fieldClass,
+                    "cursor-pointer text-muted-foreground file:mr-2.5 file:cursor-pointer file:rounded file:border-0 file:bg-accent file:px-2 file:py-0.5 file:font-medium file:text-foreground file:text-sm"
+                  )}
                   onChange={(e) =>
                     setFiles((prev) => [
                       ...prev,
