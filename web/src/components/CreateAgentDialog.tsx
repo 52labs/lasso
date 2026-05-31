@@ -47,9 +47,11 @@ function generateBranchName(title: string): string {
 }
 
 // Native textarea/select styled to match the shadcn <Input> (same border,
-// radius, and background) so every field in the form reads as one set.
+// radius, and background) so every field in the form reads as one set. Fields
+// use bg-background (not transparent) so they contrast against the dialog's
+// bg-popover surface.
 const fieldClass =
-  "w-full rounded-lg border border-input bg-transparent px-2.5 py-1.5 text-sm outline-none transition-colors placeholder:text-muted-foreground focus-visible:border-ring focus-visible:ring-3 focus-visible:ring-ring/50 dark:bg-input/30"
+  "w-full rounded-lg border border-input bg-background px-2.5 py-1.5 text-sm outline-none transition-colors placeholder:text-muted-foreground focus-visible:border-ring focus-visible:ring-3 focus-visible:ring-ring/50"
 const labelClass = "font-medium text-muted-foreground text-xs"
 
 function Field({
@@ -287,6 +289,7 @@ export function CreateAgentDialog({
           <Field label="Title" htmlFor="agent-title">
             <Input
               id="agent-title"
+              className="bg-background dark:bg-background"
               value={title}
               onChange={(e) => onTitleChange(e.target.value)}
               placeholder="What should this agent work on?"
@@ -393,6 +396,7 @@ export function CreateAgentDialog({
                   <Field label="Branch prefix" htmlFor="agent-prefix">
                     <Input
                       id="agent-prefix"
+                      className="bg-background dark:bg-background"
                       value={prefix}
                       onChange={(e) => setPrefix(e.target.value)}
                       placeholder="feat/"
@@ -401,6 +405,7 @@ export function CreateAgentDialog({
                   <Field label="Branch name" htmlFor="agent-branch">
                     <Input
                       id="agent-branch"
+                      className="bg-background dark:bg-background"
                       value={branchName}
                       onChange={(e) => setBranchName(e.target.value)}
                       placeholder={autoBranch || "auto-generated"}
