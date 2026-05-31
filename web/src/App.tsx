@@ -34,7 +34,7 @@ const LEFT_VIEWS: LeftView[] = ["herdr", "settings"]
 // Shared tab-strip styling: a full-width underline strip, matching the original
 // vanilla UI rather than shadcn's default pill TabsList.
 const stripClass =
-  "h-auto w-full justify-start gap-0 rounded-none border-b border-border bg-background p-0"
+  "h-auto w-full justify-start gap-0 overflow-x-auto rounded-none border-b border-border bg-background p-0"
 const tabClass =
   "flex-none rounded-none border-0 border-b-2 border-transparent bg-transparent px-3 py-1.5 text-xs text-muted-foreground shadow-none data-[state=active]:border-primary data-[state=active]:bg-transparent data-[state=active]:text-primary data-[state=active]:shadow-none"
 
@@ -149,7 +149,7 @@ function Shell() {
               </TabsTrigger>
               {collapsed && (
                 <button
-                  className="ml-auto self-center rounded border border-border px-1.5 text-muted-foreground hover:border-primary hover:text-primary"
+                  className="sticky right-0 z-10 ml-auto flex-none self-center rounded border border-border bg-background px-1.5 text-muted-foreground hover:border-primary hover:text-primary"
                   title="show file viewer"
                   onClick={() => rightPanel.current?.expand()}
                 >
@@ -223,7 +223,7 @@ function Shell() {
                 Terminal
               </TabsTrigger>
               <button
-                className="ml-auto self-center rounded border border-border px-1.5 text-muted-foreground hover:border-primary hover:text-primary"
+                className="sticky right-0 z-10 ml-auto flex-none self-center rounded border border-border bg-background px-1.5 text-muted-foreground hover:border-primary hover:text-primary"
                 title="collapse sidebar"
                 onClick={() => rightPanel.current?.collapse()}
               >
