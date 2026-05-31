@@ -66,7 +66,7 @@ function Shell() {
   const [collapsed, setCollapsed] = React.useState(false)
   const [viewerPath, setViewerPath] = React.useState<string | null>(null)
   const [diffDirty, setDiffDirty] = React.useState(0)
-  const leftPanel = React.useRef<PanelImperativeHandle>(null)
+  const rightPanel = React.useRef<PanelImperativeHandle>(null)
 
   const savedLayout = React.useMemo<Layout | undefined>(() => {
     try {
@@ -97,12 +97,12 @@ function Shell() {
 
   // Restore the persisted collapse state once the panel is mounted.
   React.useEffect(() => {
-    if (lsGet("sidebarCollapsed") === "1") leftPanel.current?.collapse()
+    if (lsGet("sidebarCollapsed") === "1") rightPanel.current?.collapse()
     // run once on mount
   }, [])
 
   const openUpdateInTerminal = () => {
-    leftPanel.current?.expand() // ensure the right column is visible
+    rightPanel.current?.expand() // ensure the right column is visible
     setRightView("terminal")
     typeIntoShell("herdr update")
   }
@@ -116,16 +116,8 @@ function Shell() {
     >
       <ResizablePanel
         id="left"
-        panelRef={leftPanel}
         defaultSize={60}
         minSize={15}
-        collapsible
-        collapsedSize={0}
-        onResize={(size) => {
-          const c = size.asPercentage < 0.5
-          setCollapsed((prev) => (prev === c ? prev : c))
-          lsSet("sidebarCollapsed", c ? "1" : "0")
-        }}
         className="flex h-full min-h-0 flex-col"
       >
         <Tabs
@@ -174,8 +166,16 @@ function Shell() {
 
       <ResizablePanel
         id="right"
+        panelRef={rightPanel}
         defaultSize={40}
         minSize={15}
+        collapsible
+        collapsedSize={0}
+        onResize={(size) => {
+          const c = size.asPercentage < 0.05
+          setCollapsed((prev) => (prev === c ? prev : c))
+          lsSet("sidebarCollapsed", c ? "1" : "0")
+        }}
         className="relative flex h-full min-h-0 flex-col border-l border-border bg-card"
       >
         <Tabs
@@ -207,7 +207,7 @@ function Shell() {
             <button
               className="ml-auto self-center rounded border border-border px-1.5 text-muted-foreground hover:border-primary hover:text-primary"
               title="collapse sidebar"
-              onClick={() => leftPanel.current?.collapse()}
+              onClick={() => rightPanel.current?.collapse()}
             >
               <ChevronRight className="size-4" />
             </button>
@@ -253,7 +253,7 @@ function Shell() {
         <button
           className="fixed top-2 right-2 z-10 rounded border border-border bg-card px-2 py-1 text-primary shadow-md hover:border-primary"
           title="show file viewer"
-          onClick={() => leftPanel.current?.expand()}
+          onClick={() => rightPanel.current?.expand()}
         >
           <ChevronLeft className="size-4" />
         </button>
