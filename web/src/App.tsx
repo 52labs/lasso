@@ -34,7 +34,7 @@ const LEFT_VIEWS: LeftView[] = ["herdr", "grid", "settings"]
 const stripClass =
   "h-auto w-full justify-start gap-0 rounded-none border-b border-border bg-background p-0"
 const tabClass =
-  "rounded-none border-0 border-b-2 border-transparent bg-transparent px-3 py-1.5 text-xs text-muted-foreground shadow-none data-[state=active]:border-primary data-[state=active]:bg-transparent data-[state=active]:text-primary data-[state=active]:shadow-none"
+  "flex-none rounded-none border-0 border-b-2 border-transparent bg-transparent px-3 py-1.5 text-xs text-muted-foreground shadow-none data-[state=active]:border-primary data-[state=active]:bg-transparent data-[state=active]:text-primary data-[state=active]:shadow-none"
 
 function Pane({
   show,
@@ -127,7 +127,7 @@ function Shell() {
           onValueChange={(v) => switchLeft(v as LeftView)}
           className="flex h-full flex-col gap-0"
         >
-          <TabsList className={stripClass}>
+          <TabsList className={cn(stripClass, collapsed && "pr-2")}>
             <TabsTrigger value="herdr" className={tabClass}>
               Herdr
             </TabsTrigger>
@@ -137,6 +137,15 @@ function Shell() {
             <TabsTrigger value="settings" className={tabClass}>
               Settings
             </TabsTrigger>
+            {collapsed && (
+              <button
+                className="ml-auto self-center rounded border border-border px-1.5 text-muted-foreground hover:border-primary hover:text-primary"
+                title="show file viewer"
+                onClick={() => rightPanel.current?.expand()}
+              >
+                <ChevronLeft className="size-4" />
+              </button>
+            )}
           </TabsList>
           <div className="relative min-h-0 flex-1">
             <Pane show={leftView === "herdr"}>
@@ -250,16 +259,6 @@ function Shell() {
           </div>
         </Tabs>
       </ResizablePanel>
-
-      {collapsed && (
-        <button
-          className="fixed top-2 right-2 z-10 rounded border border-border bg-card px-2 py-1 text-primary shadow-md hover:border-primary"
-          title="show file viewer"
-          onClick={() => rightPanel.current?.expand()}
-        >
-          <ChevronLeft className="size-4" />
-        </button>
-      )}
     </ResizablePanelGroup>
   )
 }
