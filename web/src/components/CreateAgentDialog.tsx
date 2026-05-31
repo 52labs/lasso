@@ -87,6 +87,20 @@ export function CreateAgentDialog({
   const [submitting, setSubmitting] = React.useState(false)
   const [showAdvanced, setShowAdvanced] = React.useState(false)
 
+  // Cmd/Ctrl+O opens the creator. Bound only to the floating variant so the
+  // shortcut has a single owner even when the Agents-tab button is also mounted.
+  React.useEffect(() => {
+    if (variant !== "floating") return
+    const onKey = (e: KeyboardEvent) => {
+      if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === "o") {
+        e.preventDefault()
+        setOpen(true)
+      }
+    }
+    document.addEventListener("keydown", onKey)
+    return () => document.removeEventListener("keydown", onKey)
+  }, [variant])
+
   // Settings / defaults (from ~/.lasso/config.yaml).
   const [config, setConfig] = React.useState<AgentConfig | null>(null)
   const [repos, setRepos] = React.useState<RepoEntry[]>([])
@@ -244,7 +258,7 @@ export function CreateAgentDialog({
           <button
             type="button"
             className="flex items-center gap-1 rounded-full border border-border bg-card/90 px-2 py-0.5 text-[11px] text-muted-foreground shadow-md backdrop-blur transition-colors hover:bg-accent hover:text-foreground"
-            title="create a new agent"
+            title="create a new agent (⌘O)"
           >
             <Plus className="size-3" />
             <span className="font-medium">New Agent</span>

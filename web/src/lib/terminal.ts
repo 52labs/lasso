@@ -105,6 +105,34 @@ export function wireTerminalIframe(id: string, suppressContext: boolean) {
   if (suppressContext)
     doc.addEventListener("contextmenu", (e) => e.preventDefault(), true)
 
+  // Forward app-level shortcuts (Cmd/Ctrl+<key>) to the parent document so
+  // global handlers fire even while the terminal holds keyboard focus — the
+  // iframe is same-origin, so we can re-dispatch. If a parent listener claims
+  // the combo (preventDefault ⇒ dispatchEvent returns false), mirror that back
+  // into the iframe so neither xterm nor the browser also acts on it. Clones
+  // land on the parent `document`, not this one, so there's no re-entrancy.
+  doc.addEventListener(
+    "keydown",
+    (e: KeyboardEvent) => {
+      if (!(e.metaKey || e.ctrlKey)) return
+      const clone = new KeyboardEvent("keydown", {
+        key: e.key,
+        code: e.code,
+        metaKey: e.metaKey,
+        ctrlKey: e.ctrlKey,
+        altKey: e.altKey,
+        shiftKey: e.shiftKey,
+        bubbles: true,
+        cancelable: true,
+      })
+      if (!document.dispatchEvent(clone)) {
+        e.preventDefault()
+        e.stopPropagation()
+      }
+    },
+    true
+  )
+
   doc.addEventListener(
     "paste",
     async (e: ClipboardEvent) => {
