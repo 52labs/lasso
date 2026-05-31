@@ -500,13 +500,11 @@ func uniqueBranch(cur Backend, repo, branch string) string {
 // copyRepoFiles copies files matching the comma/newline-separated globs from the
 // repo into the worktree, skipping files that already exist. Best effort — a
 // failing pattern is silently ignored (it mirrors fulcrum's copyFilesToWorktree).
+// Globbing goes through the active backend (backendGlob), not the local os, so a
+// repo on a remote host is matched on that host rather than missed entirely.
 func copyRepoFiles(cur Backend, repo, dest, spec string) {
 	for _, pattern := range splitGlobs(spec) {
-		matches, err := filepath.Glob(filepath.Join(repo, pattern))
-		if err != nil {
-			continue
-		}
-		for _, src := range matches {
+		for _, src := range backendGlob(cur, filepath.Join(repo, pattern)) {
 			rel, err := filepath.Rel(repo, src)
 			if err != nil {
 				continue
@@ -540,8 +538,63 @@ func copyFile(cur Backend, src, dst string) {
 	_, _ = io.Copy(out, in)
 }
 
-// moveAttachments moves the named files from the staging upload dir into the
-// work dir (best effort).
+// backendGlob evaluates a filepath.Glob-style pattern on the active backend, so
+// the same copy-files spec works whether the repo is local or on a remote host.
+// It ports the stdlib's segment-by-segment matching (no recursive `**`), but
+// lists directories via cur.ReadDir / cur.Lstat instead of the local os. The
+// pattern is expected to be an absolute path (callers join it onto the repo).
+func backendGlob(cur Backend, pattern string) []string {
+	if !globHasMeta(pattern) {
+		if _, err := cur.Lstat(pattern); err != nil {
+			return nil // pattern names a file that doesn't exist
+		}
+		return []string{pattern}
+	}
+	dir, file := filepath.Split(pattern)
+	dir = filepath.Clean(dir)
+	if !globHasMeta(dir) {
+		return backendGlobDir(cur, dir, file, nil)
+	}
+	if dir == pattern {
+		return nil // no separator to split on — avoid infinite recursion
+	}
+	var out []string
+	for _, d := range backendGlob(cur, dir) {
+		out = backendGlobDir(cur, d, file, out)
+	}
+	return out
+}
+
+// backendGlobDir appends the entries of dir on the backend whose names match the
+// (meta-bearing) final pattern segment.
+func backendGlobDir(cur Backend, dir, pattern string, matches []string) []string {
+	fi, err := cur.Stat(dir)
+	if err != nil || !fi.IsDir() {
+		return matches
+	}
+	ents, err := cur.ReadDir(dir)
+	if err != nil {
+		return matches
+	}
+	sort.Slice(ents, func(i, j int) bool { return ents[i].Name < ents[j].Name })
+	for _, e := range ents {
+		if ok, _ := filepath.Match(pattern, e.Name); ok {
+			matches = append(matches, filepath.Join(dir, e.Name))
+		}
+	}
+	return matches
+}
+
+// globHasMeta reports whether path contains any glob metacharacter.
+func globHasMeta(path string) bool { return strings.ContainsAny(path, "*?[") }
+
+// moveAttachments copies the named files from the staging upload dir into the
+// work dir, then clears the staging dir (best effort). serveAgentUpload always
+// stages on the lasso-local disk (os.*), so the source is read locally while the
+// destination is written through the active backend — which streams each file
+// onto the remote host over SFTP when one is selected. A plain Rename can't do
+// this: on a remote backend it would look for the local staging path on the
+// remote box and silently drop every attachment.
 func moveAttachments(cur Backend, uploadDir string, names []string, dest string) {
 	if uploadDir == "" || len(names) == 0 {
 		return
@@ -552,14 +605,25 @@ func moveAttachments(cur Backend, uploadDir string, names []string, dest string)
 		if base == "" || base == "." {
 			continue
 		}
-		src := filepath.Join(staging, base)
-		dst := filepath.Join(dest, base)
-		if err := cur.Rename(src, dst); err != nil {
-			// Cross-device or remote backend: fall back to a stream copy.
-			copyFile(cur, src, dst)
-		}
+		copyLocalToBackend(cur, filepath.Join(staging, base), filepath.Join(dest, base))
 	}
 	_ = os.RemoveAll(staging)
+}
+
+// copyLocalToBackend streams a file from the lasso-local filesystem to dst on
+// the active backend (the local disk, or a remote host over SFTP).
+func copyLocalToBackend(cur Backend, src, dst string) {
+	in, err := os.Open(src)
+	if err != nil {
+		return
+	}
+	defer in.Close()
+	out, err := cur.Create(dst)
+	if err != nil {
+		return
+	}
+	defer out.Close()
+	_, _ = io.Copy(out, in)
 }
 
 // agentPrompt builds the prompt handed to the agent: the description, plus a
