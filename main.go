@@ -2055,12 +2055,25 @@ func serveFile(w http.ResponseWriter, r *http.Request) {
 		http.ServeContent(w, r, filepath.Base(path), info.ModTime(), f)
 		return
 	}
-	if info.Size() > maxPreview {
+	// The preview cap bounds text fetched into the editor; binary media
+	// (images, PDFs) render in-browser regardless of size, so serve them whole.
+	if info.Size() > maxPreview && !isPreviewMedia(path) {
 		w.Header().Set("Content-Type", "text/plain; charset=utf-8")
 		fmt.Fprintf(w, "[%s is %d bytes — too large to preview (limit %d)]", filepath.Base(path), info.Size(), maxPreview)
 		return
 	}
 	http.ServeContent(w, r, filepath.Base(path), info.ModTime(), f)
+}
+
+// isPreviewMedia reports whether path is a binary media type the viewer renders
+// directly (images, PDFs) rather than fetching as text — these bypass the text
+// preview size cap.
+func isPreviewMedia(path string) bool {
+	switch strings.ToLower(filepath.Ext(path)) {
+	case ".pdf", ".png", ".jpg", ".jpeg", ".gif", ".webp", ".svg", ".bmp", ".ico", ".avif":
+		return true
+	}
+	return false
 }
 
 // ---------------------------------------------------------------------------
