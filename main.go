@@ -1630,8 +1630,25 @@ type fileEntry struct {
 	Size int64  `json:"size,omitempty"`
 }
 
+// expandTilde resolves a leading ~ or ~/… to the current user's home
+// directory so the path input accepts the shorthand. Anything else (including
+// ~user, which we don't resolve) is returned unchanged.
+func expandTilde(p string) string {
+	if p != "~" && !strings.HasPrefix(p, "~/") {
+		return p
+	}
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return p
+	}
+	if p == "~" {
+		return home
+	}
+	return filepath.Join(home, p[2:])
+}
+
 func serveFiles(w http.ResponseWriter, r *http.Request) {
-	path := filepath.Clean(r.URL.Query().Get("path"))
+	path := filepath.Clean(expandTilde(r.URL.Query().Get("path")))
 	if !filepath.IsAbs(path) {
 		http.Error(w, "path must be absolute", http.StatusBadRequest)
 		return
@@ -1675,7 +1692,7 @@ func serveFileDelete(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
-	path := filepath.Clean(req.Path)
+	path := filepath.Clean(expandTilde(req.Path))
 	if !filepath.IsAbs(path) {
 		http.Error(w, "path must be absolute", http.StatusBadRequest)
 		return
@@ -1702,7 +1719,7 @@ func serveFileRename(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
-	path := filepath.Clean(req.Path)
+	path := filepath.Clean(expandTilde(req.Path))
 	if !filepath.IsAbs(path) {
 		http.Error(w, "path must be absolute", http.StatusBadRequest)
 		return
@@ -1727,7 +1744,7 @@ func serveFileRename(w http.ResponseWriter, r *http.Request) {
 const maxPreview = 2 << 20 // 2 MiB
 
 func serveFile(w http.ResponseWriter, r *http.Request) {
-	path := filepath.Clean(r.URL.Query().Get("path"))
+	path := filepath.Clean(expandTilde(r.URL.Query().Get("path")))
 	if !filepath.IsAbs(path) {
 		http.Error(w, "path must be absolute", http.StatusBadRequest)
 		return
