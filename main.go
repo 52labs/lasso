@@ -1060,12 +1060,14 @@ func outsideHerdrEnv() []string {
 	return out
 }
 
-// lassoHerdrProtocol is the herdr wire-protocol version this lasso build targets.
-// It mirrors PROTOCOL_VERSION in herdr's src/protocol/wire.rs — bump it in lockstep
-// whenever lasso is rebuilt against a new herdr protocol. The Settings tab compares
-// it against the protocol the installed herdr daemon actually speaks (from a socket
-// ping) so a drifted install — where terminals/RPC silently break — is visible.
-const lassoHerdrProtocol = 12
+// lassoHerdrProtocol is the herdr wire-protocol version this lasso build targets:
+// the protocol of the *released* herdr lasso is developed and tested against
+// (herdr 0.6.5 → protocol 11), NOT whatever the herdr source tree is mid-bumping
+// to. Bump it in lockstep when lasso adopts a newer herdr release. The Settings
+// tab compares it against the protocol the installed herdr daemon actually speaks
+// (from a socket ping) so a drifted install — where terminals/RPC silently break
+// — is visible.
+const lassoHerdrProtocol = 11
 
 // versionInfo is the /api/version payload: the herdr socket protocol this lasso
 // build targets, the protocol the installed herdr daemon reports over its socket,
