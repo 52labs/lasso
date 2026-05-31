@@ -127,8 +127,7 @@ export function SettingsTab({
         </div>
       </header>
 
-      {/* pb-12 clears the floating host/New Agent pills anchored at the footer. */}
-      <div className="min-h-0 flex-1 overflow-y-auto px-3 pt-4 pb-12">
+      <div className="min-h-0 flex-1 overflow-y-auto px-3 py-4">
         <AgentCreatorSettings active={active} />
       </div>
     </div>

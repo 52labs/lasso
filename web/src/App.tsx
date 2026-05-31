@@ -283,10 +283,12 @@ function Shell() {
           </Tabs>
         </ResizablePanel>
       </ResizablePanelGroup>
-      <div className="fixed bottom-3 left-3 z-40 flex items-center gap-2">
-        <HostSwitcher />
-        <CreateAgentDialog variant="floating" />
-      </div>
+      {leftView === "herdr" && (
+        <div className="fixed bottom-3 left-3 z-40 flex items-center gap-2">
+          <HostSwitcher />
+          <CreateAgentDialog variant="floating" />
+        </div>
+      )}
     </div>
   )
 }
