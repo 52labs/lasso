@@ -1,10 +1,10 @@
 import { ChevronLeft, ChevronRight } from "lucide-react"
 import * as React from "react"
 import type { Layout, PanelImperativeHandle } from "react-resizable-panels"
+import { AgentsTab } from "@/components/AgentsTab"
 import { BrowserTab } from "@/components/BrowserTab"
 import { DiffTab } from "@/components/DiffTab"
 import { FilesTab } from "@/components/FilesTab"
-import { PaneGrid } from "@/components/PaneGrid"
 import { SettingsTab } from "@/components/SettingsTab"
 import { TerminalFrame } from "@/components/TerminalFrame"
 import {
@@ -24,10 +24,10 @@ const FileViewer = React.lazy(() =>
   import("@/components/FileViewer").then((m) => ({ default: m.FileViewer }))
 )
 
-type LeftView = "herdr" | "grid" | "settings"
-type RightView = "diff" | "files" | "browser" | "terminal"
+type LeftView = "herdr" | "settings"
+type RightView = "diff" | "files" | "agents" | "browser" | "terminal"
 
-const LEFT_VIEWS: LeftView[] = ["herdr", "grid", "settings"]
+const LEFT_VIEWS: LeftView[] = ["herdr", "settings"]
 
 // Shared tab-strip styling: a full-width underline strip, matching the original
 // vanilla UI rather than shadcn's default pill TabsList.
@@ -131,9 +131,6 @@ function Shell() {
             <TabsTrigger value="herdr" className={tabClass}>
               Herdr
             </TabsTrigger>
-            <TabsTrigger value="grid" className={tabClass}>
-              Grid
-            </TabsTrigger>
             <TabsTrigger value="settings" className={tabClass}>
               Settings
             </TabsTrigger>
@@ -155,12 +152,6 @@ function Shell() {
                 title="Herdr terminal"
                 suppressContext
                 hidden={leftView !== "herdr"}
-              />
-            </Pane>
-            <Pane show={leftView === "grid"}>
-              <PaneGrid
-                active={leftView === "grid"}
-                onFocusPane={() => switchLeft("herdr")}
               />
             </Pane>
             <Pane show={leftView === "settings"}>
@@ -209,6 +200,9 @@ function Shell() {
             <TabsTrigger value="files" className={tabClass}>
               Files
             </TabsTrigger>
+            <TabsTrigger value="agents" className={tabClass}>
+              Agents
+            </TabsTrigger>
             <TabsTrigger value="browser" className={tabClass}>
               Browser
             </TabsTrigger>
@@ -234,6 +228,12 @@ function Shell() {
             </Pane>
             <Pane show={rightView === "files"}>
               <FilesTab viewerPath={viewerPath} onOpenFile={setViewerPath} />
+            </Pane>
+            <Pane show={rightView === "agents"}>
+              <AgentsTab
+                active={rightView === "agents"}
+                onFocusAgent={() => switchLeft("herdr")}
+              />
             </Pane>
             <Pane show={rightView === "browser"}>
               <BrowserTab />

@@ -21,6 +21,22 @@ export interface Pane {
   agent_status?: string
 }
 
+// A herdr-detected agent (claude, codex, …) running in a pane. `agent` is the
+// detected kind; `tab_label` is the pane's (tab's) renamable label. `target` is
+// the opaque handle to pass to agentFocus.
+export interface Agent {
+  target: string
+  pane_id: string
+  workspace_id?: string
+  workspace_label?: string
+  tab_id?: string
+  tab_label?: string
+  cwd?: string
+  agent?: string
+  agent_status?: string
+  focused?: boolean
+}
+
 export interface FileEntry {
   name: string
   dir: boolean
@@ -92,6 +108,7 @@ export const api = {
   active: () => getJSON<ActiveState>("/api/active"),
   theme: () => getJSON<ThemePayload>("/api/theme"),
   panes: () => getJSON<{ panes?: Pane[] }>("/api/panes"),
+  agents: () => getJSON<{ agents?: Agent[] }>("/api/agents"),
   version: () => getJSON<VersionInfo>("/api/version"),
 
   files: (path: string) =>
@@ -152,11 +169,19 @@ export const api = {
   rename: (tab_id: string | undefined, label: string) =>
     postJSON<unknown>("/api/rename", { tab_id, label }),
 
+  // Rename a workspace (relabels every pane/agent grouped under it).
+  workspaceRename: (workspace_id: string | undefined, label: string) =>
+    postJSON<unknown>("/api/workspace-rename", { workspace_id, label }),
+
   close: (pane_ids: string[]) =>
     postJSON<{ closed?: string[]; errors?: Record<string, string> }>(
       "/api/close",
       { pane_ids }
     ),
+
+  // Focus a herdr-detected agent (focuses its workspace + tab).
+  agentFocus: (target: string) =>
+    postJSON<unknown>("/api/agent-focus", { target }),
 
   pasteImage: async (file: Blob): Promise<{ path: string }> => {
     const r = await fetch("/api/paste-image", {
