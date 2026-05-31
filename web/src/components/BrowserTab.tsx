@@ -10,15 +10,20 @@ function normalize(raw: string): string {
   return /^https?:\/\//i.test(u) ? u : `http://${u}`
 }
 
-// The Browser tab: a URL bar + preview iframe, defaulting to the host this UI
-// was reached on, port 3000 (the usual dev-server port). The URL persists.
+// The Browser tab: a URL bar + preview iframe. For local/tailnet access (plain
+// http) it defaults to the same host's dev server on port 3000 — a co-located
+// server the browser can actually reach. Behind a TLS terminator (e.g. lasso
+// served over https through a Cloudflare tunnel on a public domain) there's no
+// co-located :3000, and guessing one yields a cross-origin iframe error, so we
+// start blank and let the user type a URL. Either way the URL persists.
 export function BrowserTab() {
   const [url, setUrl] = React.useState(() => {
     const saved = lsGet("browserUrl")
     if (saved) return saved
-    return `${location.protocol}//${location.hostname}:3000`
+    if (location.protocol === "https:") return ""
+    return `http://${location.hostname}:3000`
   })
-  const [src, setSrc] = React.useState(() => normalize(url))
+  const [src, setSrc] = React.useState(() => normalize(url) || "about:blank")
   const [reloadKey, setReloadKey] = React.useState(0)
 
   const nav = (raw: string) => {
@@ -76,7 +81,7 @@ export function BrowserTab() {
       </div>
       <iframe
         key={reloadKey}
-        src={src}
+        src={src || "about:blank"}
         title="browser preview"
         referrerPolicy="no-referrer"
         className="frame"
