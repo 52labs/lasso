@@ -143,9 +143,22 @@ export function FilesTab({
     setCurPath(path)
   }
 
+  // Enter on the path input: a directory re-roots the tree; a file opens in the
+  // viewer below. We probe with api.files — "not a directory" means it's a file.
+  const submitPath = async (path: string) => {
+    setFollow(false)
+    try {
+      await api.files(path)
+      setCurPath(path)
+    } catch (e) {
+      if (/not a directory/i.test((e as Error).message)) onOpenFile(path)
+      else setCurPath(path) // re-root so the tree surfaces the error
+    }
+  }
+
   const onPathKeyDown = (e: React.KeyboardEvent<HTMLInputElement>) => {
     const v = e.currentTarget.value.trim()
-    if (e.key === "Enter" && v) navigate(v)
+    if (e.key === "Enter" && v) void submitPath(v)
   }
 
   // Drop a path and any of its descendants from the expanded set (after the
