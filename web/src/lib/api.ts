@@ -116,9 +116,26 @@ export interface ThemePayload {
   xterm: Record<string, unknown>
 }
 
+// httpError builds a concise Error from a non-OK response. lasso/herdr return
+// short text or JSON errors, but a proxy in front of the app (e.g. the Cloudflare
+// tunnel exposing lasso.knowsuchagency.ai) answers with a full HTML error page
+// when the origin is down or briefly unreachable — during a host switch, a
+// redeploy, etc. Dumping that raw HTML into the UI (the Diff tab, toasts) is just
+// noise, so collapse HTML bodies (and empty ones) to the status line.
+async function httpError(r: Response): Promise<Error> {
+  const body = (await r.text().catch(() => "")).trim()
+  const isHTML =
+    /^<(?:!doctype|html|head|body)\b/i.test(body) ||
+    (r.headers.get("content-type") || "").includes("text/html")
+  if (!body || isHTML) {
+    return new Error(`HTTP ${r.status}${r.statusText ? ` ${r.statusText}` : ""}`)
+  }
+  return new Error(body.length > 300 ? `${body.slice(0, 300)}…` : body)
+}
+
 async function getJSON<T>(url: string): Promise<T> {
   const r = await fetch(url)
-  if (!r.ok) throw new Error(await r.text())
+  if (!r.ok) throw await httpError(r)
   return (await r.json()) as T
 }
 
@@ -128,7 +145,7 @@ async function postJSON<T>(url: string, body: unknown): Promise<T> {
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(body),
   })
-  if (!r.ok) throw new Error(await r.text())
+  if (!r.ok) throw await httpError(r)
   return (await r.json()) as T
 }
 
@@ -193,13 +210,13 @@ export const api = {
     form.append("dir", dir)
     for (const f of files) form.append("files", f, f.name)
     const r = await fetch("/api/file-upload", { method: "POST", body: form })
-    if (!r.ok) throw new Error(await r.text())
+    if (!r.ok) throw await httpError(r)
     return r.json()
   },
 
   fileText: async (path: string) => {
     const r = await fetch(api.fileURL(path))
-    if (!r.ok) throw new Error(await r.text())
+    if (!r.ok) throw await httpError(r)
     return r.text()
   },
 
@@ -270,7 +287,7 @@ export const api = {
       headers: { "Content-Type": file.type || "image/png" },
       body: file,
     })
-    if (!r.ok) throw new Error(await r.text())
+    if (!r.ok) throw await httpError(r)
     return r.json()
   },
 }
