@@ -12,7 +12,7 @@ function normalize(raw: string): string {
 
 // The Browser tab: a URL bar + preview iframe, defaulting to the host this UI
 // was reached on, port 3000 (the usual dev-server port). The URL persists.
-export function BrowserView() {
+export function BrowserTab() {
   const [url, setUrl] = React.useState(() => {
     const saved = lsGet("browserUrl")
     if (saved) return saved

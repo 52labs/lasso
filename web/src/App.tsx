@@ -1,11 +1,11 @@
 import { ChevronLeft, ChevronRight } from "lucide-react"
 import * as React from "react"
 import type { Layout, PanelImperativeHandle } from "react-resizable-panels"
-import { BrowserView } from "@/components/BrowserView"
-import { DiffView } from "@/components/DiffView"
-import { FilesView } from "@/components/FilesView"
+import { BrowserTab } from "@/components/BrowserTab"
+import { DiffTab } from "@/components/DiffTab"
+import { FilesTab } from "@/components/FilesTab"
 import { PaneGrid } from "@/components/PaneGrid"
-import { SettingsView } from "@/components/SettingsView"
+import { SettingsTab } from "@/components/SettingsTab"
 import { TerminalFrame } from "@/components/TerminalFrame"
 import {
   ResizableHandle,
@@ -155,7 +155,7 @@ function Shell() {
               />
             </Pane>
             <Pane show={leftView === "settings"}>
-              <SettingsView
+              <SettingsTab
                 active={leftView === "settings"}
                 onOpenUpdate={openUpdateInTerminal}
               />
@@ -217,17 +217,17 @@ function Shell() {
 
           <div className="relative min-h-0 flex-1">
             <Pane show={rightView === "diff"}>
-              <DiffView
+              <DiffTab
                 active={rightView === "diff"}
                 viewerOpen={viewerPath != null}
                 onDirty={setDiffDirty}
               />
             </Pane>
             <Pane show={rightView === "files"}>
-              <FilesView viewerPath={viewerPath} onOpenFile={setViewerPath} />
+              <FilesTab viewerPath={viewerPath} onOpenFile={setViewerPath} />
             </Pane>
             <Pane show={rightView === "browser"}>
-              <BrowserView />
+              <BrowserTab />
             </Pane>
             <Pane show={rightView === "terminal"}>
               <TerminalFrame

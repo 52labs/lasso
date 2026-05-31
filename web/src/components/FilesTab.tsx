@@ -43,7 +43,7 @@ const join = (dir: string, name: string) => `${dir.replace(/\/$/, "")}/${name}`
 // active pane (by default). Clicking a directory expands/collapses it in place;
 // clicking a file opens it in the full-column viewer (owned by the parent so
 // its highlight clears on close). Right-clicking an entry offers rename/delete.
-export function FilesView({
+export function FilesTab({
   viewerPath,
   onOpenFile,
 }: {

@@ -12,7 +12,7 @@ import { cn } from "@/lib/utils"
 // byte-capped); each file's line-by-line diff is fetched lazily on expand. The
 // list polls every 2.5s while visible so it tracks edits/commits/branch
 // switches with no event.
-export function DiffView({
+export function DiffTab({
   active,
   viewerOpen,
   onDirty,

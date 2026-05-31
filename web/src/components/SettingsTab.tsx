@@ -7,7 +7,7 @@ import { api, type VersionInfo } from "@/lib/api"
 // The Settings tab: herdr's installed + latest version. When an update is
 // available the latest pill becomes a shortcut that opens the Terminal tab with
 // `herdr update` pre-typed (handled by the parent via onOpenUpdate).
-export function SettingsView({
+export function SettingsTab({
   active,
   onOpenUpdate,
 }: {
