@@ -1062,12 +1062,13 @@ func outsideHerdrEnv() []string {
 
 // lassoHerdrProtocol is the herdr wire-protocol version this lasso build targets:
 // the protocol of the *released* herdr lasso is developed and tested against
-// (herdr 0.6.5 → protocol 11), NOT whatever the herdr source tree is mid-bumping
-// to. Bump it in lockstep when lasso adopts a newer herdr release. The Settings
-// tab compares it against the protocol the installed herdr daemon actually speaks
-// (from a socket ping) so a drifted install — where terminals/RPC silently break
-// — is visible.
-const lassoHerdrProtocol = 11
+// (herdr 0.6.6 → protocol 12), NOT whatever the herdr source tree is mid-bumping
+// to. Bump it in lockstep when lasso adopts a newer herdr release. We target one
+// protocol exactly — no backwards compatibility — so a mismatch in either
+// direction reads as incompatible. The Settings tab compares it against the
+// protocol the installed herdr daemon actually speaks (from a socket ping) so a
+// drifted install — where terminals/RPC silently break — is visible.
+const lassoHerdrProtocol = 12
 
 // versionInfo is the /api/version payload: the herdr socket protocol this lasso
 // build targets, the protocol the installed herdr daemon reports over its socket,
@@ -1088,7 +1089,7 @@ type versionInfo struct {
 // rather than reusing the once-cached localProtocol().
 func serveVersion(w http.ResponseWriter, r *http.Request) {
 	vi := versionInfo{LassoProtocol: lassoHerdrProtocol}
-	if v, p, err := herdrPing(*herdrSock); err != nil {
+	if v, p, err := herdrPinger(); err != nil {
 		vi.Err = err.Error()
 	} else {
 		vi.HerdrVersion = v
@@ -1097,6 +1098,13 @@ func serveVersion(w http.ResponseWriter, r *http.Request) {
 	}
 	writeJSON(w, vi)
 }
+
+// herdrPinger reports the installed (local) herdr daemon's version and protocol.
+// A seam over herdrPing(*herdrSock) so serveVersion is unit-testable without a
+// live daemon. It deliberately pings the local socket, not the active backend's,
+// so the Settings tab reflects the local lasso↔herdr install even when a remote
+// host is selected.
+var herdrPinger = func() (string, int, error) { return herdrPing(*herdrSock) }
 
 // ---------------------------------------------------------------------------
 // image paste: save a clipboard image to disk so the agent in the focused
