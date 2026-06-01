@@ -63,10 +63,14 @@ export function GridTab({
 
   // Focus a pane in the Herdr tab. If it's on another host, switch there first
   // (which reloads the Herdr terminal onto that host), then focus its tab.
+  // Release this pane's grid terminal *before* surfacing Herdr so the only client
+  // left on the pane is the full-width Herdr terminal — otherwise herdr keeps the
+  // pane clamped to the cell's narrow width and a full-screen TUI renders thin.
   const focusPane = async (p: GridPane) => {
     try {
       if (p.host !== activeHost) await api.switchHost(p.host)
       if (p.workspace_id && p.tab_id) await api.focus(p.workspace_id, p.tab_id)
+      await api.gridTermRelease(p.host, p.terminal_id)
       onFocusInHerdr()
     } catch (e) {
       toast.error(`focus failed: ${(e as Error).message}`)
@@ -141,6 +145,7 @@ export function GridTab({
             <GridCell
               key={`${p.host}|${p.pane_id}`}
               pane={p}
+              active={active}
               focused={
                 p.host === activeHost
                   ? activePaneID
@@ -173,10 +178,12 @@ function frameId(host: string, terminalID: string) {
 // from being reaped while visible.
 function GridCell({
   pane: p,
+  active,
   focused,
   onFocus,
 }: {
   pane: GridPane
+  active: boolean
   focused: boolean
   onFocus: () => void
 }) {
@@ -185,10 +192,13 @@ function GridCell({
   const [src, setSrc] = React.useState<string | null>(null)
   const [failed, setFailed] = React.useState(false)
 
-  // Lazy-mount: attach the terminal once the cell is on screen.
+  // Lazy-mount: attach the terminal once the cell is on screen — but only while
+  // the Grid tab is active. (Keeping it attached when hidden would clamp the
+  // pane's width to this thin cell while it's viewed full-size in Herdr.)
   React.useEffect(() => {
+    if (!active || src) return
     const el = bodyRef.current
-    if (!el || src) return
+    if (!el) return
     let cancelled = false
     const attach = async () => {
       try {
@@ -212,7 +222,26 @@ function GridCell({
       cancelled = true
       io.disconnect()
     }
-  }, [p.host, p.terminal_id, src])
+  }, [active, src, p.host, p.terminal_id])
+
+  // When the Grid tab is hidden, detach this pane's terminal (drop the iframe and
+  // kill its server-side ttyd) so herdr stops sizing the pane to this cell — the
+  // focused pane then resizes to the full-width Herdr terminal. Re-attaches when
+  // the tab is shown again.
+  React.useEffect(() => {
+    if (active) return
+    setSrc(null)
+    setFailed(false)
+    void api.gridTermRelease(p.host, p.terminal_id)
+  }, [active, p.host, p.terminal_id])
+
+  // Release the server-side attach when the cell goes away entirely.
+  React.useEffect(
+    () => () => {
+      void api.gridTermRelease(p.host, p.terminal_id)
+    },
+    [p.host, p.terminal_id]
+  )
 
   // Wire xterm (shift+enter, image paste, …) once the iframe exists, and keep the
   // server-side attach alive while the cell is mounted.

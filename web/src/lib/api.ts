@@ -323,6 +323,18 @@ export const api = {
   // timer, so the Grid re-POSTs this as a keepalive while a cell is mounted.
   gridTerm: (host: string, terminal_id: string) =>
     postJSON<{ base: string }>("/api/grid/term", { host, terminal_id }),
+
+  // Detach a pane's grid terminal (kills its ttyd). Called when a cell leaves
+  // the grid so the pane isn't held to the cell's narrow width while it's viewed
+  // full-size in the Herdr terminal. `keepalive` lets it complete even when fired
+  // from a React unmount/teardown. Best-effort — failures are ignored.
+  gridTermRelease: (host: string, terminal_id: string) =>
+    fetch("/api/grid/term-release", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ host, terminal_id }),
+      keepalive: true,
+    }).catch(() => {}),
   version: () => getJSON<VersionInfo>("/api/version"),
 
   files: (path: string) =>

@@ -384,6 +384,45 @@ func serveGridTerm(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, map[string]any{"base": base})
 }
 
+// serveGridTermRelease tears down a pane's grid terminal. The frontend calls
+// this when a cell leaves the grid (the tab is hidden, or the pane is focused in
+// the Herdr terminal): herdr sizes a pane's pty to its smallest attached client,
+// so a lingering thin grid attach would clamp the pane and keep a full-screen TUI
+// rendering narrow in the wide Herdr terminal. Releasing detaches it so the pane
+// resizes back up. Best-effort — releasing an unknown terminal is a no-op.
+func serveGridTermRelease(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "POST required", http.StatusMethodNotAllowed)
+		return
+	}
+	var req struct {
+		Host       string `json:"host"`
+		TerminalID string `json:"terminal_id"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	releaseGridTerm(req.Host, req.TerminalID)
+	writeJSON(w, map[string]any{"ok": true})
+}
+
+// releaseGridTerm kills the ttyd attached to one pane (if any), which detaches it
+// from herdr so the pane is no longer held to this terminal's width.
+func releaseGridTerm(host, terminalID string) {
+	key := host + "|" + terminalID
+	gridTerms.mu.Lock()
+	e := gridTerms.byKey[key]
+	if e != nil {
+		delete(gridTerms.byKey, key)
+		delete(gridTerms.byToken, e.token)
+	}
+	gridTerms.mu.Unlock()
+	if e != nil {
+		e.cancel() // SIGTERMs the ttyd process group; its socket is unlinked on exit
+	}
+}
+
 // ensureGridTerm returns the proxy base path for host's terminal, spawning a
 // dedicated ttyd (running `herdr terminal attach …`) on first use. A repeat call
 // just bumps lastUsed — so the frontend re-POSTs as a keepalive.

@@ -183,6 +183,7 @@ func main() {
 	mux.HandleFunc("/api/panes", servePanes)
 	mux.HandleFunc("/api/grid", serveGrid)
 	mux.HandleFunc("/api/grid/term", serveGridTerm)
+	mux.HandleFunc("/api/grid/term-release", serveGridTermRelease)
 	mux.HandleFunc("/grid-term/", serveGridTermProxy)
 	mux.HandleFunc("/api/agents", serveAgents)
 	mux.HandleFunc("/api/agent-focus", serveAgentFocus)
