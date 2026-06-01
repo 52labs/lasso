@@ -1801,11 +1801,16 @@ type fileEntry struct {
 // expandTilde resolves a leading ~ or ~/… to the current user's home
 // directory so the path input accepts the shorthand. Anything else (including
 // ~user, which we don't resolve) is returned unchanged.
-func expandTilde(p string) string {
+func expandTilde(p string) string { return expandTildeOn(curBackend(), p) }
+
+// expandTildeOn expands a leading ~ against a specific backend's home dir, so a
+// path can be resolved on a host other than the active one (e.g. listing a
+// remote host's repos for its Settings).
+func expandTildeOn(be Backend, p string) string {
 	if p != "~" && !strings.HasPrefix(p, "~/") {
 		return p
 	}
-	home, err := curBackend().HomeDir()
+	home, err := be.HomeDir()
 	if err != nil {
 		return p
 	}

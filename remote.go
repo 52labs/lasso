@@ -204,20 +204,12 @@ func (b *remoteBackend) runOut(remoteCmd string) (string, error) {
 	return string(out), nil
 }
 
-// runCLI runs `lasso cli <args>` on the remote through a login shell (so
-// ~/.local/bin is on PATH, matching probeHost), piping stdin and returning
-// stdout; stderr is surfaced on error. This is how the per-host settings
-// provider reads/writes a remote host's OWN ~/.lasso/lasso.db — through that
-// host's own lasso binary, so SQLite locking is honored and no values cross a
-// shell (the payload is JSON on stdin). Each arg is shell-quoted, the joined
-// command is quoted again as the single argument to `-lc`.
-func (b *remoteBackend) runCLI(args []string, stdin []byte) ([]byte, error) {
-	inner := append([]string{"lasso", "cli"}, args...)
-	quoted := make([]string, len(inner))
-	for i, a := range inner {
-		quoted[i] = shellQuote(a)
-	}
-	remoteCmd := `${SHELL:-sh} -lc ` + shellQuote(strings.Join(quoted, " "))
+// runStdin runs remoteCmd on the host over the control master, piping stdin and
+// returning stdout; stderr is surfaced on error. Used by the per-host settings
+// provider to drive the remote's sqlite3 against its own ~/.lasso/lasso.db (the
+// SQL rides stdin, never the shell). remoteCmd is the full remote command line
+// (callers wrap it in a login shell when PATH matters).
+func (b *remoteBackend) runStdin(remoteCmd string, stdin []byte) ([]byte, error) {
 	sshArgs := append(b.ctlOpts(), b.alias, remoteCmd)
 	cmd := exec.Command("ssh", sshArgs...)
 	if stdin != nil {
@@ -228,9 +220,9 @@ func (b *remoteBackend) runCLI(args []string, stdin []byte) ([]byte, error) {
 	out, err := cmd.Output()
 	if err != nil {
 		if msg := strings.TrimSpace(errBuf.String()); msg != "" {
-			return nil, fmt.Errorf("lasso cli on %s: %s", b.alias, msg)
+			return nil, fmt.Errorf("%s: %s", b.alias, msg)
 		}
-		return nil, fmt.Errorf("lasso cli on %s: %w", b.alias, err)
+		return nil, fmt.Errorf("ssh %s: %w", b.alias, err)
 	}
 	return out, nil
 }
