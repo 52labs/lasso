@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## What this is
 
-Lasso is a Go backend (`main.go` and friends) that serves a React/TypeScript SPA. The frontend in `web/` is **built and embedded into the Go binary** — `web/dist/` is committed and `go build` fails without it.
+Lasso is a Go backend (`main.go` and friends) that serves a React/TypeScript SPA. The frontend in `web/` is **built and embedded into the Go binary** — `go build` embeds `web/dist/`, so it must exist locally (run `mise run build`) but is **not** committed (it's gitignored). CI builds the frontend and produces release binaries.
 
 ## Commands
 
@@ -23,7 +23,7 @@ Frontend (`web/`, package manager is **bun**):
 ## Frontend workflow
 
 - Run `bun run typecheck` and `bun run lint` before considering frontend work done.
-- `web/dist/` is the embedded bundle. **Rebuild and commit it before pushing** (run `mise run build`), not on every commit — so the binary stays in sync with source.
+- `web/dist/` is the embedded bundle — gitignored and not committed. Run `mise run build` to regenerate it locally; CI builds it for releases.
 
 ## Formatting & linting
 
