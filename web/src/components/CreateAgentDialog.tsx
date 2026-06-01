@@ -1,3 +1,4 @@
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
 import { ChevronDown, Plus, X } from "lucide-react"
 import * as React from "react"
 import { toast } from "sonner"
@@ -14,12 +15,8 @@ import {
   DialogTrigger,
 } from "@/components/ui/dialog"
 import { Input } from "@/components/ui/input"
-import {
-  type AgentConfig,
-  api,
-  type CreateAgentPayload,
-  type RepoEntry,
-} from "@/lib/api"
+import { api, type CreateAgentPayload } from "@/lib/api"
+import { qk } from "@/lib/query"
 import { focusHerdrTerminal } from "@/lib/terminal"
 import { cn } from "@/lib/utils"
 
@@ -90,8 +87,8 @@ export function CreateAgentDialog({
   variant?: "button" | "floating"
 }) {
   const [open, setOpen] = React.useState(false)
-  const [submitting, setSubmitting] = React.useState(false)
   const [showAdvanced, setShowAdvanced] = React.useState(false)
+  const queryClient = useQueryClient()
   // Set when the dialog closes because an agent was just created, so the close
   // handler hands keyboard focus to the herdr terminal instead of letting Radix
   // restore it to the trigger (which would force the user to click the pane).
@@ -111,16 +108,27 @@ export function CreateAgentDialog({
     return () => document.removeEventListener("keydown", onKey)
   }, [variant])
 
-  // Settings / defaults (from ~/.lasso/config.yaml).
-  const [config, setConfig] = React.useState<AgentConfig | null>(null)
-  const [repos, setRepos] = React.useState<RepoEntry[]>([])
+  // Server state via TanStack Query, fetched while the dialog is open. All three
+  // are host-scoped on the backend and invalidated on a host switch (see
+  // lib/query), so reopening on a new host pulls that host's remembered state.
+  const configQuery = useQuery({
+    queryKey: qk.agentConfig,
+    queryFn: () => api.agentConfig(),
+    enabled: open,
+  })
+  const reposQuery = useQuery({
+    queryKey: qk.repos,
+    queryFn: () => api.repos(),
+    enabled: open,
+  })
+  const config = configQuery.data ?? null
+  const repos = reposQuery.data?.repos ?? []
 
   // Form state.
   const [type, setType] = React.useState<AgentType>("git")
   const [title, setTitle] = React.useState("")
   const [repo, setRepo] = React.useState("")
   const [baseBranch, setBaseBranch] = React.useState("")
-  const [branches, setBranches] = React.useState<string[]>([])
   const [prefix, setPrefix] = React.useState("")
   const [branchName, setBranchName] = React.useState("")
   const [autoBranch, setAutoBranch] = React.useState("")
@@ -132,60 +140,57 @@ export function CreateAgentDialog({
   const [files, setFiles] = React.useState<File[]>([])
   const descriptionRef = React.useRef<HTMLTextAreaElement>(null)
 
-  // Load config + repos when the dialog opens. We deliberately seed only on the
-  // open transition, so `config` is read once and not in the dep list.
-  // biome-ignore lint/correctness/useExhaustiveDependencies: seed once on open
-  React.useEffect(() => {
-    if (!open) return
-    api
-      .agentConfig()
-      .then((c) => {
-        setConfig(c)
-        setPrefix(c.branch_prefix || "")
-        setAgent(c.default_agent || "claude")
-      })
-      .catch(() => {
-        /* creator still works with defaults */
-      })
-    api
-      .repos()
-      .then((res) => {
-        setRepos(res.repos)
-        // Preselect the last-used repo, else the first one.
-        setRepo((prev) => {
-          if (prev) return prev
-          const last = config?.last_repo
-          if (last && res.repos.some((r) => r.path === last)) return last
-          return res.repos[0]?.path ?? ""
-        })
-      })
-      .catch(() => setRepos([]))
-  }, [open])
+  const branchesQuery = useQuery({
+    queryKey: qk.repoBranches(repo),
+    queryFn: () => api.repoBranches(repo),
+    enabled: open && type === "git" && !!repo,
+  })
+  const branches = React.useMemo(() => {
+    const b = branchesQuery.data
+    return b ? [...b.branches, ...b.remoteBranches] : []
+  }, [branchesQuery.data])
 
-  // When the repo changes, load its branches + remembered base branch. `repos`
-  // is read for the selected entry but intentionally not a dep — it's stable for
-  // the dialog's lifetime.
-  // biome-ignore lint/correctness/useExhaustiveDependencies: see comment above
+  // Seed the form from the remembered selections once per open (not on every
+  // data change, so it never clobbers in-progress edits): the last agent type,
+  // branch prefix, AI agent (default_agent, else last_agent, else claude), and
+  // the last repo if it still exists on this host.
+  const seededRef = React.useRef(false)
+  React.useEffect(() => {
+    if (!open) {
+      seededRef.current = false
+      return
+    }
+    if (seededRef.current || !config || !reposQuery.isSuccess) return
+    seededRef.current = true
+    setType(config.last_agent_type || "git")
+    setPrefix(config.branch_prefix || "")
+    setAgent(config.default_agent || config.last_agent || "claude")
+    const last = config.last_repo
+    setRepo(
+      last && repos.some((r) => r.path === last) ? last : (repos[0]?.path ?? "")
+    )
+  }, [open, config, reposQuery.isSuccess, repos])
+
+  // When the selected repo's branches load, pick its remembered base branch (if
+  // still present) else the repo's default. Keyed on the branches data so it
+  // settles once per repo rather than fighting a manual pick.
+  // biome-ignore lint/correctness/useExhaustiveDependencies: repos is stable for the dialog's lifetime
   React.useEffect(() => {
     if (!open || type !== "git" || !repo) return
     const re = repos.find((r) => r.path === repo)
-    api
-      .repoBranches(repo)
-      .then((b) => {
-        const all = [...b.branches, ...b.remoteBranches]
-        setBranches(all)
-        const preferred = re?.last_base_branch
-        setBaseBranch(
-          preferred && all.includes(preferred)
-            ? preferred
-            : b.default || b.branches[0] || "main"
-        )
-      })
-      .catch(() => {
-        setBranches([])
-        setBaseBranch(re?.last_base_branch || "main")
-      })
-  }, [repo, open, type])
+    const b = branchesQuery.data
+    if (!b) {
+      if (branchesQuery.isError) setBaseBranch(re?.last_base_branch || "main")
+      return
+    }
+    const all = [...b.branches, ...b.remoteBranches]
+    const preferred = re?.last_base_branch
+    setBaseBranch(
+      preferred && all.includes(preferred)
+        ? preferred
+        : b.default || b.branches[0] || "main"
+    )
+  }, [repo, open, type, branchesQuery.data, branchesQuery.isError])
 
   const onTitleChange = (v: string) => {
     setTitle(v)
@@ -253,16 +258,8 @@ export function CreateAgentDialog({
     setShowAdvanced(false)
   }
 
-  const canSubmit =
-    !submitting &&
-    !pastingImage &&
-    title.trim().length > 0 &&
-    (type === "scratch" || !!repo)
-
-  const submit = async () => {
-    if (!canSubmit) return
-    setSubmitting(true)
-    try {
+  const createMutation = useMutation({
+    mutationFn: async () => {
       let uploadDir: string | undefined
       let attachments: string[] | undefined
       if (files.length > 0) {
@@ -285,7 +282,9 @@ export function CreateAgentDialog({
         payload.branch_prefix = prefix.trim() || undefined
         payload.branch_name = branchName.trim() || autoBranch || undefined
       }
-      const rec = await api.createAgent(payload)
+      return api.createAgent(payload)
+    },
+    onSuccess: (rec) => {
       toast.success(`Created agent “${rec.title}”`)
       if (rec.workspace_id) {
         api.focus(rec.workspace_id).catch(() => {})
@@ -293,14 +292,29 @@ export function CreateAgentDialog({
       createdRef.current = true
       setOpen(false)
       reset()
+      // The creator just updated this host's remembered selections + agent log,
+      // so refetch them (and the live Agents tab).
+      queryClient.invalidateQueries({ queryKey: qk.agentConfig })
+      queryClient.invalidateQueries({ queryKey: qk.repos })
+      queryClient.invalidateQueries({ queryKey: qk.agents })
       onCreated?.()
-    } catch (err) {
+    },
+    onError: (err) => {
       toast.error("Failed to create agent", {
         description: err instanceof Error ? err.message : String(err),
       })
-    } finally {
-      setSubmitting(false)
-    }
+    },
+  })
+
+  const canSubmit =
+    !createMutation.isPending &&
+    !pastingImage &&
+    title.trim().length > 0 &&
+    (type === "scratch" || !!repo)
+
+  const submit = () => {
+    if (!canSubmit) return
+    createMutation.mutate()
   }
 
   const effectiveBranch = (() => {
@@ -601,7 +615,7 @@ export function CreateAgentDialog({
               Cancel
             </Button>
             <Button type="submit" disabled={!canSubmit}>
-              {submitting ? "Creating…" : "Create agent"}
+              {createMutation.isPending ? "Creating…" : "Create agent"}
             </Button>
           </DialogFooter>
         </form>

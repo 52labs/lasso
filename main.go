@@ -94,6 +94,13 @@ func main() {
 	// this for a remoteBackend (and back) at runtime via /api/host.
 	setBackend(&localBackend{sock: *herdrSock})
 
+	// Open the host-local state DB (~/.lasso/lasso.db), migrating a legacy
+	// config.yaml on first run. Fatal if it can't open — the creator depends on it.
+	if err := openDB(); err != nil {
+		log.Fatalf("open state db: %v", err)
+	}
+	defer db.Close()
+
 	// Auth credentials come from the environment (UI_AUTH=user:pass), never
 	// argv — so they don't leak via `ps`. Safety guard: refuse to bind to a
 	// non-loopback address without auth, so this can't accidentally expose a
@@ -192,6 +199,7 @@ func main() {
 	mux.HandleFunc("/api/agent-upload", serveAgentUpload)
 	mux.HandleFunc("/api/host-update", serveHostUpdate)
 	mux.HandleFunc("/api/host-provision", serveHostProvision)
+	mux.HandleFunc("/api/self-update", serveSelfUpdate)
 	dist, err := fs.Sub(distFS, "web/dist")
 	if err != nil {
 		log.Fatalf("dist fs: %v", err)
@@ -1083,9 +1091,11 @@ const lassoHerdrProtocol = 12
 // the tab can say so rather than falsely claim a mismatch.
 type versionInfo struct {
 	LassoProtocol int    `json:"lasso_protocol"`
+	LassoVersion  string `json:"lasso_version"`
 	HerdrProtocol int    `json:"herdr_protocol"`
 	HerdrVersion  string `json:"herdr_version,omitempty"`
 	Compatible    bool   `json:"compatible"`
+	Updatable     bool   `json:"updatable"`
 	Err           string `json:"err,omitempty"`
 }
 
@@ -1094,7 +1104,11 @@ type versionInfo struct {
 // — so the tab's refresh button re-checks a daemon that has since restarted —
 // rather than reusing the once-cached localProtocol().
 func serveVersion(w http.ResponseWriter, r *http.Request) {
-	vi := versionInfo{LassoProtocol: lassoHerdrProtocol}
+	vi := versionInfo{
+		LassoProtocol: lassoHerdrProtocol,
+		LassoVersion:  lassoVersion(),
+		Updatable:     selfUpdateAvailable(),
+	}
 	if v, p, err := herdrPinger(); err != nil {
 		vi.Err = err.Error()
 	} else {

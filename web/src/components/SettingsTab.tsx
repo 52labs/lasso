@@ -1,9 +1,11 @@
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
 import { RotateCw } from "lucide-react"
 import * as React from "react"
 import { Pill } from "@/components/Pill"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
-import { api, type RepoEntry, type VersionInfo } from "@/lib/api"
+import { api } from "@/lib/api"
+import { qk } from "@/lib/query"
 import { cn } from "@/lib/utils"
 
 // Native textarea/select styled to match the shadcn <Input>.
@@ -38,34 +40,17 @@ function Field({
 // at build time); the daemon reports its own over the socket, and when they
 // drift terminals and RPC silently break, so we surface it here. The creator
 // defaults (where to scan for repos, the default agent, the scratch setup
-// script) and each repo's files-to-copy + setup commands describe the repo and
-// environment — not a one-off agent — so they persist in ~/.lasso/config.yaml.
+// script) are global; each repo's files-to-copy + setup commands are scoped to
+// the active host. All of it persists in ~/.lasso/lasso.db.
 export function SettingsTab({ active }: { active: boolean }) {
-  const [info, setInfo] = React.useState<VersionInfo | null>(null)
-  const [state, setState] = React.useState<"idle" | "loading" | "error">("idle")
-  const loadedOnce = React.useRef(false)
-
-  const load = React.useCallback(async () => {
-    setState("loading")
-    try {
-      setInfo(await api.version())
-      setState("idle")
-    } catch {
-      setInfo(null)
-      setState("error")
-    }
-  }, [])
-
-  // Lazily load on first open, like the original initSettings().
-  React.useEffect(() => {
-    if (active && !loadedOnce.current) {
-      loadedOnce.current = true
-      load()
-    }
-  }, [active, load])
-
-  const loading = state === "loading"
-  const errored = state === "error"
+  const versionQuery = useQuery({
+    queryKey: qk.version,
+    queryFn: () => api.version(),
+    enabled: active,
+  })
+  const info = versionQuery.data ?? null
+  const loading = versionQuery.isLoading
+  const errored = versionQuery.isError
 
   // The herdr-side pill: the daemon's protocol and how it compares to lasso's.
   let herdr: React.ReactNode
@@ -100,6 +85,11 @@ export function SettingsTab({ active }: { active: boolean }) {
             targets protocol{" "}
             {loading ? "…" : errored || !info ? "unknown" : info.lasso_protocol}
           </Pill>
+          {info?.lasso_version && (
+            <Pill title="this lasso build's version">
+              lasso {info.lasso_version}
+            </Pill>
+          )}
           {herdr}
           {!loading && !errored && info && !info.err && !info.compatible && (
             <span className="text-[13px] text-warn">
@@ -111,7 +101,7 @@ export function SettingsTab({ active }: { active: boolean }) {
             size="icon"
             className="ml-auto size-7"
             title="re-check protocol compatibility"
-            onClick={load}
+            onClick={() => versionQuery.refetch()}
           >
             <RotateCw />
           </Button>
@@ -128,47 +118,48 @@ export function SettingsTab({ active }: { active: boolean }) {
 // AgentCreatorSettings edits the creator's global defaults and each repo's
 // copy-files + setup, persisted via /api/agent-config and /api/repo-config.
 function AgentCreatorSettings({ active }: { active: boolean }) {
-  const [repos, setRepos] = React.useState<RepoEntry[]>([])
-  const loadedOnce = React.useRef(false)
+  const queryClient = useQueryClient()
 
-  // Global defaults.
+  const configQuery = useQuery({
+    queryKey: qk.agentConfig,
+    queryFn: () => api.agentConfig(),
+    enabled: active,
+  })
+  const reposQuery = useQuery({
+    queryKey: qk.repos,
+    queryFn: () => api.repos(),
+    enabled: active,
+  })
+  const repos = reposQuery.data?.repos ?? []
+
+  // Global defaults (editable copies, seeded once from the config query).
   const [reposRoot, setReposRoot] = React.useState("")
-  const [defaultAgent, setDefaultAgent] = React.useState("claude")
+  const [defaultAgent, setDefaultAgent] = React.useState("")
   const [scratchSetup, setScratchSetup] = React.useState("")
-  const [savingDefaults, setSavingDefaults] = React.useState(false)
+  const seededRef = React.useRef(false)
+  React.useEffect(() => {
+    if (seededRef.current || !configQuery.data) return
+    seededRef.current = true
+    setReposRoot(configQuery.data.repos_root || "")
+    // Empty string is meaningful: "Auto (use last used)". Don't coerce to claude.
+    setDefaultAgent(configQuery.data.default_agent ?? "")
+    setScratchSetup(configQuery.data.scratch_setup || "")
+  }, [configQuery.data])
 
   // Per-repo settings.
   const [repoPath, setRepoPath] = React.useState("")
   const [copyFiles, setCopyFiles] = React.useState("")
   const [setup, setSetup] = React.useState("")
-  const [savingRepo, setSavingRepo] = React.useState(false)
   const [savedRepo, setSavedRepo] = React.useState<string | null>(null)
 
-  const loadRepos = React.useCallback(() => {
-    api
-      .repos()
-      .then((res) => {
-        setRepos(res.repos)
-        setRepoPath((prev) => prev || res.repos[0]?.path || "")
-      })
-      .catch(() => setRepos([]))
-  }, [])
-
+  // Keep the selected repo valid against the (host-scoped) repo list, which
+  // changes when the active host switches.
   React.useEffect(() => {
-    if (!active || loadedOnce.current) return
-    loadedOnce.current = true
-    api
-      .agentConfig()
-      .then((c) => {
-        setReposRoot(c.repos_root || "")
-        setDefaultAgent(c.default_agent || "claude")
-        setScratchSetup(c.scratch_setup || "")
-      })
-      .catch(() => {
-        /* leave defaults blank; saving still works */
-      })
-    loadRepos()
-  }, [active, loadRepos])
+    if (repos.length === 0) return
+    setRepoPath((prev) =>
+      prev && repos.some((r) => r.path === prev) ? prev : repos[0].path
+    )
+  }, [repos])
 
   // Mirror the selected repo's saved copy-files/setup into the editors.
   React.useEffect(() => {
@@ -178,44 +169,28 @@ function AgentCreatorSettings({ active }: { active: boolean }) {
     setSavedRepo(null)
   }, [repoPath, repos])
 
-  const saveDefaults = async () => {
-    setSavingDefaults(true)
-    try {
-      await api.saveAgentConfig({
+  const saveDefaultsMutation = useMutation({
+    mutationFn: () =>
+      api.saveAgentConfig({
         repos_root: reposRoot,
         default_agent: defaultAgent,
         scratch_setup: scratchSetup,
-      })
-      // Repos root may have changed — rescan.
-      loadRepos()
-    } catch {
-      /* the next save retries; surfacing a toast here is noisy in Settings */
-    } finally {
-      setSavingDefaults(false)
-    }
-  }
+      }),
+    onSuccess: () => {
+      // Repos root may have changed — refetch both config and the repo scan.
+      queryClient.invalidateQueries({ queryKey: qk.agentConfig })
+      queryClient.invalidateQueries({ queryKey: qk.repos })
+    },
+  })
 
-  const saveRepo = async () => {
-    if (!repoPath) return
-    setSavingRepo(true)
-    try {
-      await api.saveRepoConfig({
-        path: repoPath,
-        copy_files: copyFiles,
-        setup,
-      })
-      // Reflect the save in the in-memory list so switching away and back keeps
-      // the edits without a refetch.
-      setRepos((prev) =>
-        prev.map((r) =>
-          r.path === repoPath ? { ...r, copy_files: copyFiles, setup } : r
-        )
-      )
+  const saveRepoMutation = useMutation({
+    mutationFn: () =>
+      api.saveRepoConfig({ path: repoPath, copy_files: copyFiles, setup }),
+    onSuccess: () => {
       setSavedRepo(repoPath)
-    } finally {
-      setSavingRepo(false)
-    }
-  }
+      queryClient.invalidateQueries({ queryKey: qk.repos })
+    },
+  })
 
   const dirtyRepo = (() => {
     const re = repos.find((r) => r.path === repoPath)
@@ -242,13 +217,18 @@ function AgentCreatorSettings({ active }: { active: boolean }) {
           />
         </Field>
 
-        <Field label="Default agent" htmlFor="settings-default-agent">
+        <Field
+          label="Default agent"
+          hint="Auto remembers the agent you picked last time instead of forcing one."
+          htmlFor="settings-default-agent"
+        >
           <select
             id="settings-default-agent"
             className={fieldClass}
             value={defaultAgent}
             onChange={(e) => setDefaultAgent(e.target.value)}
           >
+            <option value="">Auto (use last used)</option>
             <option value="claude">Claude Code</option>
             <option value="codex">Codex</option>
           </select>
@@ -274,10 +254,10 @@ function AgentCreatorSettings({ active }: { active: boolean }) {
           size="sm"
           variant="outline"
           className="self-start"
-          disabled={savingDefaults}
-          onClick={saveDefaults}
+          disabled={saveDefaultsMutation.isPending}
+          onClick={() => saveDefaultsMutation.mutate()}
         >
-          {savingDefaults ? "Saving…" : "Save defaults"}
+          {saveDefaultsMutation.isPending ? "Saving…" : "Save defaults"}
         </Button>
       </section>
 
@@ -346,10 +326,10 @@ function AgentCreatorSettings({ active }: { active: boolean }) {
             size="sm"
             variant="outline"
             className="self-start"
-            disabled={!repoPath || savingRepo || !dirtyRepo}
-            onClick={saveRepo}
+            disabled={!repoPath || saveRepoMutation.isPending || !dirtyRepo}
+            onClick={() => saveRepoMutation.mutate()}
           >
-            {savingRepo ? "Saving…" : "Save repo setup"}
+            {saveRepoMutation.isPending ? "Saving…" : "Save repo setup"}
           </Button>
           {savedRepo === repoPath && !dirtyRepo && (
             <span className="text-[11px] text-muted-foreground">Saved</span>

@@ -1,6 +1,7 @@
 import * as React from "react"
 
 import { type ActiveState, api } from "@/lib/api"
+import { invalidateHostScoped } from "@/lib/query"
 import { refreshTheme } from "@/lib/theme"
 
 // App-wide state derived from herdr, kept live over the /api/events SSE stream.
@@ -40,6 +41,9 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     if (typeof a.term_rev === "number") {
       if (lastTermRev.current !== null && a.term_rev !== lastTermRev.current) {
         window.dispatchEvent(new CustomEvent(HOST_CHANGED_EVENT))
+        // The new host has its own remembered repo/branch/agent + repo list, so
+        // drop the cached host-scoped queries; the creator reloads them on open.
+        invalidateHostScoped()
       }
       lastTermRev.current = a.term_rev
     }

@@ -101,9 +101,15 @@ export interface FileDiff {
 // be reached, so the tab shows "herdr unreachable" instead of a false mismatch.
 export interface VersionInfo {
   lasso_protocol: number
+  // This lasso build's own version (git revision from the Go VCS stamp, or
+  // "dev"). Shown in the host switcher so a stale install is visible.
+  lasso_version: string
   herdr_protocol: number
   herdr_version?: string
   compatible: boolean
+  // Whether this install can self-update (a pitchfork-supervised git checkout).
+  // False for dev/worktree runs, where the "Update lasso" action is hidden.
+  updatable: boolean
   err?: string
 }
 
@@ -139,7 +145,8 @@ async function httpError(r: Response): Promise<Error> {
 // Agent creation ("New Agent")
 // ---------------------------------------------------------------------------
 
-// Per-repo remembered creator state (lives in ~/.lasso/config.yaml).
+// Per-repo remembered creator state (lives in ~/.lasso/lasso.db, keyed by the
+// active host + repo path).
 export interface RepoConfig {
   last_base_branch?: string
   copy_files?: string
@@ -165,12 +172,18 @@ export interface AgentRecord {
   created_at: string
 }
 
-// The creator's settings + agent log (GET/POST /api/agent-config).
+// The creator's settings + the active host's remembered selections + agent log
+// (GET/POST /api/agent-config). `default_agent` may be "" — no preset default,
+// in which case the creator falls back to `last_agent`. `last_repo`,
+// `last_agent`, `last_agent_type`, `repos`, and `agents` are scoped to the
+// active host.
 export interface AgentConfig {
   repos_root: string
   branch_prefix: string
   default_agent: string
   last_repo?: string
+  last_agent?: string
+  last_agent_type?: "git" | "scratch"
   scratch_setup?: string
   repos?: Record<string, RepoConfig>
   agents?: AgentRecord[]
@@ -258,6 +271,15 @@ export const api = {
     postJSON<{ ok: boolean; output: string; error?: string }>(
       "/api/host-provision",
       { host }
+    ),
+
+  // Update lasso itself: pull the latest source and let the supervisor rebuild +
+  // restart it. Only works on the pitchfork-supervised prod install (see
+  // VersionInfo.updatable); the server bounces a moment after this returns.
+  selfUpdate: () =>
+    postJSON<{ started: boolean; src: string; daemon: string }>(
+      "/api/self-update",
+      {}
     ),
 
   panes: () => getJSON<{ panes?: Pane[] }>("/api/panes"),

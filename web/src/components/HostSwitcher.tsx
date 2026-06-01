@@ -1,4 +1,6 @@
+import { useQuery } from "@tanstack/react-query"
 import {
+  ArrowUpCircle,
   Check,
   Download,
   Laptop,
@@ -19,6 +21,7 @@ import {
 } from "@/components/ui/dropdown-menu"
 import { api, type HostInfo, type HostsPayload } from "@/lib/api"
 import { useApp } from "@/lib/app-store"
+import { qk } from "@/lib/query"
 import { getQueryParam, setQueryParam } from "@/lib/url"
 import { cn } from "@/lib/utils"
 
@@ -62,6 +65,15 @@ export function HostSwitcher() {
   const [switching, setSwitching] = React.useState(false)
   const [busyHost, setBusyHost] = React.useState<string | null>(null)
   const [open, setOpen] = React.useState(false)
+  const [updatingLasso, setUpdatingLasso] = React.useState(false)
+
+  // This lasso build's version + whether it can self-update (a pitchfork-
+  // supervised git checkout). Fetched while the menu is open.
+  const versionQuery = useQuery({
+    queryKey: qk.version,
+    queryFn: () => api.version(),
+    enabled: open,
+  })
 
   // Prefer the live SSE host (reflects switches from anywhere); fall back to the
   // last /api/hosts snapshot, then "local".
@@ -145,6 +157,20 @@ export function HostSwitcher() {
     },
     [busyHost, load]
   )
+
+  // Update lasso itself: pull + rebuild + restart via the supervisor. The server
+  // bounces a moment later, so the page reconnects on its own.
+  const updateLasso = React.useCallback(async () => {
+    if (updatingLasso) return
+    setUpdatingLasso(true)
+    try {
+      await api.selfUpdate()
+      toast.success("Updating lasso — it'll restart in a moment")
+    } catch (e) {
+      toast.error(`Couldn't update lasso: ${(e as Error).message}`)
+      setUpdatingLasso(false) // on success we expect a restart, so leave it busy
+    }
+  }, [updatingLasso])
 
   // ?host=<alias> in the URL reflects the active host (omitted for local).
   // Captured once at mount so the deep-link below survives the reflect effect.
@@ -293,6 +319,39 @@ export function HostSwitcher() {
               No other hosts in ~/.ssh/config
             </div>
           )}
+
+          {/* lasso itself: its version, and (on the supervised prod install) a
+              self-update — the local-side counterpart to a remote `herdr update`
+              when a host needs a newer lasso. */}
+          <DropdownMenuSeparator />
+          <div className="flex items-center gap-2 px-2 py-1.5 text-[11px] text-muted-foreground">
+            <span className="flex-1 truncate">
+              lasso{" "}
+              <span className="font-mono">
+                {versionQuery.data?.lasso_version ?? "…"}
+              </span>
+            </span>
+            {versionQuery.data?.updatable && (
+              <button
+                type="button"
+                className="flex items-center gap-1 rounded border border-primary/40 px-1.5 py-0.5 text-[10px] text-primary hover:bg-accent disabled:opacity-60"
+                title="Pull the latest lasso, rebuild, and restart it (briefly disconnects)"
+                disabled={updatingLasso}
+                onClick={(e) => {
+                  e.preventDefault()
+                  e.stopPropagation()
+                  void updateLasso()
+                }}
+              >
+                {updatingLasso ? (
+                  <Loader2 className="size-3 animate-spin" />
+                ) : (
+                  <ArrowUpCircle className="size-3" />
+                )}
+                {updatingLasso ? "updating…" : "update lasso"}
+              </button>
+            )}
+          </div>
         </DropdownMenuContent>
       </DropdownMenu>
     </div>

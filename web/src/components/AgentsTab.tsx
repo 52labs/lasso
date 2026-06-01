@@ -1,3 +1,4 @@
+import { useQuery } from "@tanstack/react-query"
 import * as React from "react"
 import { toast } from "sonner"
 import { CreateAgentDialog } from "@/components/CreateAgentDialog"
@@ -29,6 +30,7 @@ import { Input } from "@/components/ui/input"
 import { type Agent, api } from "@/lib/api"
 import { useApp } from "@/lib/app-store"
 import { tilde } from "@/lib/format"
+import { qk } from "@/lib/query"
 import { cn } from "@/lib/utils"
 
 // How often the grid re-lists agents while the tab is open. herdr doesn't always
@@ -48,31 +50,24 @@ export function AgentsTab({
   onFocusAgent: () => void
 }) {
   const { activePaneID } = useApp()
-  const [agents, setAgents] = React.useState<Agent[] | null>(null)
-  const [error, setError] = React.useState<string | null>(null)
   const [renameTarget, setRenameTarget] = React.useState<Agent | null>(null)
   const [renameValue, setRenameValue] = React.useState("")
   const [closeTarget, setCloseTarget] = React.useState<Agent | null>(null)
 
-  const load = React.useCallback(async () => {
-    try {
-      const data = await api.agents()
-      setError(null)
-      setAgents(data.agents || [])
-    } catch (e) {
-      setAgents([])
-      setError((e as Error).message)
-    }
-  }, [])
-
-  // Load on open, then poll every POLL_MS while the tab stays open. Stops when
-  // the tab is hidden so we don't keep hitting herdr in the background.
-  React.useEffect(() => {
-    if (!active) return
-    load()
-    const id = setInterval(load, POLL_MS)
-    return () => clearInterval(id)
-  }, [active, load])
+  // The live agent grid. Polls every POLL_MS while the tab is open (herdr
+  // doesn't always push a layout event the moment an agent appears) and pauses
+  // when hidden. Shares the qk.agents key so create + host-switch invalidate it.
+  const agentsQuery = useQuery({
+    queryKey: qk.agents,
+    queryFn: () => api.agents().then((d) => d.agents ?? []),
+    enabled: active,
+    refetchInterval: active ? POLL_MS : false,
+  })
+  const agents = agentsQuery.data ?? null
+  const error = agentsQuery.isError
+    ? (agentsQuery.error as Error).message
+    : null
+  const load = agentsQuery.refetch
 
   const focusAgent = async (a: Agent) => {
     try {

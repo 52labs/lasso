@@ -95,17 +95,19 @@ func splitGlobs(spec string) []string {
 // ---------------------------------------------------------------------------
 
 func serveAgentConfig(w http.ResponseWriter, r *http.Request) {
+	host := curBackend().Name()
 	switch r.Method {
 	case http.MethodGet:
-		configMu.Lock()
-		c, err := loadLassoConfig()
-		configMu.Unlock()
+		c, err := loadLassoConfig(host)
 		if err != nil {
 			http.Error(w, err.Error(), http.StatusInternalServerError)
 			return
 		}
 		writeJSON(w, c)
 	case http.MethodPost:
+		// Only global settings are editable here; an empty default_agent is a
+		// valid choice ("no preset default, use the last-used agent"), so each
+		// field is a pointer to tell "unset" from "set to empty".
 		var req struct {
 			ReposRoot    *string `json:"repos_root"`
 			BranchPrefix *string `json:"branch_prefix"`
@@ -116,26 +118,26 @@ func serveAgentConfig(w http.ResponseWriter, r *http.Request) {
 			http.Error(w, err.Error(), http.StatusBadRequest)
 			return
 		}
-		configMu.Lock()
-		defer configMu.Unlock()
-		c, err := loadLassoConfig()
+		updates := []struct {
+			key string
+			val *string
+		}{
+			{"repos_root", req.ReposRoot},
+			{"branch_prefix", req.BranchPrefix},
+			{"default_agent", req.DefaultAgent},
+			{"scratch_setup", req.ScratchSetup},
+		}
+		for _, u := range updates {
+			if u.val == nil {
+				continue
+			}
+			if err := setSetting(u.key, *u.val); err != nil {
+				http.Error(w, err.Error(), http.StatusInternalServerError)
+				return
+			}
+		}
+		c, err := loadLassoConfig(host)
 		if err != nil {
-			http.Error(w, err.Error(), http.StatusInternalServerError)
-			return
-		}
-		if req.ReposRoot != nil {
-			c.ReposRoot = *req.ReposRoot
-		}
-		if req.BranchPrefix != nil {
-			c.BranchPrefix = *req.BranchPrefix
-		}
-		if req.DefaultAgent != nil {
-			c.DefaultAgent = *req.DefaultAgent
-		}
-		if req.ScratchSetup != nil {
-			c.ScratchSetup = *req.ScratchSetup
-		}
-		if err := saveLassoConfig(c); err != nil {
 			http.Error(w, err.Error(), http.StatusInternalServerError)
 			return
 		}
@@ -168,21 +170,21 @@ func serveRepoConfig(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "path required", http.StatusBadRequest)
 		return
 	}
-	configMu.Lock()
-	defer configMu.Unlock()
-	c, err := loadLassoConfig()
-	if err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
-		return
-	}
-	rc := c.repoConf(path)
+	host := curBackend().Name()
 	if req.CopyFiles != nil {
-		rc.CopyFiles = *req.CopyFiles
+		if err := setRepoCopyFiles(host, path, *req.CopyFiles); err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
 	}
 	if req.Setup != nil {
-		rc.Setup = *req.Setup
+		if err := setRepoSetup(host, path, *req.Setup); err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
 	}
-	if err := saveLassoConfig(c); err != nil {
+	rc, err := getRepoState(host, path)
+	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
@@ -202,15 +204,19 @@ type repoEntry struct {
 }
 
 func serveRepos(w http.ResponseWriter, r *http.Request) {
-	configMu.Lock()
-	c, err := loadLassoConfig()
-	configMu.Unlock()
+	cur := curBackend()
+	host := cur.Name()
+	s, err := getSettings()
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
-	root := expandTilde(c.ReposRoot)
-	cur := curBackend()
+	repoState, err := listRepoState(host)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	root := expandTilde(s.ReposRoot)
 	ents, err := cur.ReadDir(root)
 	if err != nil {
 		// An unreadable/missing repos root is not fatal — return an empty list so
@@ -228,7 +234,7 @@ func serveRepos(w http.ResponseWriter, r *http.Request) {
 			continue // not a git repo
 		}
 		re := repoEntry{Path: repoPath, Name: e.Name}
-		if rc := c.Repos[repoPath]; rc != nil {
+		if rc := repoState[repoPath]; rc != nil {
 			re.CopyFiles, re.Setup, re.LastBaseBranch = rc.CopyFiles, rc.Setup, rc.LastBaseBranch
 		}
 		repos = append(repos, re)
@@ -343,17 +349,16 @@ func serveCreateAgent(w http.ResponseWriter, r *http.Request) {
 	if req.Agent == "" {
 		req.Agent = "claude"
 	}
+	cur := curBackend()
+	host := cur.Name()
 	// The files-to-copy and setup commands are properties of the repo (and the
 	// scratch default), configured in Settings — not per-agent. Read them from
-	// the config rather than the request.
-	configMu.Lock()
-	cfg, cfgErr := loadLassoConfig()
-	configMu.Unlock()
-	if cfgErr != nil {
-		http.Error(w, cfgErr.Error(), http.StatusInternalServerError)
+	// the store rather than the request.
+	settings, err := getSettings()
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
-	cur := curBackend()
 	slug := slugify(req.Title)
 
 	rec := AgentRecord{
@@ -416,8 +421,8 @@ func serveCreateAgent(w http.ResponseWriter, r *http.Request) {
 		rootPane = pane
 
 		// Copy the repo's configured files into the worktree and run its setup
-		// script before the agent (both per-repo settings from config).
-		rc := cfg.repoConf(repo)
+		// script before the agent (both per-repo settings, keyed by host+repo).
+		rc, _ := getRepoState(host, repo)
 		copyRepoFiles(cur, repo, workDir, rc.CopyFiles)
 		setup = rc.Setup
 
@@ -443,7 +448,7 @@ func serveCreateAgent(w http.ResponseWriter, r *http.Request) {
 		ws, pane := parseCreateResult(res)
 		rec.WorkDir, rec.WorkspaceID, rec.RootPane = workDir, ws, pane
 		rootPane = pane
-		setup = cfg.ScratchSetup
+		setup = settings.ScratchSetup
 
 	default:
 		http.Error(w, `type must be "git" or "scratch"`, http.StatusBadRequest)
@@ -471,20 +476,17 @@ func serveCreateAgent(w http.ResponseWriter, r *http.Request) {
 		go confirmAgentTrust(rootPane)
 	}
 
-	// Persist: remember the repo/base-branch + copy/setup edits, append the record.
-	configMu.Lock()
-	defer configMu.Unlock()
-	c, err := loadLassoConfig()
-	if err == nil {
-		if req.Type == "git" {
-			c.LastRepo = rec.Repo
-			c.repoConf(rec.Repo).LastBaseBranch = rec.BaseBranch
-		}
-		c.Agents = append(c.Agents, rec)
-		if err := saveLassoConfig(c); err != nil {
-			http.Error(w, "save config: "+err.Error(), http.StatusInternalServerError)
-			return
-		}
+	// Persist this host's remembered selections, then append the record. Errors
+	// here are non-fatal: the agent is already running, so we still return it.
+	if req.Type == "git" {
+		_ = setLastRepo(host, rec.Repo)
+		_ = setLastBaseBranch(host, rec.Repo, rec.BaseBranch)
+	}
+	_ = setLastAgent(host, rec.Agent)
+	_ = setLastAgentType(host, rec.Type)
+	if err := appendAgent(host, rec); err != nil {
+		http.Error(w, "save agent: "+err.Error(), http.StatusInternalServerError)
+		return
 	}
 	writeJSON(w, rec)
 }
