@@ -12,6 +12,7 @@ import {
 } from "lucide-react"
 import * as React from "react"
 import type { Layout, PanelImperativeHandle } from "react-resizable-panels"
+import { toast } from "sonner"
 import { BrowserTab } from "@/components/BrowserTab"
 import { CreateAgentDialog } from "@/components/CreateAgentDialog"
 import { FilesPanel } from "@/components/FilesPanel"
@@ -30,8 +31,9 @@ import {
 import { Toaster } from "@/components/ui/sonner"
 import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import { api } from "@/lib/api"
-import { AppProvider, lsGet, lsSet } from "@/lib/app-store"
+import { AppProvider, lsGet, lsSet, useApp } from "@/lib/app-store"
 import { useDiff } from "@/lib/git"
+import { restorePaneFocus } from "@/lib/pane-focus"
 import { qk, queryClient } from "@/lib/query"
 import { setSidebarPct, sidebarPctNow } from "@/lib/sidebar"
 import { patchUIState, useUIState } from "@/lib/ui-state"
@@ -177,6 +179,13 @@ function Shell() {
   const rightPanel = React.useRef<PanelImperativeHandle>(null)
   const ui = useUIState()
 
+  // The live focused pane + active host (SSE-driven). The pane is reflected in
+  // the URL so Back/Forward can re-focus it; the host is mirrored into a ref so
+  // the (referentially stable) popstate handler always sees the current host.
+  const { activePaneID, host } = useApp()
+  const hostRef = React.useRef(host)
+  hostRef.current = host
+
   const savedLayout = React.useMemo<Layout | undefined>(() => {
     try {
       const v = lsGet("lasso-layout")
@@ -215,14 +224,37 @@ function Shell() {
     setQueryParam("view", initialView.current)
   }, [])
 
-  // Back/forward drives the active left tab from the URL.
+  // Reflect the focused pane in the URL (replaceState; cleared when none) so the
+  // current history entry always names the pane on screen. Pushed entries are
+  // created only by an explicit ⌘K/Grid navigation (see focusPaneInHerdr); this
+  // effect fires on the SSE-driven pane change, not on those pushes, so it never
+  // clobbers a freshly-pushed entry — the previous entry keeps the previous
+  // pane, which is exactly what Back should restore.
+  React.useEffect(() => {
+    setQueryParam("pane", activePaneID)
+  }, [activePaneID])
+
+  // Back/forward drives the active left tab from the URL, and — when returning
+  // to a Herdr entry that named a pane — re-focuses that pane (switching host
+  // first if needed), so Back after a ⌘K jump lands you back on the pane you
+  // came from, across hosts. Restoring is gated to the Herdr view: a Grid entry
+  // just shows the Grid (re-focusing a pane behind it would be an invisible
+  // backend change).
   React.useEffect(() => {
     const onPop = () => {
       const v = getQueryParam("view") ?? ""
-      switchLeft(
-        (LEFT_VIEWS as string[]).includes(v) ? (v as LeftView) : "herdr",
-        true
-      )
+      const view =
+        (LEFT_VIEWS as string[]).includes(v) ? (v as LeftView) : "herdr"
+      switchLeft(view, true)
+      const pane = getQueryParam("pane")
+      if (view === "herdr" && pane) {
+        restorePaneFocus(
+          getQueryParam("host") ?? "local",
+          pane,
+          hostRef.current,
+          () => switchLeft("herdr", true)
+        ).catch((e) => toast.error(`focus failed: ${(e as Error).message}`))
+      }
     }
     window.addEventListener("popstate", onPop)
     return () => window.removeEventListener("popstate", onPop)
@@ -351,7 +383,7 @@ function Shell() {
               <Pane show={leftView === "grid"}>
                 <GridTab
                   active={leftView === "grid"}
-                  onFocusInHerdr={() => switchLeft("herdr", false, true)}
+                  onFocusInHerdr={() => switchLeft("herdr")}
                 />
               </Pane>
             </div>
@@ -442,12 +474,14 @@ function Shell() {
           </Tabs>
         </ResizablePanel>
       </ResizablePanelGroup>
-      {/* Cmd+U pane switcher — searches every pane on every host, opens the
-          chosen one in the Herdr tab (push=true so Back returns here). */}
+      {/* ⌘K pane switcher — searches every pane on every host, opens the chosen
+          one in the Herdr tab. focusPaneInHerdr pushes a history entry naming
+          the pane, so Back re-focuses the pane you came from (see the popstate
+          handler above). */}
       <PaneSwitcher
         open={paletteOpen}
         onOpenChange={setPaletteOpen}
-        onFocusInHerdr={() => switchLeft("herdr", false, true)}
+        onFocusInHerdr={() => switchLeft("herdr")}
       />
       {leftView === "herdr" && (
         <div className="fixed bottom-3 left-3 z-40 flex items-center gap-2">

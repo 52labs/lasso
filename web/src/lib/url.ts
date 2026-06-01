@@ -22,10 +22,30 @@ export function pushQueryParam(key: string, value: string | null) {
   writeQueryParam(key, value, true)
 }
 
+// setQueryParams / pushQueryParams set (or remove, when null/empty) several
+// params in one history operation — so a multi-param navigation (e.g. focusing
+// a pane writes view+host+pane at once) is a single Back step, not one per key.
+export function setQueryParams(params: Record<string, string | null>) {
+  writeQueryParams(params, false)
+}
+
+export function pushQueryParams(params: Record<string, string | null>) {
+  writeQueryParams(params, true)
+}
+
 function writeQueryParam(key: string, value: string | null, push: boolean) {
+  writeQueryParams({ [key]: value }, push)
+}
+
+function writeQueryParams(
+  params: Record<string, string | null>,
+  push: boolean
+) {
   const url = new URL(window.location.href)
-  if (value == null || value === "") url.searchParams.delete(key)
-  else url.searchParams.set(key, value)
+  for (const [key, value] of Object.entries(params)) {
+    if (value == null || value === "") url.searchParams.delete(key)
+    else url.searchParams.set(key, value)
+  }
   const qs = url.searchParams.toString()
   const next = url.pathname + (qs ? `?${qs}` : "")
   if (push) window.history.pushState(null, "", next)
