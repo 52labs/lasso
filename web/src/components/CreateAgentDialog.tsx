@@ -278,200 +278,219 @@ export function CreateAgentDialog({
           </DialogDescription>
         </DialogHeader>
 
-        <div className="flex min-h-0 flex-1 flex-col gap-3 overflow-y-auto pr-1">
-          {/* Type toggle */}
-          <div className="flex gap-2">
-            {(["git", "scratch"] as const).map((t) => (
-              <button
-                key={t}
-                type="button"
-                onClick={() => setType(t)}
-                className={cn(
-                  "flex-1 rounded-md border bg-background px-3 py-1.5 text-sm capitalize transition-colors",
-                  type === t
-                    ? "border-primary bg-primary/15 text-primary"
-                    : "border-border text-muted-foreground hover:bg-accent hover:text-foreground"
-                )}
+        {/* A real <form> gives us the "Enter submits unless on the description"
+            behavior for free: a native <input> (e.g. Title) submits on Enter
+            while the description <textarea> inserts a newline. Comboboxes keep
+            their own Enter (item select). The keydown handler adds Cmd/Ctrl+Enter
+            as an always-submit, including from the description and comboboxes. */}
+        <form
+          onSubmit={(e) => {
+            e.preventDefault()
+            submit()
+          }}
+          onKeyDown={(e) => {
+            if ((e.metaKey || e.ctrlKey) && e.key === "Enter") {
+              e.preventDefault()
+              submit()
+            }
+          }}
+          className="flex min-h-0 flex-1 flex-col gap-4 overflow-hidden"
+        >
+          <div className="flex min-h-0 flex-1 flex-col gap-3 overflow-y-auto pr-1">
+            {/* Type toggle */}
+            <div className="flex gap-2">
+              {(["git", "scratch"] as const).map((t) => (
+                <button
+                  key={t}
+                  type="button"
+                  onClick={() => setType(t)}
+                  className={cn(
+                    "flex-1 rounded-md border bg-background px-3 py-1.5 text-sm capitalize transition-colors",
+                    type === t
+                      ? "border-primary bg-primary/15 text-primary"
+                      : "border-border text-muted-foreground hover:bg-accent hover:text-foreground"
+                  )}
+                >
+                  {t}
+                </button>
+              ))}
+            </div>
+
+            <Field label="Title" htmlFor="agent-title">
+              <Input
+                id="agent-title"
+                className="bg-background dark:bg-background"
+                value={title}
+                onChange={(e) => onTitleChange(e.target.value)}
+                placeholder="What should this agent work on?"
+                autoFocus
+              />
+            </Field>
+
+            <Field label="Description" htmlFor="agent-description">
+              <textarea
+                id="agent-description"
+                className={cn(fieldClass, "resize-none")}
+                rows={3}
+                value={description}
+                onChange={(e) => onDescriptionChange(e.target.value)}
+                placeholder="Optional — fills the agent's first prompt. If set, the agent starts in plan mode."
+              />
+            </Field>
+
+            <label className="flex cursor-pointer items-center gap-2">
+              <Checkbox
+                checked={planMode}
+                onCheckedChange={(v) => {
+                  setPlanMode(v === true)
+                  setPlanTouched(true)
+                }}
+              />
+              <span className="text-sm">Start in plan mode</span>
+            </label>
+
+            {type === "git" && (
+              <>
+                <Field label="Repository" htmlFor="agent-repo">
+                  <Combobox
+                    id="agent-repo"
+                    items={repos.map((r) => ({ value: r.path, label: r.name }))}
+                    value={repo}
+                    onValueChange={setRepo}
+                    placeholder="Select a repository…"
+                    filterPlaceholder="Filter repositories…"
+                    emptyText="No repos found."
+                  />
+                </Field>
+
+                <Field label="Base branch" htmlFor="agent-base">
+                  <Combobox
+                    id="agent-base"
+                    items={branches.map((b) => ({ value: b, label: b }))}
+                    value={baseBranch}
+                    onValueChange={setBaseBranch}
+                    placeholder="Select a base branch…"
+                    filterPlaceholder="Filter branches…"
+                    emptyText="No branches found."
+                  />
+                </Field>
+              </>
+            )}
+
+            <Field label="AI agent" htmlFor="agent-agent">
+              <select
+                id="agent-agent"
+                className={fieldClass}
+                value={agent}
+                onChange={(e) => setAgent(e.target.value)}
               >
-                {t}
-              </button>
-            ))}
+                {AGENTS.map((a) => (
+                  <option key={a.value} value={a.value}>
+                    {a.label}
+                  </option>
+                ))}
+              </select>
+            </Field>
+
+            {/* Advanced */}
+            <button
+              type="button"
+              className="flex items-center gap-1 text-muted-foreground text-sm hover:text-foreground"
+              onClick={() => setShowAdvanced((s) => !s)}
+            >
+              <ChevronDown
+                className={cn(
+                  "size-4 transition-transform",
+                  showAdvanced && "rotate-180"
+                )}
+              />
+              Advanced
+            </button>
+
+            {showAdvanced && (
+              <div className="flex flex-col gap-3 border-border border-l pl-3">
+                {type === "git" && (
+                  <>
+                    <Field label="Branch prefix" htmlFor="agent-prefix">
+                      <Input
+                        id="agent-prefix"
+                        className="bg-background dark:bg-background"
+                        value={prefix}
+                        onChange={(e) => setPrefix(e.target.value)}
+                        placeholder="feat/"
+                      />
+                    </Field>
+                    <Field label="Branch name" htmlFor="agent-branch">
+                      <Input
+                        id="agent-branch"
+                        className="bg-background dark:bg-background"
+                        value={branchName}
+                        onChange={(e) => setBranchName(e.target.value)}
+                        placeholder={autoBranch || "auto-generated"}
+                      />
+                    </Field>
+                    {effectiveBranch && (
+                      <p className="-mt-1 font-mono text-muted-foreground text-xs">
+                        branch: {effectiveBranch}
+                      </p>
+                    )}
+                  </>
+                )}
+                <Field label="Attachments" htmlFor="agent-files">
+                  <input
+                    id="agent-files"
+                    type="file"
+                    multiple
+                    className={cn(
+                      fieldClass,
+                      "cursor-pointer text-muted-foreground file:mr-2.5 file:cursor-pointer file:rounded file:border-0 file:bg-accent file:px-2 file:py-0.5 file:font-medium file:text-foreground file:text-sm"
+                    )}
+                    onChange={(e) =>
+                      setFiles((prev) => [
+                        ...prev,
+                        ...Array.from(e.target.files ?? []),
+                      ])
+                    }
+                  />
+                </Field>
+                {files.length > 0 && (
+                  <div className="flex flex-wrap gap-1">
+                    {files.map((f, i) => (
+                      <span
+                        key={`${f.name}-${f.size}-${f.lastModified}`}
+                        className="inline-flex items-center gap-1 rounded border border-border bg-card px-1.5 py-0.5 text-xs"
+                      >
+                        {f.name}
+                        <button
+                          type="button"
+                          onClick={() =>
+                            setFiles((prev) => prev.filter((_, j) => j !== i))
+                          }
+                          className="text-muted-foreground hover:text-foreground"
+                        >
+                          <X className="size-3" />
+                        </button>
+                      </span>
+                    ))}
+                  </div>
+                )}
+              </div>
+            )}
           </div>
 
-          <Field label="Title" htmlFor="agent-title">
-            <Input
-              id="agent-title"
-              className="bg-background dark:bg-background"
-              value={title}
-              onChange={(e) => onTitleChange(e.target.value)}
-              placeholder="What should this agent work on?"
-              autoFocus
-            />
-          </Field>
-
-          <Field label="Description" htmlFor="agent-description">
-            <textarea
-              id="agent-description"
-              className={cn(fieldClass, "resize-none")}
-              rows={3}
-              value={description}
-              onChange={(e) => onDescriptionChange(e.target.value)}
-              placeholder="Optional — fills the agent's first prompt. If set, the agent starts in plan mode."
-            />
-          </Field>
-
-          <label className="flex cursor-pointer items-center gap-2">
-            <Checkbox
-              checked={planMode}
-              onCheckedChange={(v) => {
-                setPlanMode(v === true)
-                setPlanTouched(true)
-              }}
-            />
-            <span className="text-sm">Start in plan mode</span>
-          </label>
-
-          {type === "git" && (
-            <>
-              <Field label="Repository" htmlFor="agent-repo">
-                <Combobox
-                  id="agent-repo"
-                  items={repos.map((r) => ({ value: r.path, label: r.name }))}
-                  value={repo}
-                  onValueChange={setRepo}
-                  placeholder="Select a repository…"
-                  filterPlaceholder="Filter repositories…"
-                  emptyText="No repos found."
-                />
-              </Field>
-
-              <Field label="Base branch" htmlFor="agent-base">
-                <Combobox
-                  id="agent-base"
-                  items={branches.map((b) => ({ value: b, label: b }))}
-                  value={baseBranch}
-                  onValueChange={setBaseBranch}
-                  placeholder="Select a base branch…"
-                  filterPlaceholder="Filter branches…"
-                  emptyText="No branches found."
-                />
-              </Field>
-            </>
-          )}
-
-          <Field label="AI agent" htmlFor="agent-agent">
-            <select
-              id="agent-agent"
-              className={fieldClass}
-              value={agent}
-              onChange={(e) => setAgent(e.target.value)}
+          <DialogFooter>
+            <Button
+              type="button"
+              variant="outline"
+              onClick={() => setOpen(false)}
             >
-              {AGENTS.map((a) => (
-                <option key={a.value} value={a.value}>
-                  {a.label}
-                </option>
-              ))}
-            </select>
-          </Field>
-
-          {/* Advanced */}
-          <button
-            type="button"
-            className="flex items-center gap-1 text-muted-foreground text-sm hover:text-foreground"
-            onClick={() => setShowAdvanced((s) => !s)}
-          >
-            <ChevronDown
-              className={cn(
-                "size-4 transition-transform",
-                showAdvanced && "rotate-180"
-              )}
-            />
-            Advanced
-          </button>
-
-          {showAdvanced && (
-            <div className="flex flex-col gap-3 border-border border-l pl-3">
-              {type === "git" && (
-                <>
-                  <Field label="Branch prefix" htmlFor="agent-prefix">
-                    <Input
-                      id="agent-prefix"
-                      className="bg-background dark:bg-background"
-                      value={prefix}
-                      onChange={(e) => setPrefix(e.target.value)}
-                      placeholder="feat/"
-                    />
-                  </Field>
-                  <Field label="Branch name" htmlFor="agent-branch">
-                    <Input
-                      id="agent-branch"
-                      className="bg-background dark:bg-background"
-                      value={branchName}
-                      onChange={(e) => setBranchName(e.target.value)}
-                      placeholder={autoBranch || "auto-generated"}
-                    />
-                  </Field>
-                  {effectiveBranch && (
-                    <p className="-mt-1 font-mono text-muted-foreground text-xs">
-                      branch: {effectiveBranch}
-                    </p>
-                  )}
-                </>
-              )}
-              <Field label="Attachments" htmlFor="agent-files">
-                <input
-                  id="agent-files"
-                  type="file"
-                  multiple
-                  className={cn(
-                    fieldClass,
-                    "cursor-pointer text-muted-foreground file:mr-2.5 file:cursor-pointer file:rounded file:border-0 file:bg-accent file:px-2 file:py-0.5 file:font-medium file:text-foreground file:text-sm"
-                  )}
-                  onChange={(e) =>
-                    setFiles((prev) => [
-                      ...prev,
-                      ...Array.from(e.target.files ?? []),
-                    ])
-                  }
-                />
-              </Field>
-              {files.length > 0 && (
-                <div className="flex flex-wrap gap-1">
-                  {files.map((f, i) => (
-                    <span
-                      key={`${f.name}-${f.size}-${f.lastModified}`}
-                      className="inline-flex items-center gap-1 rounded border border-border bg-card px-1.5 py-0.5 text-xs"
-                    >
-                      {f.name}
-                      <button
-                        type="button"
-                        onClick={() =>
-                          setFiles((prev) => prev.filter((_, j) => j !== i))
-                        }
-                        className="text-muted-foreground hover:text-foreground"
-                      >
-                        <X className="size-3" />
-                      </button>
-                    </span>
-                  ))}
-                </div>
-              )}
-            </div>
-          )}
-        </div>
-
-        <DialogFooter>
-          <Button
-            type="button"
-            variant="outline"
-            onClick={() => setOpen(false)}
-          >
-            Cancel
-          </Button>
-          <Button type="button" disabled={!canSubmit} onClick={submit}>
-            {submitting ? "Creating…" : "Create agent"}
-          </Button>
-        </DialogFooter>
+              Cancel
+            </Button>
+            <Button type="submit" disabled={!canSubmit}>
+              {submitting ? "Creating…" : "Create agent"}
+            </Button>
+          </DialogFooter>
+        </form>
       </DialogContent>
     </Dialog>
   )

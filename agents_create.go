@@ -389,7 +389,9 @@ func serveCreateAgent(w http.ResponseWriter, r *http.Request) {
 			"base":   base,
 			"path":   workDir,
 			"label":  req.Title,
-			"focus":  false,
+			// Focus the new worktree's pane so the user lands on the agent as it
+			// boots (the New Agent flow is an explicit "take me there").
+			"focus": true,
 		})
 		if err != nil {
 			http.Error(w, "worktree.create: "+err.Error(), http.StatusBadGateway)
@@ -415,7 +417,7 @@ func serveCreateAgent(w http.ResponseWriter, r *http.Request) {
 		res, err := herdrCall("workspace.create", map[string]any{
 			"cwd":   workDir,
 			"label": req.Title,
-			"focus": false,
+			"focus": true, // land on the new agent's pane as it boots
 		})
 		if err != nil {
 			http.Error(w, "workspace.create: "+err.Error(), http.StatusBadGateway)
@@ -444,6 +446,14 @@ func serveCreateAgent(w http.ResponseWriter, r *http.Request) {
 			paneRun(rootPane, s)
 		}
 		paneRun(rootPane, agentCommand(req.Agent, rec.PlanMode, agentPrompt(rec)))
+		// claude still shows a per-project "trust this folder" dialog even under
+		// --dangerously-skip-permissions (as of 2.x), which leaves the agent
+		// blocked. Auto-accept it in the background so the agent boots straight
+		// into the task; the prompt rides along as a CLI arg, so claude proceeds
+		// with it once trust is granted. codex has no such dialog.
+		if req.Agent != "codex" {
+			go confirmClaudeTrust(rootPane)
+		}
 	}
 
 	// Persist: remember the repo/base-branch + copy/setup edits, append the record.
@@ -626,22 +636,23 @@ func copyLocalToBackend(cur Backend, src, dst string) {
 	_, _ = io.Copy(out, in)
 }
 
-// agentPrompt builds the prompt handed to the agent: the description, plus a
-// pointer to any notes/attachments that landed in the work dir.
+// agentPrompt builds the prompt handed to the agent: the title (always present —
+// it's the task's headline), then the fuller description, plus a pointer to any
+// notes/attachments that landed in the work dir. Leading with the title mirrors
+// fulcrum's "<title>: <description>" so the agent never starts on description
+// alone with no idea what it's building.
 func agentPrompt(rec AgentRecord) string {
 	var b strings.Builder
-	b.WriteString(rec.Description)
+	b.WriteString(rec.Title)
+	if rec.Description != "" {
+		b.WriteString(": ")
+		b.WriteString(rec.Description)
+	}
 	if rec.Notes != "" {
-		if b.Len() > 0 {
-			b.WriteString("\n\n")
-		}
-		b.WriteString("See NOTES.md for additional notes.")
+		b.WriteString("\n\nSee NOTES.md for additional notes.")
 	}
 	if len(rec.Attachments) > 0 {
-		if b.Len() > 0 {
-			b.WriteString("\n\n")
-		}
-		b.WriteString("Attachments: " + strings.Join(rec.Attachments, ", "))
+		b.WriteString("\n\nAttachments: " + strings.Join(rec.Attachments, ", "))
 	}
 	return b.String()
 }
@@ -659,9 +670,13 @@ func agentCommand(agent string, planMode bool, prompt string) string {
 		}
 		return cmd
 	default: // claude
+		// --dangerously-skip-permissions forces bypass mode and silently overrides
+		// --permission-mode plan, so plan agents never actually plan. In plan mode
+		// use --allow-dangerously-skip-permissions instead, which only *enables*
+		// bypassing and coexists with plan. Mirrors fulcrum's agent-commands.ts.
 		cmd := "claude --dangerously-skip-permissions"
 		if planMode {
-			cmd += " --permission-mode plan"
+			cmd = "claude --allow-dangerously-skip-permissions --permission-mode plan"
 		}
 		if prompt != "" {
 			cmd += " " + shellQuote(prompt)
@@ -677,6 +692,49 @@ func paneRun(paneID, command string) {
 		"pane_id": paneID,
 		"text":    command + "\n",
 	})
+}
+
+// confirmClaudeTrust watches a freshly-launched claude pane for its per-project
+// "trust this folder" dialog and accepts it (the default-selected "Yes") by
+// pressing Enter. Recent claude versions show this dialog even under
+// --dangerously-skip-permissions, which would otherwise leave the agent blocked.
+// Polls rather than sleeping a fixed time so it survives a slow setup script
+// running before the agent; if the folder is already trusted the dialog never
+// appears and this simply times out without sending anything.
+func confirmClaudeTrust(paneID string) {
+	deadline := time.Now().Add(30 * time.Second)
+	for time.Now().Before(deadline) {
+		time.Sleep(500 * time.Millisecond)
+		if paneShowsTrustPrompt(paneID) {
+			// Enter confirms the highlighted "Yes, I trust this folder".
+			_, _ = herdrCall("pane.send_text", map[string]any{
+				"pane_id": paneID,
+				"text":    "\r",
+			})
+			return
+		}
+	}
+}
+
+// paneShowsTrustPrompt reports whether the pane's visible screen currently shows
+// claude's trust-this-folder dialog.
+func paneShowsTrustPrompt(paneID string) bool {
+	res, err := herdrCall("pane.read", map[string]any{
+		"pane_id": paneID,
+		"source":  "visible",
+	})
+	if err != nil {
+		return false
+	}
+	var r struct {
+		Read struct {
+			Text string `json:"text"`
+		} `json:"read"`
+	}
+	if json.Unmarshal(res, &r) != nil {
+		return false
+	}
+	return strings.Contains(r.Read.Text, "trust this folder")
 }
 
 // ---------------------------------------------------------------------------

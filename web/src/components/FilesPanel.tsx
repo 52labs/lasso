@@ -1,6 +1,6 @@
 import * as React from "react"
 import { DiffTab } from "@/components/DiffTab"
-import { FilesTab, type FileChange } from "@/components/FilesTab"
+import { type FileChange, FilesTab } from "@/components/FilesTab"
 import { api, type DiffPayload } from "@/lib/api"
 import { useApp } from "@/lib/app-store"
 import { cn } from "@/lib/utils"
@@ -166,10 +166,7 @@ export function FilesPanel({
 
         {viewerPath && (
           <React.Suspense fallback={null}>
-            <FileViewer
-              path={viewerPath}
-              onClose={() => setViewerPath(null)}
-            />
+            <FileViewer path={viewerPath} onClose={() => setViewerPath(null)} />
           </React.Suspense>
         )}
       </div>

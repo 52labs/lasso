@@ -291,8 +291,7 @@ export function FilesTab({
       // A file shows its own status; a directory shows a dot when it (when
       // collapsed) hides changed files beneath it.
       const change = e.dir ? undefined : changes.get(full)
-      const dirChanged =
-        e.dir && !open && hasChangesUnder(changes, full)
+      const dirChanged = e.dir && !open && hasChangesUnder(changes, full)
       return (
         <React.Fragment key={e.name}>
           <FileRow
