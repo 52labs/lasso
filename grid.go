@@ -153,6 +153,140 @@ var gridCache struct {
 
 const gridCacheTTL = 1500 * time.Millisecond
 
+// invalidateGridCache drops the cached aggregation so the next /api/grid refetches
+// — used after a mutation (rename/close) so the change shows up without waiting
+// for the TTL.
+func invalidateGridCache() {
+	gridCache.mu.Lock()
+	gridCache.at = time.Time{}
+	gridCache.mu.Unlock()
+}
+
+// gridHostAllowed reports whether host is one we may drive: local, the active
+// host, or a discovered reachable+compatible remote. Guards every grid mutation
+// so a bogus alias can't make us connect out.
+func gridHostAllowed(host string) bool {
+	if host == "local" || host == curBackend().Name() {
+		return true
+	}
+	hi, ok := findHost(host)
+	return ok && hi.Reachable && hi.Running && hi.Compatible
+}
+
+// ---------------------------------------------------------------------------
+// GET/POST /api/ui-state — persisted browser UI prefs (grid filters + sidebar)
+// ---------------------------------------------------------------------------
+
+func serveUIState(w http.ResponseWriter, r *http.Request) {
+	switch r.Method {
+	case http.MethodGet:
+		us, err := getUIState()
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		writeJSON(w, us)
+	case http.MethodPost:
+		var us uiState
+		if err := json.NewDecoder(r.Body).Decode(&us); err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+		if us.GridHiddenHosts == nil {
+			us.GridHiddenHosts = []string{}
+		}
+		if err := saveUIState(us); err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		writeJSON(w, us)
+	default:
+		http.Error(w, "GET or POST", http.StatusMethodNotAllowed)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// grid mutations — rename / close, routed to the pane's own host
+// ---------------------------------------------------------------------------
+
+// serveGridRename renames the workspace a pane belongs to, on that pane's host
+// (the grid spans hosts, so it can't go through the active-backend /api/rename).
+// The cell's title is the workspace label, mirroring the Agents tab's rename.
+func serveGridRename(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "POST required", http.StatusMethodNotAllowed)
+		return
+	}
+	var req struct {
+		Host        string `json:"host"`
+		WorkspaceID string `json:"workspace_id"`
+		Label       string `json:"label"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	if req.WorkspaceID == "" || strings.TrimSpace(req.Label) == "" {
+		http.Error(w, "workspace_id and non-empty label required", http.StatusBadRequest)
+		return
+	}
+	if !gridHostAllowed(req.Host) {
+		http.Error(w, "host not available", http.StatusBadRequest)
+		return
+	}
+	b, err := gridHostBackend(req.Host)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadGateway)
+		return
+	}
+	if _, err := b.HerdrCall("workspace.rename", map[string]any{"workspace_id": req.WorkspaceID, "label": req.Label}); err != nil {
+		http.Error(w, err.Error(), http.StatusBadGateway)
+		return
+	}
+	invalidateGridCache()
+	writeJSON(w, map[string]any{"ok": true})
+}
+
+// serveGridClose closes panes, each on its own host. The selection can span
+// hosts, so the request is a flat list of {host, pane_id}; failures are reported
+// per pane rather than failing the whole batch.
+func serveGridClose(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "POST required", http.StatusMethodNotAllowed)
+		return
+	}
+	var req struct {
+		Panes []struct {
+			Host   string `json:"host"`
+			PaneID string `json:"pane_id"`
+		} `json:"panes"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	errs := map[string]string{}
+	closed := 0
+	for _, p := range req.Panes {
+		if p.PaneID == "" || !gridHostAllowed(p.Host) {
+			errs[p.PaneID] = "host not available"
+			continue
+		}
+		b, err := gridHostBackend(p.Host)
+		if err != nil {
+			errs[p.PaneID] = err.Error()
+			continue
+		}
+		if _, err := b.HerdrCall("pane.close", map[string]any{"pane_id": p.PaneID}); err != nil {
+			errs[p.PaneID] = err.Error()
+			continue
+		}
+		closed++
+	}
+	invalidateGridCache()
+	writeJSON(w, map[string]any{"closed": closed, "errors": errs})
+}
+
 func serveGrid(w http.ResponseWriter, r *http.Request) {
 	startGridReaper()
 	gridCache.mu.Lock()

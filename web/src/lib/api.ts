@@ -88,6 +88,16 @@ export interface Agent {
   focused?: boolean
 }
 
+// Persisted, global browser UI preferences (SQLite-backed): Grid tab filters +
+// sidebar collapse. The client reads the whole object and writes the whole
+// object back (merge happens client-side), so navigating away and back — or
+// opening lasso elsewhere — restores the same view.
+export interface UIState {
+  grid_agents_only: boolean
+  grid_hidden_hosts: string[]
+  sidebar_collapsed: boolean
+}
+
 export interface FileEntry {
   name: string
   dir: boolean
@@ -335,6 +345,26 @@ export const api = {
       body: JSON.stringify({ host, terminal_id }),
       keepalive: true,
     }).catch(() => {}),
+
+  // Rename the workspace a grid pane belongs to, on that pane's host.
+  gridRename: (host: string, workspace_id: string, label: string) =>
+    postJSON<{ ok: boolean }>("/api/grid/rename", {
+      host,
+      workspace_id,
+      label,
+    }),
+
+  // Close one or more grid panes (each tagged with its host — the selection can
+  // span hosts). Reports per-pane failures rather than failing the whole batch.
+  gridClose: (panes: { host: string; pane_id: string }[]) =>
+    postJSON<{ closed: number; errors?: Record<string, string> }>(
+      "/api/grid/close",
+      { panes }
+    ),
+
+  // Persisted UI prefs (grid filters + sidebar collapse).
+  uiState: () => getJSON<UIState>("/api/ui-state"),
+  saveUIState: (s: UIState) => postJSON<UIState>("/api/ui-state", s),
   version: () => getJSON<VersionInfo>("/api/version"),
 
   files: (path: string) =>

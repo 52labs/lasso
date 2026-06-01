@@ -3,6 +3,7 @@ package main
 import (
 	"database/sql"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -156,6 +157,45 @@ func setSetting(key, value string) error {
 		`INSERT INTO settings(key, value) VALUES(?, ?)
 		 ON CONFLICT(key) DO UPDATE SET value=excluded.value`, key, value)
 	return err
+}
+
+// uiState is the browser's persisted, global (host-agnostic) UI preferences:
+// the Grid tab's filters and whether the right sidebar is collapsed. It's kept
+// server-side (one JSON blob in settings) rather than in localStorage so the UI
+// looks the same across browsers/devices reaching the same lasso.
+type uiState struct {
+	GridAgentsOnly   bool     `json:"grid_agents_only"`
+	GridHiddenHosts  []string `json:"grid_hidden_hosts"`
+	SidebarCollapsed bool     `json:"sidebar_collapsed"`
+}
+
+// getUIState reads the persisted UI prefs (zero value — everything on, sidebar
+// expanded — when nothing is stored yet).
+func getUIState() (uiState, error) {
+	us := uiState{GridHiddenHosts: []string{}}
+	var v string
+	err := db.QueryRow(`SELECT value FROM settings WHERE key='ui_state'`).Scan(&v)
+	if errors.Is(err, sql.ErrNoRows) {
+		return us, nil
+	}
+	if err != nil {
+		return us, err
+	}
+	_ = json.Unmarshal([]byte(v), &us)
+	if us.GridHiddenHosts == nil {
+		us.GridHiddenHosts = []string{}
+	}
+	return us, nil
+}
+
+// saveUIState overwrites the persisted UI prefs with us (the client sends the
+// whole object, so this is a plain replace).
+func saveUIState(us uiState) error {
+	b, err := json.Marshal(us)
+	if err != nil {
+		return err
+	}
+	return setSetting("ui_state", string(b))
 }
 
 // ---------------------------------------------------------------------------

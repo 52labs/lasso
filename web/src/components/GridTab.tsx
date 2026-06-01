@@ -1,14 +1,39 @@
 import { useQuery } from "@tanstack/react-query"
-import { Loader2 } from "lucide-react"
 import * as React from "react"
 import { toast } from "sonner"
 
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from "@/components/ui/alert-dialog"
+import { Button } from "@/components/ui/button"
+import {
+  ContextMenu,
+  ContextMenuContent,
+  ContextMenuItem,
+  ContextMenuTrigger,
+} from "@/components/ui/context-menu"
+import {
+  Dialog,
+  DialogContent,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog"
+import { Input } from "@/components/ui/input"
 import { type GridPane, api } from "@/lib/api"
-import { lsGet, lsSet, useApp } from "@/lib/app-store"
+import { useApp } from "@/lib/app-store"
 import { tilde } from "@/lib/format"
 import { qk } from "@/lib/query"
 import { bootTermFrame } from "@/lib/terminal"
 import { GRID_FRAME_CLASS } from "@/lib/theme"
+import { patchUIState, useUIState } from "@/lib/ui-state"
 import { cn } from "@/lib/utils"
 
 // How often the grid re-lists panes across hosts while the tab is open. The
@@ -20,13 +45,16 @@ const POLL_MS = 2500
 // ttyd alive (the server reaps idle attaches after ~30s). Comfortably under that.
 const KEEPALIVE_MS = 18_000
 
-const AGENTS_ONLY_KEY = "grid-agents-only"
+// cellKey uniquely identifies a pane across hosts (pane ids are only unique
+// within a host).
+const cellKey = (p: GridPane) => `${p.host}|${p.pane_id}`
 
 // The Grid tab: a wall of live terminals, one per herdr pane, spanning every
 // reachable + protocol-compatible host. Each cell body is an interactive
-// terminal (a ttyd attached to that pane); clicking a cell's header focuses the
-// pane in the Herdr tab — switching the active host first when it lives
-// elsewhere. A toggle filters to panes that have an associated agent.
+// terminal (a ttyd attached to that pane). Click a header to focus the pane in
+// the Herdr tab (switching host first when it lives elsewhere); ⌘/Ctrl-click to
+// multi-select; right-click for rename / close. Filters (agents-only, per-host)
+// are persisted server-side so the view is the same every visit.
 export function GridTab({
   active,
   onFocusInHerdr,
@@ -35,15 +63,20 @@ export function GridTab({
   onFocusInHerdr: () => void
 }) {
   const { activePaneID, host: activeHost } = useApp()
-  const [agentsOnly, setAgentsOnly] = React.useState(
-    () => lsGet(AGENTS_ONLY_KEY) === "1"
+  const ui = useUIState()
+  const agentsOnly = ui.grid_agents_only
+  const hidden = React.useMemo(
+    () => new Set(ui.grid_hidden_hosts),
+    [ui.grid_hidden_hosts]
   )
 
-  const toggleAgentsOnly = () =>
-    setAgentsOnly((v) => {
-      lsSet(AGENTS_ONLY_KEY, v ? "0" : "1")
-      return !v
-    })
+  // Ephemeral multi-selection (not persisted): keys of selected cells.
+  const [selected, setSelected] = React.useState<Set<string>>(new Set())
+  const [renameTarget, setRenameTarget] = React.useState<GridPane | null>(null)
+  const [renameValue, setRenameValue] = React.useState("")
+  const [closeTargets, setCloseTargets] = React.useState<GridPane[] | null>(
+    null
+  )
 
   const gridQuery = useQuery({
     queryKey: qk.grid,
@@ -53,13 +86,58 @@ export function GridTab({
   })
   const data = gridQuery.data
   const error = gridQuery.isError ? (gridQuery.error as Error).message : null
+  const reload = gridQuery.refetch
 
   const all = data?.panes ?? null
-  const panes = React.useMemo(
-    () => (all && agentsOnly ? all.filter((p) => p.has_agent) : all),
-    [all, agentsOnly]
-  )
   const hostErrors = data?.errors ?? null
+
+  // The distinct hosts present, for the per-host filter chips (label kept for
+  // display). Only worth showing when more than one host is in play.
+  const hosts = React.useMemo(() => {
+    const m = new Map<string, string>()
+    for (const p of all ?? []) if (!m.has(p.host)) m.set(p.host, p.host_label)
+    return Array.from(m, ([host, label]) => ({ host, label }))
+  }, [all])
+
+  const panes = React.useMemo(
+    () =>
+      all
+        ? all.filter(
+            (p) => (!agentsOnly || p.has_agent) && !hidden.has(p.host)
+          )
+        : null,
+    [all, agentsOnly, hidden]
+  )
+
+  const toggleAgentsOnly = () =>
+    patchUIState({ grid_agents_only: !agentsOnly })
+
+  const toggleHost = (host: string) => {
+    const next = new Set(hidden)
+    if (next.has(host)) next.delete(host)
+    else next.add(host)
+    patchUIState({ grid_hidden_hosts: Array.from(next) })
+  }
+
+  const clearSelection = () => setSelected(new Set())
+  const toggleSelect = (key: string) =>
+    setSelected((prev) => {
+      const next = new Set(prev)
+      if (next.has(key)) next.delete(key)
+      else next.add(key)
+      return next
+    })
+
+  // Header click: plain click focuses the pane in Herdr; ⌘/Ctrl/Shift-click
+  // toggles selection instead.
+  const onCellClick = (e: React.MouseEvent, p: GridPane) => {
+    if (e.metaKey || e.ctrlKey || e.shiftKey) {
+      toggleSelect(cellKey(p))
+      return
+    }
+    clearSelection()
+    void focusPane(p)
+  }
 
   // Focus a pane in the Herdr tab. If it's on another host, switch there first
   // (which reloads the Herdr terminal onto that host), then focus its tab.
@@ -77,19 +155,117 @@ export function GridTab({
     }
   }
 
+  // Close targets: the whole selection if the right-clicked pane is part of it,
+  // otherwise just that pane.
+  const requestClose = (p: GridPane) => {
+    if (selected.has(cellKey(p)) && all) {
+      setCloseTargets(all.filter((x) => selected.has(cellKey(x))))
+    } else {
+      setCloseTargets([p])
+    }
+  }
+
+  const requestRename = (p: GridPane) => {
+    setRenameTarget(p)
+    setRenameValue(p.workspace_label || "")
+  }
+
+  const submitRename = async () => {
+    const p = renameTarget
+    if (!p) return
+    const label = renameValue.trim()
+    setRenameTarget(null)
+    if (!p.workspace_id || !label || label === p.workspace_label) return
+    try {
+      await api.gridRename(p.host, p.workspace_id, label)
+      reload()
+    } catch (e) {
+      toast.error(`rename failed: ${(e as Error).message}`)
+    }
+  }
+
+  const doClose = async (targets: GridPane[]) => {
+    setCloseTargets(null)
+    clearSelection()
+    try {
+      const res = await api.gridClose(
+        targets.map((t) => ({ host: t.host, pane_id: t.pane_id }))
+      )
+      reload()
+      const nErr = res.errors ? Object.keys(res.errors).length : 0
+      if (nErr) toast.error(`close failed for ${nErr} pane${nErr === 1 ? "" : "s"}`)
+    } catch (e) {
+      toast.error(`close failed: ${(e as Error).message}`)
+    }
+  }
+
   return (
     <div className="flex min-h-0 flex-1 flex-col">
       <div className="flex shrink-0 flex-wrap items-center gap-2 border-border border-b px-2 py-1.5">
-        <span className="text-muted-foreground text-xs">
-          {panes
-            ? `${panes.length} pane${panes.length === 1 ? "" : "s"}${
-                agentsOnly && all ? ` of ${all.length}` : ""
-              }`
-            : ""}
-        </span>
-        {gridQuery.isFetching && (
-          <Loader2 className="size-3 animate-spin text-muted-foreground" />
+        {selected.size > 0 ? (
+          <>
+            <span className="text-foreground text-xs">
+              {selected.size} selected
+            </span>
+            <button
+              type="button"
+              onClick={() =>
+                all &&
+                setCloseTargets(all.filter((x) => selected.has(cellKey(x))))
+              }
+              className="rounded border border-bad/50 px-1.5 py-0.5 text-[11px] text-bad hover:bg-accent"
+            >
+              Close
+            </button>
+            <button
+              type="button"
+              onClick={clearSelection}
+              className="rounded border border-border px-1.5 py-0.5 text-[11px] text-muted-foreground hover:text-foreground"
+            >
+              Clear
+            </button>
+          </>
+        ) : (
+          <span className="text-muted-foreground text-xs">
+            {panes
+              ? `${panes.length} pane${panes.length === 1 ? "" : "s"}${
+                  panes.length !== (all?.length ?? 0)
+                    ? ` of ${all?.length}`
+                    : ""
+                }`
+              : ""}
+          </span>
         )}
+
+        {/* Per-host filter chips (only when more than one host is present). */}
+        {hosts.length > 1 &&
+          hosts.map((h) => {
+            const on = !hidden.has(h.host)
+            return (
+              <button
+                key={h.host}
+                type="button"
+                onClick={() => toggleHost(h.host)}
+                aria-pressed={on}
+                className={cn(
+                  "flex items-center gap-1.5 rounded-full border px-2 py-0.5 text-[11px] transition-colors",
+                  on
+                    ? "border-primary/40 bg-accent text-foreground"
+                    : "border-border text-muted-foreground hover:text-foreground"
+                )}
+                title={on ? `Hide ${h.label} panes` : `Show ${h.label} panes`}
+              >
+                <span
+                  className={cn(
+                    "size-2 rounded-full",
+                    on ? "bg-primary" : "bg-muted-foreground/40"
+                  )}
+                />
+                {h.label}
+              </button>
+            )
+          })}
+
         <button
           type="button"
           onClick={toggleAgentsOnly}
@@ -138,14 +314,16 @@ export function GridTab({
           <div className="empty">loading panes…</div>
         ) : panes.length === 0 ? (
           <div className="empty">
-            {agentsOnly ? "no agent panes" : "no panes"}
+            {agentsOnly || hidden.size ? "no panes match the filters" : "no panes"}
           </div>
         ) : (
           panes.map((p) => (
             <GridCell
-              key={`${p.host}|${p.pane_id}`}
+              key={cellKey(p)}
               pane={p}
               active={active}
+              selected={selected.has(cellKey(p))}
+              selectionCount={selected.size}
               focused={
                 p.host === activeHost
                   ? activePaneID
@@ -153,15 +331,80 @@ export function GridTab({
                     : !!p.focused
                   : false
               }
-              onFocus={() => focusPane(p)}
+              onClick={(e) => onCellClick(e, p)}
+              onRename={() => requestRename(p)}
+              onClose={() => requestClose(p)}
             />
           ))
         )}
       </div>
 
       <div className="hint">
-        each cell is a live terminal · click a header to focus it in Herdr
+        click a header to focus in Herdr · ⌘/Ctrl-click to select · right-click
+        for rename / close
       </div>
+
+      {/* rename the workspace (relabels every pane grouped under it on that host) */}
+      <Dialog
+        open={renameTarget != null}
+        onOpenChange={(o) => !o && setRenameTarget(null)}
+      >
+        <DialogContent className="sm:max-w-sm">
+          <DialogHeader>
+            <DialogTitle>Rename workspace</DialogTitle>
+          </DialogHeader>
+          <Input
+            autoFocus
+            placeholder={renameTarget?.workspace_id || "workspace"}
+            value={renameValue}
+            onChange={(e) => setRenameValue(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === "Enter") submitRename()
+            }}
+          />
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setRenameTarget(null)}>
+              Cancel
+            </Button>
+            <Button onClick={submitRename}>Rename</Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* close confirmation — terminates the pane(s) and any agent in them */}
+      <AlertDialog
+        open={closeTargets != null}
+        onOpenChange={(o) => !o && setCloseTargets(null)}
+      >
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>
+              {closeTargets && closeTargets.length > 1
+                ? `Close ${closeTargets.length} panes?`
+                : "Close pane?"}
+            </AlertDialogTitle>
+            <AlertDialogDescription>
+              {closeTargets && closeTargets.length === 1
+                ? [
+                    closeTargets[0].host_label,
+                    closeTargets[0].workspace_label,
+                    closeTargets[0].agent,
+                  ]
+                    .filter(Boolean)
+                    .join(" · ") || closeTargets[0].pane_id
+                : "This terminates the selected terminals and any agents running in them."}
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel>Cancel</AlertDialogCancel>
+            <AlertDialogAction
+              onClick={() => closeTargets && doClose(closeTargets)}
+            >
+              Close
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
     </div>
   )
 }
@@ -172,20 +415,28 @@ function frameId(host: string, terminalID: string) {
   return `gridterm-${host.replace(/[^a-zA-Z0-9_-]/g, "_")}-${terminalID}`
 }
 
-// GridCell renders one pane: a clickable header plus a lazily-mounted terminal.
-// The terminal iframe is only created once the cell scrolls into view (so a long
-// grid doesn't spawn dozens of ttyds at once), and a keepalive ping keeps it
-// from being reaped while visible.
+// GridCell renders one pane: a clickable header (right-click for actions) plus a
+// lazily-mounted terminal. The terminal iframe is only created once the cell
+// scrolls into view (so a long grid doesn't spawn dozens of ttyds at once) and
+// only while the Grid tab is active.
 function GridCell({
   pane: p,
   active,
+  selected,
+  selectionCount,
   focused,
-  onFocus,
+  onClick,
+  onRename,
+  onClose,
 }: {
   pane: GridPane
   active: boolean
+  selected: boolean
+  selectionCount: number
   focused: boolean
-  onFocus: () => void
+  onClick: (e: React.MouseEvent) => void
+  onRename: () => void
+  onClose: () => void
 }) {
   const id = frameId(p.host, p.terminal_id)
   const bodyRef = React.useRef<HTMLDivElement>(null)
@@ -268,26 +519,40 @@ function GridCell({
   ]
     .filter(Boolean)
     .join("\n")
+  const closeLabel =
+    selected && selectionCount > 1 ? `Close ${selectionCount} panes` : "Close pane"
 
   return (
-    <div className={cn("termcell", focused && "focused")}>
-      <button
-        type="button"
-        className="termcell-head"
-        title={`${tip}\n\nclick to focus in Herdr`}
-        onClick={onFocus}
-      >
-        <span className="termcell-host">{p.host_label}</span>
-        <span className="termcell-title">
-          {title}
-          {tabLabel ? ` · ${tabLabel}` : ""}
-        </span>
-        {p.has_agent && (
-          <span className={cn("termcell-agent", p.agent_status)}>
-            ● {p.agent || "agent"}
-          </span>
-        )}
-      </button>
+    <div className={cn("termcell", focused && "focused", selected && "selected")}>
+      <ContextMenu>
+        <ContextMenuTrigger asChild>
+          <button
+            type="button"
+            className="termcell-head"
+            title={`${tip}\n\nclick to focus in Herdr · ⌘/Ctrl-click to select`}
+            onClick={onClick}
+          >
+            <span className="termcell-host">{p.host_label}</span>
+            <span className="termcell-title">
+              {title}
+              {tabLabel ? ` · ${tabLabel}` : ""}
+            </span>
+            {p.has_agent && (
+              <span className={cn("termcell-agent", p.agent_status)}>
+                ● {p.agent || "agent"}
+              </span>
+            )}
+          </button>
+        </ContextMenuTrigger>
+        <ContextMenuContent>
+          <ContextMenuItem onSelect={onRename}>
+            Rename workspace…
+          </ContextMenuItem>
+          <ContextMenuItem variant="destructive" onSelect={onClose}>
+            {closeLabel}
+          </ContextMenuItem>
+        </ContextMenuContent>
+      </ContextMenu>
       <div ref={bodyRef} className="termcell-body">
         {src ? (
           <iframe

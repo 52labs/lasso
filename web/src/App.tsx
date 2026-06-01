@@ -1,7 +1,6 @@
 import { ChevronLeft, ChevronRight } from "lucide-react"
 import * as React from "react"
 import type { Layout, PanelImperativeHandle } from "react-resizable-panels"
-import { AgentsTab } from "@/components/AgentsTab"
 import { BrowserTab } from "@/components/BrowserTab"
 import { CreateAgentDialog } from "@/components/CreateAgentDialog"
 import { FilesPanel } from "@/components/FilesPanel"
@@ -18,11 +17,12 @@ import {
 import { Toaster } from "@/components/ui/sonner"
 import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import { AppProvider, lsGet, lsSet } from "@/lib/app-store"
+import { patchUIState, useUIState } from "@/lib/ui-state"
 import { getQueryParam, setQueryParam } from "@/lib/url"
 import { cn } from "@/lib/utils"
 
 type LeftView = "herdr" | "grid" | "settings"
-type RightView = "files" | "scratch" | "browser" | "terminal" | "agents"
+type RightView = "files" | "scratch" | "browser" | "terminal"
 
 const LEFT_VIEWS: LeftView[] = ["herdr", "grid", "settings"]
 
@@ -67,6 +67,7 @@ function Shell() {
   const [collapsed, setCollapsed] = React.useState(false)
   const [diffDirty, setDiffDirty] = React.useState(0)
   const rightPanel = React.useRef<PanelImperativeHandle>(null)
+  const ui = useUIState()
 
   const savedLayout = React.useMemo<Layout | undefined>(() => {
     try {
@@ -103,11 +104,15 @@ function Shell() {
     return () => window.removeEventListener("popstate", onPop)
   }, [switchLeft])
 
-  // Restore the persisted collapse state once the panel is mounted.
+  // Restore the persisted (SQLite-backed) collapse state once the prefs load.
+  // Applied a single time — after that the panel's own resize events are the
+  // source of truth (and persist back via onResize below).
+  const collapseApplied = React.useRef(false)
   React.useEffect(() => {
-    if (lsGet("sidebarCollapsed") === "1") rightPanel.current?.collapse()
-    // run once on mount
-  }, [])
+    if (collapseApplied.current || ui.sidebar_collapsed == null) return
+    collapseApplied.current = true
+    if (ui.sidebar_collapsed) rightPanel.current?.collapse()
+  }, [ui.sidebar_collapsed])
 
   return (
     <div className="relative h-full w-full">
@@ -135,7 +140,9 @@ function Shell() {
               <TabsTrigger value="grid" className={tabClass}>
                 Grid
               </TabsTrigger>
-              <TabsTrigger value="settings" className={tabClass}>
+              {/* Settings sits at the far right of the row; Herdr + Grid stay
+                  together on the left. */}
+              <TabsTrigger value="settings" className={cn(tabClass, "ml-auto")}>
                 Settings
               </TabsTrigger>
               {collapsed && (
@@ -184,7 +191,7 @@ function Shell() {
           onResize={(size) => {
             const c = size.asPercentage < 0.05
             setCollapsed((prev) => (prev === c ? prev : c))
-            lsSet("sidebarCollapsed", c ? "1" : "0")
+            patchUIState({ sidebar_collapsed: c })
           }}
           className="relative flex h-full min-h-0 flex-col border-border border-l bg-card"
         >
@@ -220,9 +227,6 @@ function Shell() {
                 <TabsTrigger value="terminal" className={tabClass}>
                   Terminal
                 </TabsTrigger>
-                <TabsTrigger value="agents" className={tabClass}>
-                  Agents
-                </TabsTrigger>
               </div>
               <button
                 type="button"
@@ -254,12 +258,6 @@ function Shell() {
                   title="Terminal (outside herdr)"
                   suppressContext={false}
                   hidden={rightView !== "terminal"}
-                />
-              </Pane>
-              <Pane show={rightView === "agents"}>
-                <AgentsTab
-                  active={rightView === "agents"}
-                  onFocusAgent={() => switchLeft("herdr")}
                 />
               </Pane>
             </div>
