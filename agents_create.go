@@ -420,19 +420,15 @@ func serveCreateAgent(w http.ResponseWriter, r *http.Request) {
 		_ = cur.WriteFile(filepath.Join(rec.WorkDir, "NOTES.md"), []byte(rec.Notes+"\n"), 0o644)
 	}
 
-	// Launch: run the setup script (if any), then the agent command, in the
-	// root pane's shell — the equivalent of the `herdr pane run` recipe.
+	// Launch: run the setup script (if any), then the agent command, in the root
+	// pane's shell — the equivalent of the `herdr pane run` recipe. Done in a
+	// goroutine (so create returns immediately) that first waits for the shell to
+	// settle: a freshly-spawned pane is still sourcing its rc (mise/fnox, etc.,
+	// slow over SSH on a remote host) and types sent into it before it's ready get
+	// their leading characters eaten. The backend is captured so the launch always
+	// targets the host the agent was created on, even if the active host changes.
 	if rootPane != "" {
-		if s := strings.TrimSpace(setup); s != "" {
-			paneRun(rootPane, s)
-		}
-		paneRun(rootPane, agentCommand(req.Agent, rec.PlanMode, agentPrompt(rec)))
-		// Both claude and codex show a per-directory trust dialog at boot that
-		// their --dangerously-* flags do NOT bypass, leaving the agent blocked.
-		// Auto-accept it in the background so the agent boots straight into the
-		// task; the prompt rides along as a CLI arg, so the agent proceeds with it
-		// once trust is granted.
-		go confirmAgentTrust(rootPane)
+		go launchAgentInPane(cur, rootPane, setup, agentCommand(req.Agent, rec.PlanMode, agentPrompt(rec)))
 	}
 
 	// Persist this host's remembered selections, then append the record. Errors
@@ -682,10 +678,66 @@ func agentCommand(agent string, planMode bool, prompt string) string {
 	}
 }
 
+// launchAgentInPane runs the optional setup script then the agent command in a
+// freshly-created pane, then auto-accepts the agent's trust dialog. It first
+// waits for the pane's shell to settle (waitPaneReady): a new pane is still
+// sourcing its rc, and characters typed before it's ready get their leading
+// bytes eaten (e.g. "bun i" arriving as "i"). Runs on b — the backend the agent
+// was created on — so it never targets the wrong host if the active one changes.
+func launchAgentInPane(b Backend, paneID, setup, agentCmd string) {
+	waitPaneReady(b, paneID)
+	if s := strings.TrimSpace(setup); s != "" {
+		paneRun(b, paneID, s)
+	}
+	paneRun(b, paneID, agentCmd)
+	// Both claude and codex show a per-directory trust dialog at boot that their
+	// --dangerously-* flags do NOT bypass, leaving the agent blocked. Auto-accept
+	// it so the agent boots straight into the task (the prompt rode along as a CLI
+	// arg, so it proceeds once trust is granted).
+	confirmAgentTrust(b, paneID)
+}
+
+// waitPaneReady blocks until the pane's visible output stops changing (the shell
+// finished sourcing its rc and settled at a prompt) or a timeout elapses, so the
+// command we type next isn't raced by shell startup. Prompt-agnostic: it watches
+// for the screen to stabilize rather than matching any particular prompt string.
+func waitPaneReady(b Backend, paneID string) {
+	deadline := time.Now().Add(10 * time.Second)
+	var prev string
+	stable := 0
+	for time.Now().Before(deadline) {
+		time.Sleep(300 * time.Millisecond)
+		res, err := b.HerdrCall("pane.read", map[string]any{
+			"pane_id": paneID,
+			"source":  "visible",
+		})
+		if err != nil {
+			continue
+		}
+		var r struct {
+			Read struct {
+				Text string `json:"text"`
+			} `json:"read"`
+		}
+		if json.Unmarshal(res, &r) != nil {
+			continue
+		}
+		t := strings.TrimRight(r.Read.Text, " \t\n")
+		if t != "" && t == prev {
+			if stable++; stable >= 2 { // ~600ms unchanged → settled
+				return
+			}
+		} else {
+			stable = 0
+		}
+		prev = t
+	}
+}
+
 // paneRun sends a command line into a pane's shell (text + Enter) — the
 // pane.send_text behind `herdr pane run`.
-func paneRun(paneID, command string) {
-	_, _ = herdrCall("pane.send_text", map[string]any{
+func paneRun(b Backend, paneID, command string) {
+	_, _ = b.HerdrCall("pane.send_text", map[string]any{
 		"pane_id": paneID,
 		"text":    command + "\n",
 	})
@@ -698,13 +750,13 @@ func paneRun(paneID, command string) {
 // agent sits blocked. Polls rather than sleeping a fixed time so it survives a
 // slow setup script running before the agent; if the dir is already trusted the
 // dialog never appears and this simply times out without sending anything.
-func confirmAgentTrust(paneID string) {
+func confirmAgentTrust(b Backend, paneID string) {
 	deadline := time.Now().Add(30 * time.Second)
 	for time.Now().Before(deadline) {
 		time.Sleep(500 * time.Millisecond)
-		if paneShowsTrustPrompt(paneID) {
+		if paneShowsTrustPrompt(b, paneID) {
 			// Enter confirms the highlighted default ("Yes").
-			_, _ = herdrCall("pane.send_text", map[string]any{
+			_, _ = b.HerdrCall("pane.send_text", map[string]any{
 				"pane_id": paneID,
 				"text":    "\r",
 			})
@@ -715,8 +767,8 @@ func confirmAgentTrust(paneID string) {
 
 // paneShowsTrustPrompt reports whether the pane's visible screen currently shows
 // claude's or codex's directory-trust dialog.
-func paneShowsTrustPrompt(paneID string) bool {
-	res, err := herdrCall("pane.read", map[string]any{
+func paneShowsTrustPrompt(b Backend, paneID string) bool {
+	res, err := b.HerdrCall("pane.read", map[string]any{
 		"pane_id": paneID,
 		"source":  "visible",
 	})
