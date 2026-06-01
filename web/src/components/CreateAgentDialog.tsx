@@ -55,6 +55,7 @@ function generateBranchName(title: string): string {
 const fieldClass =
   "w-full rounded-lg border border-input bg-background px-2.5 py-1.5 text-sm outline-none transition-colors placeholder:text-muted-foreground focus-visible:border-ring focus-visible:ring-3 focus-visible:ring-ring/50"
 const labelClass = "font-medium text-muted-foreground text-xs"
+const imagePathRE = /\/[\w\-/.]+\.(?:png|jpe?g|gif|webp)/gi
 
 function Field({
   label,
@@ -73,6 +74,10 @@ function Field({
       {children}
     </div>
   )
+}
+
+function extractImagePaths(text: string): string[] {
+  return [...new Set(text.match(imagePathRE) || [])]
 }
 
 export function CreateAgentDialog({
@@ -121,9 +126,11 @@ export function CreateAgentDialog({
   const [autoBranch, setAutoBranch] = React.useState("")
   const [agent, setAgent] = React.useState("claude")
   const [description, setDescription] = React.useState("")
+  const [pastingImage, setPastingImage] = React.useState(false)
   const [planMode, setPlanMode] = React.useState(false)
   const [planTouched, setPlanTouched] = React.useState(false)
   const [files, setFiles] = React.useState<File[]>([])
+  const descriptionRef = React.useRef<HTMLTextAreaElement>(null)
 
   // Load config + repos when the dialog opens. We deliberately seed only on the
   // open transition, so `config` is read once and not in the dep list.
@@ -191,9 +198,53 @@ export function CreateAgentDialog({
     if (!planTouched) setPlanMode(v.trim().length > 0)
   }
 
+  const onDescriptionPaste = async (
+    e: React.ClipboardEvent<HTMLTextAreaElement>
+  ) => {
+    const item = Array.from(e.clipboardData?.items ?? []).find(
+      (it) => it.kind === "file" && it.type.startsWith("image/")
+    )
+    if (!item) return
+    const file = item.getAsFile()
+    if (!file) return
+
+    e.preventDefault()
+    setPastingImage(true)
+    try {
+      const { path } = await api.pasteImage(file)
+      const textarea = descriptionRef.current
+      if (!textarea) {
+        onDescriptionChange(description + (description ? "\n" : "") + path)
+        return
+      }
+
+      const start = textarea.selectionStart
+      const end = textarea.selectionEnd
+      const before = description.slice(0, start)
+      const after = description.slice(end)
+      const prefix = before && !before.endsWith("\n") ? "\n" : ""
+      const suffix = after && !after.startsWith("\n") ? "\n" : ""
+      const inserted = `${prefix}${path}${suffix}`
+      const next = before + inserted + after
+      onDescriptionChange(next)
+      requestAnimationFrame(() => {
+        textarea.focus()
+        const cursor = before.length + inserted.length
+        textarea.setSelectionRange(cursor, cursor)
+      })
+    } catch (err) {
+      toast.error("Failed to paste image", {
+        description: err instanceof Error ? err.message : String(err),
+      })
+    } finally {
+      setPastingImage(false)
+    }
+  }
+
   const reset = () => {
     setTitle("")
     setDescription("")
+    setPastingImage(false)
     setBranchName("")
     setAutoBranch("")
     setFiles([])
@@ -203,7 +254,10 @@ export function CreateAgentDialog({
   }
 
   const canSubmit =
-    !submitting && title.trim().length > 0 && (type === "scratch" || !!repo)
+    !submitting &&
+    !pastingImage &&
+    title.trim().length > 0 &&
+    (type === "scratch" || !!repo)
 
   const submit = async () => {
     if (!canSubmit) return
@@ -254,6 +308,7 @@ export function CreateAgentDialog({
     const p = prefix.trim().replace(/\/+$/, "")
     return p && raw ? `${p}/${raw}` : raw
   })()
+  const pastedImagePaths = extractImagePaths(description)
 
   return (
     <Dialog open={open} onOpenChange={setOpen}>
@@ -346,26 +401,67 @@ export function CreateAgentDialog({
             </Field>
 
             <Field label="Description" htmlFor="agent-description">
-              <textarea
-                id="agent-description"
-                className={cn(fieldClass, "resize-none")}
-                rows={3}
-                value={description}
-                onChange={(e) => onDescriptionChange(e.target.value)}
-                placeholder="Optional — fills the agent's first prompt. If set, the agent starts in plan mode."
-              />
+              <div className="flex flex-col gap-2">
+                <div className="relative">
+                  <textarea
+                    ref={descriptionRef}
+                    id="agent-description"
+                    className={cn(
+                      fieldClass,
+                      "resize-none",
+                      pastingImage && "opacity-50"
+                    )}
+                    rows={3}
+                    value={description}
+                    onChange={(e) => onDescriptionChange(e.target.value)}
+                    onPaste={onDescriptionPaste}
+                    disabled={pastingImage}
+                    placeholder="Optional — fills the agent's first prompt. If set, the agent starts in plan mode."
+                  />
+                  {pastingImage && (
+                    <div className="absolute inset-0 flex items-center justify-center rounded-lg bg-background/60 text-muted-foreground text-sm">
+                      Uploading image…
+                    </div>
+                  )}
+                </div>
+                {pastedImagePaths.length > 0 && (
+                  <div className="flex flex-wrap gap-2">
+                    {pastedImagePaths.map((path) => (
+                      <a
+                        key={path}
+                        href={api.fileURL(path)}
+                        target="_blank"
+                        rel="noreferrer"
+                        className="block rounded border border-border bg-card p-1 transition-opacity hover:opacity-80"
+                      >
+                        <img
+                          src={api.fileURL(path)}
+                          alt={path}
+                          className="h-16 w-auto max-w-32 object-contain"
+                        />
+                      </a>
+                    ))}
+                  </div>
+                )}
+              </div>
             </Field>
 
-            <label className="flex cursor-pointer items-center gap-2">
+            <div className="flex items-center gap-2">
               <Checkbox
+                id="agent-plan-mode"
                 checked={planMode}
                 onCheckedChange={(v) => {
                   setPlanMode(v === true)
                   setPlanTouched(true)
                 }}
               />
-              <span className="text-sm">Start in plan mode</span>
-            </label>
+              <label
+                htmlFor="agent-plan-mode"
+                className="cursor-pointer text-sm"
+              >
+                Start in plan mode
+              </label>
+            </div>
 
             {type === "git" && (
               <>
