@@ -467,6 +467,15 @@ export function CreateAgentDialog({
                   setPlanMode(v === true)
                   setPlanTouched(true)
                 }}
+                // Checkboxes toggle on Space by ARIA convention; this form is
+                // otherwise Enter-driven, so accept Enter to toggle too.
+                onKeyDown={(e) => {
+                  if (e.key === "Enter") {
+                    e.preventDefault()
+                    setPlanMode((v) => !v)
+                    setPlanTouched(true)
+                  }
+                }}
               />
               <label
                 htmlFor="agent-plan-mode"

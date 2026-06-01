@@ -31,7 +31,7 @@ import { type GridPane, api } from "@/lib/api"
 import { useApp } from "@/lib/app-store"
 import { tilde } from "@/lib/format"
 import { qk } from "@/lib/query"
-import { bootTermFrame } from "@/lib/terminal"
+import { bootTermFrame, focusHerdrTerminal } from "@/lib/terminal"
 import { GRID_FRAME_CLASS } from "@/lib/theme"
 import { patchUIState, useUIState } from "@/lib/ui-state"
 import { cn } from "@/lib/utils"
@@ -176,6 +176,9 @@ export function GridTab({
       if (p.workspace_id && p.tab_id) await api.focus(p.workspace_id, p.tab_id)
       await api.gridTermRelease(p.host, p.terminal_id)
       onFocusInHerdr()
+      // Surfacing the Herdr tab only focuses the iframe window; hand the
+      // keyboard to xterm too so the user can type without clicking first.
+      focusHerdrTerminal()
     } catch (e) {
       toast.error(`focus failed: ${(e as Error).message}`)
     }
