@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -201,6 +202,29 @@ func (b *remoteBackend) runOut(remoteCmd string) (string, error) {
 		return "", err
 	}
 	return string(out), nil
+}
+
+// runStdin runs remoteCmd on the host over the control master, piping stdin and
+// returning stdout; stderr is surfaced on error. Used by the per-host settings
+// provider to drive the remote's sqlite3 against its own ~/.lasso/lasso.db (the
+// SQL rides stdin, never the shell). remoteCmd is the full remote command line
+// (callers wrap it in a login shell when PATH matters).
+func (b *remoteBackend) runStdin(remoteCmd string, stdin []byte) ([]byte, error) {
+	sshArgs := append(b.ctlOpts(), b.alias, remoteCmd)
+	cmd := exec.Command("ssh", sshArgs...)
+	if stdin != nil {
+		cmd.Stdin = bytes.NewReader(stdin)
+	}
+	var errBuf bytes.Buffer
+	cmd.Stderr = &errBuf
+	out, err := cmd.Output()
+	if err != nil {
+		if msg := strings.TrimSpace(errBuf.String()); msg != "" {
+			return nil, fmt.Errorf("%s: %s", b.alias, msg)
+		}
+		return nil, fmt.Errorf("ssh %s: %w", b.alias, err)
+	}
+	return out, nil
 }
 
 func (b *remoteBackend) GitOut(dir string, args ...string) (string, error) {
