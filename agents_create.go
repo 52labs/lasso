@@ -2,6 +2,7 @@ package main
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"math/rand/v2"
@@ -295,19 +296,47 @@ func serveCreateAgent(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
+	rec, err := createAgent(curBackend(), req)
+	if err != nil {
+		var ce *createErr
+		if errors.As(err, &ce) {
+			http.Error(w, ce.Error(), ce.code)
+			return
+		}
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	writeJSON(w, rec)
+}
+
+// createErr carries an HTTP status hint so serveCreateAgent preserves the status
+// codes the handler historically returned; the MCP create_agent tool ignores the
+// code and surfaces only the message.
+type createErr struct {
+	code int
+	err  error
+}
+
+func (e *createErr) Error() string { return e.err.Error() }
+
+// createAgent runs the full New-Agent flow on backend b (host = b.Name()):
+// composes the branch, creates the worktree/workspace, copies repo files, moves
+// attachments, launches the agent in its root pane (async), and persists the
+// record. Shared by serveCreateAgent (active host) and the MCP create_agent tool
+// (any host, via gridHostBackend) — so every herdr/file call goes through b
+// rather than the package-level helpers that always hit the active host.
+func createAgent(b Backend, req createAgentReq) (AgentRecord, error) {
 	req.Title = strings.TrimSpace(req.Title)
 	if req.Title == "" {
-		http.Error(w, "title required", http.StatusBadRequest)
-		return
+		return AgentRecord{}, &createErr{http.StatusBadRequest, errors.New("title required")}
 	}
 	if req.Agent == "" {
 		req.Agent = "claude"
 	}
-	cur := curBackend()
-	host := cur.Name()
+	host := b.Name()
 	// The files-to-copy and setup commands are properties of the repo (and the
 	// scratch default), configured in Settings — not per-agent. Read them from
-	// the active host's OWN settings (its lasso.db, via the provider) so a remote
+	// the target host's OWN settings (its lasso.db, via the provider) so a remote
 	// host's worktree is set up from its own configuration. Best-effort: a setup
 	// we can't read just means none runs, never a failed create.
 	defaults, _ := hostDefaults(host)
@@ -330,10 +359,9 @@ func serveCreateAgent(w http.ResponseWriter, r *http.Request) {
 
 	switch req.Type {
 	case "git":
-		repo := expandTilde(req.Repo)
+		repo := expandTildeOn(b, req.Repo)
 		if repo == "" {
-			http.Error(w, "repo required for a git agent", http.StatusBadRequest)
-			return
+			return AgentRecord{}, &createErr{http.StatusBadRequest, errors.New("repo required for a git agent")}
 		}
 		// Compose the branch from prefix + name (auto-slug fallback), then make it
 		// unique against existing branches in the repo.
@@ -346,7 +374,7 @@ func serveCreateAgent(w http.ResponseWriter, r *http.Request) {
 		if prefix != "" {
 			branch = prefix + "/" + name
 		}
-		branch = uniqueBranch(cur, repo, branch)
+		branch = uniqueBranch(b, repo, branch)
 
 		// Nest the worktree under the repo's name so worktrees from different
 		// repos don't share one flat namespace (and don't collide on slug).
@@ -354,13 +382,13 @@ func serveCreateAgent(w http.ResponseWriter, r *http.Request) {
 		if repoSlug == "" {
 			repoSlug = "repo"
 		}
-		parent := filepath.Join(lassoWorktreesDirFor(cur), repoSlug)
+		parent := filepath.Join(lassoWorktreesDirFor(b), repoSlug)
 		workDir := uniqueChildDir(parent, worktreeDirSlug(branch, slug))
 		base := strings.TrimSpace(req.BaseBranch)
 		if base == "" {
 			base = "HEAD"
 		}
-		res, err := herdrCall("worktree.create", map[string]any{
+		res, err := b.HerdrCall("worktree.create", map[string]any{
 			"cwd":    repo,
 			"branch": branch,
 			"base":   base,
@@ -371,8 +399,7 @@ func serveCreateAgent(w http.ResponseWriter, r *http.Request) {
 			"focus": true,
 		})
 		if err != nil {
-			http.Error(w, "worktree.create: "+err.Error(), http.StatusBadGateway)
-			return
+			return AgentRecord{}, &createErr{http.StatusBadGateway, fmt.Errorf("worktree.create: %w", err)}
 		}
 		ws, pane := parseCreateResult(res)
 		rec.Repo, rec.BaseBranch, rec.Branch = repo, base, branch
@@ -382,7 +409,7 @@ func serveCreateAgent(w http.ResponseWriter, r *http.Request) {
 		// Copy the repo's configured files into the worktree and run its setup
 		// script before the agent (both per-repo settings, keyed by host+repo).
 		rc, _ := hostRepoConfig(host, repo)
-		copyRepoFiles(cur, repo, workDir, rc.CopyFiles)
+		copyRepoFiles(b, repo, workDir, rc.CopyFiles)
 		setup = rc.Setup
 
 	case "scratch":
@@ -390,19 +417,17 @@ func serveCreateAgent(w http.ResponseWriter, r *http.Request) {
 		// the dir itself — two same-titled scratch agents then get distinct dirs
 		// (e.g. hey-boss-a3f9), the way worktrees stay distinct via their branch.
 		// uniqueChildDir still guards the (astronomically unlikely) suffix clash.
-		workDir := uniqueChildDir(lassoScratchDirFor(cur), slug+"-"+randSuffix())
-		if err := cur.MkdirAll(workDir, 0o755); err != nil {
-			http.Error(w, "mkdir "+workDir+": "+err.Error(), http.StatusInternalServerError)
-			return
+		workDir := uniqueChildDir(lassoScratchDirFor(b), slug+"-"+randSuffix())
+		if err := b.MkdirAll(workDir, 0o755); err != nil {
+			return AgentRecord{}, &createErr{http.StatusInternalServerError, fmt.Errorf("mkdir %s: %w", workDir, err)}
 		}
-		res, err := herdrCall("workspace.create", map[string]any{
+		res, err := b.HerdrCall("workspace.create", map[string]any{
 			"cwd":   workDir,
 			"label": req.Title,
 			"focus": true, // land on the new agent's pane as it boots
 		})
 		if err != nil {
-			http.Error(w, "workspace.create: "+err.Error(), http.StatusBadGateway)
-			return
+			return AgentRecord{}, &createErr{http.StatusBadGateway, fmt.Errorf("workspace.create: %w", err)}
 		}
 		ws, pane := parseCreateResult(res)
 		rec.WorkDir, rec.WorkspaceID, rec.RootPane = workDir, ws, pane
@@ -410,14 +435,13 @@ func serveCreateAgent(w http.ResponseWriter, r *http.Request) {
 		setup = defaults.ScratchSetup
 
 	default:
-		http.Error(w, `type must be "git" or "scratch"`, http.StatusBadRequest)
-		return
+		return AgentRecord{}, &createErr{http.StatusBadRequest, errors.New(`type must be "git" or "scratch"`)}
 	}
 
 	// Move staged attachments into the work dir; write notes to NOTES.md.
-	moveAttachments(cur, req.UploadDir, req.Attachments, rec.WorkDir)
+	moveAttachments(b, req.UploadDir, req.Attachments, rec.WorkDir)
 	if rec.Notes != "" {
-		_ = cur.WriteFile(filepath.Join(rec.WorkDir, "NOTES.md"), []byte(rec.Notes+"\n"), 0o644)
+		_ = b.WriteFile(filepath.Join(rec.WorkDir, "NOTES.md"), []byte(rec.Notes+"\n"), 0o644)
 	}
 
 	// Launch: run the setup script (if any), then the agent command, in the root
@@ -428,7 +452,7 @@ func serveCreateAgent(w http.ResponseWriter, r *http.Request) {
 	// their leading characters eaten. The backend is captured so the launch always
 	// targets the host the agent was created on, even if the active host changes.
 	if rootPane != "" {
-		go launchAgentInPane(cur, rootPane, setup, agentCommand(req.Agent, rec.PlanMode, agentPrompt(rec)))
+		go launchAgentInPane(b, rootPane, setup, agentCommand(req.Agent, rec.PlanMode, agentPrompt(rec)))
 	}
 
 	// Persist this host's remembered selections, then append the record. Errors
@@ -440,10 +464,9 @@ func serveCreateAgent(w http.ResponseWriter, r *http.Request) {
 	_ = setLastAgent(host, rec.Agent)
 	_ = setLastAgentType(host, rec.Type)
 	if err := appendAgent(host, rec); err != nil {
-		http.Error(w, "save agent: "+err.Error(), http.StatusInternalServerError)
-		return
+		return AgentRecord{}, &createErr{http.StatusInternalServerError, fmt.Errorf("save agent: %w", err)}
 	}
-	writeJSON(w, rec)
+	return rec, nil
 }
 
 // parseCreateResult pulls the workspace_id and root pane_id out of a

@@ -207,6 +207,13 @@ func main() {
 	mux.HandleFunc("/api/host-update", serveHostUpdate)
 	mux.HandleFunc("/api/host-provision", serveHostProvision)
 	mux.HandleFunc("/api/self-update", serveSelfUpdate)
+	// MCP server: lets an agent session orchestrate other lasso agents over the
+	// Model Context Protocol. Mounted here (before the SPA catch-all) and exempt
+	// from UI_AUTH below — see withAuthExcept. The handler serves both /mcp and
+	// /mcp/… (the Streamable-HTTP transport's own subpaths).
+	mcpHandler := newMCPHandler()
+	mux.Handle("/mcp", mcpHandler)
+	mux.Handle("/mcp/", mcpHandler)
 	dist, err := fs.Sub(distFS, "web/dist")
 	if err != nil {
 		log.Fatalf("dist fs: %v", err)
@@ -221,7 +228,9 @@ func main() {
 		log.Printf("dev:      ON — backend only; run the Vite dev server in web/ for the frontend (mise run dev)")
 	}
 
-	handler := withAuth(mux, authUser, authPass, hasAuth)
+	// /mcp is intentionally unauthenticated (see CLAUDE.md security note); the rest
+	// of the app stays behind UI_AUTH when set.
+	handler := withAuthExcept(mux, authUser, authPass, hasAuth, "/mcp")
 
 	// Bind now (not via ListenAndServe) so dev can fall forward to the next free
 	// port if the requested one is taken. Outside dev a busy port is fatal — we
@@ -2174,6 +2183,25 @@ func withAuth(next http.Handler, user, pass string, enabled bool) http.Handler {
 			return
 		}
 		next.ServeHTTP(w, r)
+	})
+}
+
+// withAuthExcept is withAuth that lets requests under exempt bypass auth. Used to
+// keep /mcp open (its consumers — agent sessions — don't carry UI credentials)
+// while the rest of the app stays gated. A path equal to exempt or under
+// exempt+"/" is matched, so "/mcp" and "/mcp/…" pass but a sibling like
+// "/mcp-foo" does not.
+func withAuthExcept(next http.Handler, user, pass string, enabled bool, exempt string) http.Handler {
+	if !enabled {
+		return next
+	}
+	gated := withAuth(next, user, pass, enabled)
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == exempt || strings.HasPrefix(r.URL.Path, exempt+"/") {
+			next.ServeHTTP(w, r)
+			return
+		}
+		gated.ServeHTTP(w, r)
 	})
 }
 

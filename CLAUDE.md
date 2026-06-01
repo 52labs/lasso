@@ -34,3 +34,4 @@ Tooling is **Biome** (`web/biome.json`) — it replaced Prettier + ESLint. Style
 - Never bind to `0.0.0.0`. Use loopback or the tailscale IP. For non-loopback access set `UI_AUTH=user:pass`.
 - `/api/file` reads arbitrary absolute paths as the running user — safe only on a private tailnet.
 - Running lasso nested inside herdr requires `allow_nested = true` in `~/.config/herdr/config.toml`.
+- The `/mcp` MCP server is **unauthenticated** (exempt from `UI_AUTH` via `withAuthExcept`) — it lets any client that can reach lasso spawn and drive agents. Same trust model as `/api/file`: safe only on loopback / a private tailnet, or behind an edge auth gate (e.g. Cloudflare Access). It introduces no new binding.
