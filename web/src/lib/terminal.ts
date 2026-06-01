@@ -105,6 +105,34 @@ export function wireTerminalIframe(id: string, suppressContext: boolean) {
   if (suppressContext)
     doc.addEventListener("contextmenu", (e) => e.preventDefault(), true)
 
+  // Forward app-level shortcuts (Cmd/Ctrl+<key>) to the parent document so
+  // global handlers fire even while the terminal holds keyboard focus — the
+  // iframe is same-origin, so we can re-dispatch. If a parent listener claims
+  // the combo (preventDefault ⇒ dispatchEvent returns false), mirror that back
+  // into the iframe so neither xterm nor the browser also acts on it. Clones
+  // land on the parent `document`, not this one, so there's no re-entrancy.
+  doc.addEventListener(
+    "keydown",
+    (e: KeyboardEvent) => {
+      if (!(e.metaKey || e.ctrlKey)) return
+      const clone = new KeyboardEvent("keydown", {
+        key: e.key,
+        code: e.code,
+        metaKey: e.metaKey,
+        ctrlKey: e.ctrlKey,
+        altKey: e.altKey,
+        shiftKey: e.shiftKey,
+        bubbles: true,
+        cancelable: true,
+      })
+      if (!document.dispatchEvent(clone)) {
+        e.preventDefault()
+        e.stopPropagation()
+      }
+    },
+    true
+  )
+
   doc.addEventListener(
     "paste",
     async (e: ClipboardEvent) => {
@@ -205,11 +233,20 @@ export function typeIntoHerdr(text: string) {
   pasteIntoTerminal("term", text)
 }
 
-// Hand keyboard focus to the herdr terminal after focusing a pane.
-export function focusHerdrTerminal() {
+// Hand keyboard focus to the herdr terminal (/terminal/) so the user can type
+// into the focused pane without clicking it first. Focuses both the iframe
+// window and xterm's input, and retries while xterm is still (re)connecting —
+// mirrors pasteIntoTerminal. Used after creating/focusing an agent.
+export function focusHerdrTerminal(tries = 0) {
   try {
-    frameWindow("term")?.focus()
+    const w = frameWindow("term")
+    if (w?.term && typeof w.term.focus === "function") {
+      w.focus()
+      w.term.focus()
+      return
+    }
   } catch {
-    /* ignore */
+    /* same-origin; ignore */
   }
+  if (tries < 20) setTimeout(() => focusHerdrTerminal(tries + 1), 100)
 }
