@@ -1080,15 +1080,12 @@ var pasteImageExt = map[string]string{
 	"image/webp": ".webp",
 }
 
-// pasteImageDir is the directory pasted clipboard images are written to,
-// resolved once. Prefers the user cache dir (~/.cache on Linux), falling back
-// to the OS temp dir.
+// pasteImageDir is the directory pasted clipboard images are written to. Kept
+// under lasso's own ~/.lasso/uploads (alongside staged attachment uploads)
+// rather than the OS cache dir, so the images live with the rest of lasso's
+// data and aren't swept by cache cleaners.
 func pasteImageDir() string {
-	base, err := os.UserCacheDir()
-	if err != nil {
-		base = os.TempDir()
-	}
-	return filepath.Join(base, "lasso", "pasted-images")
+	return filepath.Join(lassoUploadsDir(), "pasted-images")
 }
 
 // servePasteImage accepts a raw image body (Content-Type set to the image MIME
@@ -1105,6 +1102,14 @@ func servePasteImage(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "unsupported image content-type "+ct, http.StatusUnsupportedMediaType)
 		return
 	}
+	// Target the selected host (?host=, default active) so the pasted image lands
+	// where the agent will run and the path inserted into the description
+	// resolves on that host.
+	be, err := reqHostBackend(r)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadGateway)
+		return
+	}
 	body, err := io.ReadAll(http.MaxBytesReader(w, r.Body, maxPasteImage))
 	if err != nil {
 		http.Error(w, "read body: "+err.Error(), http.StatusBadRequest)
@@ -1114,14 +1119,14 @@ func servePasteImage(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "empty body", http.StatusBadRequest)
 		return
 	}
-	dir := curBackend().PasteImageDir()
-	if err := curBackend().MkdirAll(dir, 0o755); err != nil {
+	dir := be.PasteImageDir()
+	if err := be.MkdirAll(dir, 0o755); err != nil {
 		http.Error(w, "mkdir: "+err.Error(), http.StatusInternalServerError)
 		return
 	}
 	name := "clipboard-" + time.Now().Format("2006-01-02-150405") + ext
 	path := filepath.Join(dir, name)
-	if err := curBackend().WriteFile(path, body, 0o644); err != nil {
+	if err := be.WriteFile(path, body, 0o644); err != nil {
 		http.Error(w, "write: "+err.Error(), http.StatusInternalServerError)
 		return
 	}

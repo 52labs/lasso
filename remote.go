@@ -252,7 +252,7 @@ func (b *remoteBackend) PasteImageDir() string {
 	if home == "" {
 		home = "/tmp"
 	}
-	return path.Join(home, ".cache", "lasso", "pasted-images")
+	return path.Join(home, ".lasso", "uploads", "pasted-images")
 }
 
 // ---------------------------------------------------------------------------

@@ -450,8 +450,10 @@ export const api = {
       { pane_ids }
     ),
 
-  pasteImage: async (file: Blob): Promise<{ path: string }> => {
-    const r = await fetch("/api/paste-image", {
+  // Write a pasted image to the target host (defaults to active) and return the
+  // path on that host to insert into the description.
+  pasteImage: async (file: Blob, host?: string): Promise<{ path: string }> => {
+    const r = await fetch(withHost("/api/paste-image", host), {
       method: "POST",
       headers: { "Content-Type": file.type || "image/png" },
       body: file,
@@ -501,14 +503,19 @@ export const api = {
       withHost(`/api/repo-branches?path=${encodeURIComponent(path)}`, host)
     ),
 
-  // Stage attachment files before creating the agent; returns the staging dir id
-  // + stored filenames to pass to createAgent.
+  // Stage attachment files on the target host (defaults to active) before
+  // creating the agent; returns the staging dir id + stored filenames to pass to
+  // createAgent, which moves them into the work dir on that same host.
   uploadAgentFiles: async (
-    files: File[]
+    files: File[],
+    host?: string
   ): Promise<{ upload_dir: string; files: string[] }> => {
     const form = new FormData()
     for (const f of files) form.append("files", f, f.name)
-    const r = await fetch("/api/agent-upload", { method: "POST", body: form })
+    const r = await fetch(withHost("/api/agent-upload", host), {
+      method: "POST",
+      body: form,
+    })
     if (!r.ok) throw new Error(await r.text())
     return r.json()
   },

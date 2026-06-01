@@ -354,7 +354,7 @@ func serveCreateAgent(w http.ResponseWriter, r *http.Request) {
 		if repoSlug == "" {
 			repoSlug = "repo"
 		}
-		parent := filepath.Join(lassoWorktreesDir(), repoSlug)
+		parent := filepath.Join(lassoWorktreesDirFor(cur), repoSlug)
 		workDir := uniqueChildDir(parent, worktreeDirSlug(branch, slug))
 		base := strings.TrimSpace(req.BaseBranch)
 		if base == "" {
@@ -390,7 +390,7 @@ func serveCreateAgent(w http.ResponseWriter, r *http.Request) {
 		// the dir itself — two same-titled scratch agents then get distinct dirs
 		// (e.g. hey-boss-a3f9), the way worktrees stay distinct via their branch.
 		// uniqueChildDir still guards the (astronomically unlikely) suffix clash.
-		workDir := uniqueChildDir(lassoScratchDir(), slug+"-"+randSuffix())
+		workDir := uniqueChildDir(lassoScratchDirFor(cur), slug+"-"+randSuffix())
 		if err := cur.MkdirAll(workDir, 0o755); err != nil {
 			http.Error(w, "mkdir "+workDir+": "+err.Error(), http.StatusInternalServerError)
 			return
@@ -581,25 +581,40 @@ func globHasMeta(path string) bool { return strings.ContainsAny(path, "*?[") }
 // onto the remote host over SFTP when one is selected. A plain Rename can't do
 // this: on a remote backend it would look for the local staging path on the
 // remote box and silently drop every attachment.
+// reqHostBackend resolves the backend a request targets via its ?host= param,
+// defaulting to the active host. Used by the upload + paste handlers so an
+// attachment or pasted image lands on the SELECTED host (the one the agent will
+// run on), not wherever the active backend happens to point during form editing.
+func reqHostBackend(r *http.Request) (Backend, error) {
+	host, ok := hostParam(r)
+	if !ok {
+		return nil, fmt.Errorf("host %q not available", host)
+	}
+	return gridHostBackend(host)
+}
+
+// moveAttachments moves staged attachments into the agent's work dir. Staging
+// and the work dir live on the SAME host (cur), so this is a host-local copy
+// (local disk, or SFTP within the remote host) — never a cross-host transfer.
 func moveAttachments(cur Backend, uploadDir string, names []string, dest string) {
 	if uploadDir == "" || len(names) == 0 {
 		return
 	}
-	staging := filepath.Join(lassoUploadsDir(), filepath.Base(uploadDir))
+	staging := filepath.Join(lassoUploadsDirFor(cur), filepath.Base(uploadDir))
 	for _, n := range names {
 		base := filepath.Base(n)
 		if base == "" || base == "." {
 			continue
 		}
-		copyLocalToBackend(cur, filepath.Join(staging, base), filepath.Join(dest, base))
+		copyOnBackend(cur, filepath.Join(staging, base), filepath.Join(dest, base))
 	}
-	_ = os.RemoveAll(staging)
+	_ = cur.RemoveAll(staging)
 }
 
-// copyLocalToBackend streams a file from the lasso-local filesystem to dst on
-// the active backend (the local disk, or a remote host over SFTP).
-func copyLocalToBackend(cur Backend, src, dst string) {
-	in, err := os.Open(src)
+// copyOnBackend copies a file from src to dst, both on the same backend (the
+// local disk, or one remote host over SFTP).
+func copyOnBackend(cur Backend, src, dst string) {
+	in, err := cur.Open(src)
 	if err != nil {
 		return
 	}
@@ -726,13 +741,18 @@ func paneShowsTrustPrompt(paneID string) bool {
 // ---------------------------------------------------------------------------
 
 // serveAgentUpload accepts multipart files into a fresh staging directory under
-// ~/.lasso/uploads and returns its id + the stored filenames. create-agent later
-// moves these into the new agent's work dir. Staging happens on the lasso-local
-// host (the same host the config lives on); create-agent copies them onto the
-// active backend when it moves them.
+// the SELECTED host's ~/.lasso/uploads (?host=, default active) and returns its
+// id + the stored filenames. create-agent later moves these into the new agent's
+// work dir on that same host, so the file never makes a cross-host hop and the
+// flow is identical regardless of which host the agent runs on.
 func serveAgentUpload(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		http.Error(w, "POST required", http.StatusMethodNotAllowed)
+		return
+	}
+	be, err := reqHostBackend(r)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadGateway)
 		return
 	}
 	r.Body = http.MaxBytesReader(w, r.Body, 200<<20)
@@ -741,8 +761,8 @@ func serveAgentUpload(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	id := strconv.FormatInt(time.Now().UnixNano(), 36)
-	staging := filepath.Join(lassoUploadsDir(), id)
-	if err := os.MkdirAll(staging, 0o755); err != nil {
+	staging := filepath.Join(lassoUploadsDirFor(be), id)
+	if err := be.MkdirAll(staging, 0o755); err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
@@ -757,7 +777,7 @@ func serveAgentUpload(w http.ResponseWriter, r *http.Request) {
 			http.Error(w, "open upload: "+err.Error(), http.StatusInternalServerError)
 			return
 		}
-		out, err := os.Create(filepath.Join(staging, name))
+		out, err := be.Create(filepath.Join(staging, name))
 		if err != nil {
 			src.Close()
 			http.Error(w, err.Error(), http.StatusInternalServerError)

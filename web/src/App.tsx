@@ -249,7 +249,7 @@ function Shell() {
     else collapseSidebar()
   }, [expandSidebar, collapseSidebar])
 
-  // ⌘G → Grid, ⌘H → Herdr, ⌘K → pane switcher, ⌘P → toggle the sidebar. Bound
+  // ⌘G → Grid, ⌘H → Herdr, ⌘K → pane switcher, ⌘] → toggle the sidebar. Bound
   // to the Cmd key only
   // (not Ctrl) so it never clobbers terminal control keys like Ctrl-H
   // (backspace). The herdr/shell terminal iframes re-dispatch Cmd-shortcuts to
@@ -265,7 +265,7 @@ function Shell() {
       } else if (k === "h") {
         e.preventDefault()
         switchLeft("herdr")
-      } else if (k === "p") {
+      } else if (k === "]") {
         e.preventDefault()
         toggleSidebar()
       } else if (k === "k") {
