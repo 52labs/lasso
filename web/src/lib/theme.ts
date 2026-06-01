@@ -1,7 +1,29 @@
 import { api, type ThemePayload } from "@/lib/api"
 
-// The terminal iframes whose xterm.js theme we keep in sync with herdr's.
+// The fixed terminal iframes whose xterm.js theme we keep in sync with herdr's
+// (the left "Herdr" terminal and the right shell). The Grid tab's per-pane
+// terminals are matched by class instead — see termFrames.
 const TERM_FRAME_IDS = ["term", "shellframe"]
+
+// GRID_FRAME_CLASS marks each Grid cell's terminal iframe so it's re-themed
+// alongside the fixed terminals (its id is dynamic, one per host+pane).
+export const GRID_FRAME_CLASS = "gridterm"
+
+// termFrames collects every terminal iframe the theme should track: the two
+// fixed ones by id, plus every live Grid cell terminal by class.
+function termFrames(): HTMLIFrameElement[] {
+  const out: HTMLIFrameElement[] = []
+  for (const id of TERM_FRAME_IDS) {
+    const el = document.getElementById(id) as HTMLIFrameElement | null
+    if (el) out.push(el)
+  }
+  out.push(
+    ...Array.from(
+      document.querySelectorAll<HTMLIFrameElement>(`iframe.${GRID_FRAME_CLASS}`)
+    )
+  )
+  return out
+}
 
 let lastXtermTheme: Record<string, unknown> | null = null
 
@@ -29,9 +51,7 @@ export function applyTermTheme(
 ) {
   if (!theme) return
   let pending = false
-  for (const id of TERM_FRAME_IDS) {
-    const el = document.getElementById(id) as HTMLIFrameElement | null
-    if (!el) continue
+  for (const el of termFrames()) {
     try {
       const w = el.contentWindow as unknown as {
         term?: { options?: Record<string, unknown> }

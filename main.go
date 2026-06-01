@@ -364,7 +364,15 @@ func startTtydArgv(ctx context.Context, sock, basePath string, cmdArgv []string,
 	// The xterm.js ITheme (background/foreground/cursor + 16 ANSI colors) is
 	// derived from herdr's selected theme, so the terminal palette lines up
 	// with herdr's chrome and the sidebar. Passed to ttyd via `-t theme=<json>`,
-	// which forwards it to xterm.js in the browser.
+	// which forwards it to xterm.js in the browser. Seed from the hub's *live*
+	// theme (the global `theme` is only the startup snapshot) so a terminal
+	// spawned after a theme change — e.g. a Grid cell, or a host-switch respawn —
+	// starts on the current palette rather than flashing the stale one before the
+	// browser re-applies it.
+	xtheme := theme.xtermJSON()
+	if srvHub != nil {
+		xtheme = srvHub.themeSnapshot().xtermJSON()
+	}
 	args := []string{
 		"-i", sock, // private unix socket (ttyd accepts a socket path here)
 		"-b", basePath, // base path so assets/ws resolve under the proxy
@@ -380,7 +388,7 @@ func startTtydArgv(ctx context.Context, sock, basePath string, cmdArgv []string,
 		// dedicated handling that keeps the glyph under an inactive block
 		// readable, so this stays legible.
 		"-t", "cursorInactiveStyle=block",
-		"-t", "theme=" + theme.xtermJSON(),
+		"-t", "theme=" + xtheme,
 	}
 	args = append(args, cmdArgv...)
 	cmd := exec.Command("ttyd", args...)

@@ -8,6 +8,7 @@ import { lsGet, lsSet, useApp } from "@/lib/app-store"
 import { tilde } from "@/lib/format"
 import { qk } from "@/lib/query"
 import { bootTermFrame } from "@/lib/terminal"
+import { GRID_FRAME_CLASS } from "@/lib/theme"
 import { cn } from "@/lib/utils"
 
 // How often the grid re-lists panes across hosts while the tab is open. The
@@ -229,7 +230,13 @@ function GridCell({
 
   const title = p.workspace_label || p.workspace_id || p.pane_id
   const tabLabel = p.tab_label && p.tab_label !== title ? p.tab_label : ""
-  const tip = [p.host_label, p.workspace_label, p.tab_label, p.agent, tilde(p.cwd)]
+  const tip = [
+    p.host_label,
+    p.workspace_label,
+    p.tab_label,
+    p.agent,
+    tilde(p.cwd),
+  ]
     .filter(Boolean)
     .join("\n")
 
@@ -254,7 +261,12 @@ function GridCell({
       </button>
       <div ref={bodyRef} className="termcell-body">
         {src ? (
-          <iframe id={id} src={src} title={`${p.host_label} ${title}`} />
+          <iframe
+            id={id}
+            className={GRID_FRAME_CLASS}
+            src={src}
+            title={`${p.host_label} ${title}`}
+          />
         ) : (
           <div className="termcell-placeholder">
             {failed ? "terminal unavailable" : "…"}
