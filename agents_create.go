@@ -110,7 +110,7 @@ func splitGlobs(spec string) []string {
 
 func serveAgentConfig(w http.ResponseWriter, r *http.Request) {
 	// ?host= picks which host's settings to read/write — its OWN lasso.db, via
-	// the provider (in-process for local, `lasso cli` over SSH for a remote).
+	// the provider (in-process for local, sqlite3 over SSH for a remote).
 	// Defaults to the active host. Settings (defaults) come from that host's db;
 	// last-used selections + the agent log are this lasso's local memory.
 	host, ok := hostParam(r)

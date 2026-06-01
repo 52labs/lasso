@@ -75,7 +75,7 @@ func applyDefaults(p defaultsPatch) error {
 }
 
 // reposList scans repos_root for git repos on be, merged with host's per-repo
-// state from the in-process db. Used by the local path and the `lasso cli`.
+// state from the in-process db.
 func reposList(be Backend, host string) (string, []repoEntry, error) {
 	s, err := getSettings()
 	if err != nil {
