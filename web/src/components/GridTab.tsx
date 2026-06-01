@@ -45,6 +45,11 @@ const POLL_MS = 2500
 // ttyd alive (the server reaps idle attaches after ~30s). Comfortably under that.
 const KEEPALIVE_MS = 18_000
 
+// Grid layout constants — must match .termgrid in index.css (gap) and .termcell
+// (flex-basis) so the measured column count matches what flexbox actually packs.
+const GRID_GAP = 8
+const GRID_MIN_CELL = 360
+
 // cellKey uniquely identifies a pane across hosts (pane ids are only unique
 // within a host).
 const cellKey = (p: GridPane) => `${p.host}|${p.pane_id}`
@@ -69,6 +74,30 @@ export function GridTab({
     () => new Set(ui.grid_hidden_hosts),
     [ui.grid_hidden_hosts]
   )
+
+  // Measure how many columns flexbox will pack so we can place the remainder
+  // (the newest panes, since they sort first) in the top row — which then grows
+  // to fill the full width — rather than leaving a stretched, oversized cell in
+  // the bottom row.
+  const gridRef = React.useRef<HTMLDivElement>(null)
+  const [cols, setCols] = React.useState(1)
+  React.useLayoutEffect(() => {
+    const el = gridRef.current
+    if (!el) return
+    const measure = () => {
+      const content = el.clientWidth - GRID_GAP * 2 // .termgrid horizontal padding
+      setCols(
+        Math.max(
+          1,
+          Math.floor((content + GRID_GAP) / (GRID_MIN_CELL + GRID_GAP))
+        )
+      )
+    }
+    measure()
+    const ro = new ResizeObserver(measure)
+    ro.observe(el)
+    return () => ro.disconnect()
+  }, [])
 
   // Ephemeral multi-selection (not persisted): keys of selected cells.
   const [selected, setSelected] = React.useState<Set<string>>(new Set())
@@ -102,15 +131,12 @@ export function GridTab({
   const panes = React.useMemo(
     () =>
       all
-        ? all.filter(
-            (p) => (!agentsOnly || p.has_agent) && !hidden.has(p.host)
-          )
+        ? all.filter((p) => (!agentsOnly || p.has_agent) && !hidden.has(p.host))
         : null,
     [all, agentsOnly, hidden]
   )
 
-  const toggleAgentsOnly = () =>
-    patchUIState({ grid_agents_only: !agentsOnly })
+  const toggleAgentsOnly = () => patchUIState({ grid_agents_only: !agentsOnly })
 
   const toggleHost = (host: string) => {
     const next = new Set(hidden)
@@ -193,7 +219,8 @@ export function GridTab({
       )
       reload()
       const nErr = res.errors ? Object.keys(res.errors).length : 0
-      if (nErr) toast.error(`close failed for ${nErr} pane${nErr === 1 ? "" : "s"}`)
+      if (nErr)
+        toast.error(`close failed for ${nErr} pane${nErr === 1 ? "" : "s"}`)
     } catch (e) {
       toast.error(`close failed: ${(e as Error).message}`)
     }
@@ -303,7 +330,7 @@ export function GridTab({
         </div>
       )}
 
-      <div className="termgrid">
+      <div ref={gridRef} className="termgrid">
         {error ? (
           <div className="empty">
             cannot list panes
@@ -314,28 +341,40 @@ export function GridTab({
           <div className="empty">loading panes…</div>
         ) : panes.length === 0 ? (
           <div className="empty">
-            {agentsOnly || hidden.size ? "no panes match the filters" : "no panes"}
+            {agentsOnly || hidden.size
+              ? "no panes match the filters"
+              : "no panes"}
           </div>
         ) : (
-          panes.map((p) => (
-            <GridCell
-              key={cellKey(p)}
-              pane={p}
-              active={active}
-              selected={selected.has(cellKey(p))}
-              selectionCount={selected.size}
-              focused={
-                p.host === activeHost
-                  ? activePaneID
-                    ? p.pane_id === activePaneID
-                    : !!p.focused
-                  : false
-              }
-              onClick={(e) => onCellClick(e, p)}
-              onRename={() => requestRename(p)}
-              onClose={() => requestClose(p)}
-            />
-          ))
+          panes.map((p, i) => {
+            // A flex break after the first `remainder` cells puts them in the
+            // top row (where they grow to fill the full width); the older panes
+            // pack into full rows below. No break when the count divides evenly.
+            const remainder = cols > 0 ? panes.length % cols : 0
+            const breakHere =
+              remainder > 0 && remainder < panes.length && i === remainder - 1
+            return (
+              <React.Fragment key={cellKey(p)}>
+                <GridCell
+                  pane={p}
+                  active={active}
+                  selected={selected.has(cellKey(p))}
+                  selectionCount={selected.size}
+                  focused={
+                    p.host === activeHost
+                      ? activePaneID
+                        ? p.pane_id === activePaneID
+                        : !!p.focused
+                      : false
+                  }
+                  onClick={(e) => onCellClick(e, p)}
+                  onRename={() => requestRename(p)}
+                  onClose={() => requestClose(p)}
+                />
+                {breakHere && <div className="termbreak" aria-hidden="true" />}
+              </React.Fragment>
+            )
+          })
         )}
       </div>
 
@@ -520,10 +559,14 @@ function GridCell({
     .filter(Boolean)
     .join("\n")
   const closeLabel =
-    selected && selectionCount > 1 ? `Close ${selectionCount} panes` : "Close pane"
+    selected && selectionCount > 1
+      ? `Close ${selectionCount} panes`
+      : "Close pane"
 
   return (
-    <div className={cn("termcell", focused && "focused", selected && "selected")}>
+    <div
+      className={cn("termcell", focused && "focused", selected && "selected")}
+    >
       <ContextMenu>
         <ContextMenuTrigger asChild>
           <button

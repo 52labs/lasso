@@ -442,14 +442,19 @@ func gridHostPanes(b Backend, host, hostLabel string) ([]gridPane, error) {
 			Focused:        p.Focused,
 		})
 	}
+	// Newest first: herdr assigns workspaces/tabs monotonically increasing numbers
+	// as they're created (and exposes no timestamps), so a descending sort puts the
+	// most-recently-created workspaces — and within them the newest tabs — at the
+	// top of the grid. Panes are still grouped by host (callers concatenate per
+	// host); this orders within a host.
 	sort.SliceStable(out, func(i, j int) bool {
 		if wi, wj := wss[out[i].WorkspaceID].number, wss[out[j].WorkspaceID].number; wi != wj {
-			return wi < wj
+			return wi > wj
 		}
 		if ti, tj := tabs[out[i].TabID].number, tabs[out[j].TabID].number; ti != tj {
-			return ti < tj
+			return ti > tj
 		}
-		return out[i].PaneID < out[j].PaneID
+		return out[i].PaneID > out[j].PaneID
 	})
 	return out, nil
 }
