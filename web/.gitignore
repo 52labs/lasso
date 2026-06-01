@@ -8,12 +8,13 @@ pnpm-debug.log*
 lerna-debug.log*
 
 node_modules
+dist
 dist-ssr
 *.local
 
-# web/dist is intentionally committed: the Go binary embeds it via
-# //go:embed all:web/dist, so `go build` works without a prior frontend build.
-# `mise run build` regenerates it.
+# web/dist is gitignored (also via the root .gitignore): it's the built bundle
+# the Go binary embeds via //go:embed all:web/dist. Run `mise run build` to
+# regenerate it locally; CI builds it for releases.
 
 # Editor directories and files
 .vscode/*
