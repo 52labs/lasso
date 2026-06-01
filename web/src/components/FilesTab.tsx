@@ -101,6 +101,7 @@ export function FilesTab({
   // The directory currently highlighted as a drag-and-drop upload target.
   const [dropTarget, setDropTarget] = React.useState<string | null>(null)
   const inputRef = React.useRef<HTMLInputElement>(null)
+  const rootRef = React.useRef<HTMLDivElement>(null)
 
   // Keep the path input scrolled to its end — the tail of the path is the
   // useful part — whenever the value changes or the input gets (re)laid out
@@ -155,12 +156,14 @@ export function FilesTab({
     }
   }, [curPath])
 
-  // Poll the visible directories (the root + any expanded ones) every 3s so
-  // files that land after the tree first loaded show up on their own — e.g. an
-  // attachment copied into a fresh agent's work dir a moment after creation,
-  // which the viewer otherwise misses because it listed the dir before the copy.
-  // Updates a directory's cache only when its entries actually changed, so an
-  // idle tree never re-renders.
+  // Poll the root directory every 5s so files that land after the tree first
+  // loaded show up on their own — e.g. an attachment copied into a fresh agent's
+  // work dir a moment after creation, which the viewer otherwise misses because
+  // it listed the dir before the copy. Only the root is polled (where new files
+  // almost always appear); the cache is updated only when its entries actually
+  // changed, so an idle tree never re-renders. Skipped while the tree isn't
+  // visible (Diff subtab, collapsed sidebar → zero width; backgrounded tab) to
+  // avoid needless ReadDir calls (SFTP round-trips on a remote host).
   React.useEffect(() => {
     if (!rootPath) return
     const sameEntries = (a: FileEntry[], b: FileEntry[]) =>
@@ -170,24 +173,23 @@ export function FilesTab({
           e.name === b[i].name && e.dir === b[i].dir && e.size === b[i].size
       )
     const tick = () => {
-      for (const dir of new Set<string>([rootPath, ...expanded])) {
-        api
-          .files(dir)
-          .then((data) => {
-            setChildrenByPath((prev) => {
-              const cur = prev[dir]
-              if (cur && sameEntries(cur, data.entries)) return prev
-              return { ...prev, [dir]: data.entries }
-            })
+      if (document.hidden || !rootRef.current?.clientWidth) return
+      api
+        .files(rootPath)
+        .then((data) => {
+          setChildrenByPath((prev) => {
+            const cur = prev[rootPath]
+            if (cur && sameEntries(cur, data.entries)) return prev
+            return { ...prev, [rootPath]: data.entries }
           })
-          .catch(() => {
-            /* transient (dir gone / host blip); keep the last good listing */
-          })
-      }
+        })
+        .catch(() => {
+          /* transient (dir gone / host blip); keep the last good listing */
+        })
     }
-    const id = setInterval(tick, 3000)
+    const id = setInterval(tick, 5000)
     return () => clearInterval(id)
-  }, [rootPath, expanded])
+  }, [rootPath])
 
   // Fetch a directory's children into the cache (used on expand and refresh).
   const loadDir = React.useCallback(async (dir: string) => {
@@ -363,7 +365,7 @@ export function FilesTab({
   }
 
   return (
-    <div className="flex min-h-0 flex-1 flex-col">
+    <div ref={rootRef} className="flex min-h-0 flex-1 flex-col">
       <header className="flex items-center gap-2 border-border border-b bg-background px-3 py-2">
         <Input
           ref={inputRef}

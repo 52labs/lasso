@@ -449,16 +449,35 @@ type pane struct {
 	AgentStatus   string `json:"agent_status"`
 }
 
-// paneCwd is the best cwd for a pane: herdr's foreground_cwd (the live cwd of
-// whatever process owns the terminal — accurate even when an agent has cd'd
-// away from the shell's launch dir) when herdr can resolve it, else the shell
-// launch cwd. herdr added foreground_cwd in 0.6.5, superseding the viewer's old
-// /proc-scraping workaround.
+// paneCwd is the best cwd for a pane. For a plain shell, herdr's foreground_cwd
+// (the live cwd of whatever process owns the terminal) tracks the user's cd's
+// and wins. For an AGENT pane, the shell launch dir is the agent's project root
+// and is what the file viewer should follow: the agent's foreground process is
+// often a transient subprocess (e.g. a plugin under ~/.claude/plugins/cache)
+// whose cwd would otherwise drag the viewer away from the worktree. So agents
+// prefer the launch cwd, using foreground_cwd only when herdr reports none.
+// (herdr added foreground_cwd in 0.6.5, superseding the viewer's old
+// /proc-scraping workaround.)
 func paneCwd(p pane) string {
+	if p.Agent != "" {
+		if p.Cwd != "" {
+			return p.Cwd
+		}
+		return p.ForegroundCwd
+	}
 	if p.ForegroundCwd != "" {
 		return p.ForegroundCwd
 	}
 	return p.Cwd
+}
+
+// paneCwdUsesForeground reports whether paneCwd returned the foreground cwd
+// rather than the shell launch cwd (drives Active.CwdSource).
+func paneCwdUsesForeground(p pane) bool {
+	if p.Agent != "" {
+		return p.Cwd == "" && p.ForegroundCwd != ""
+	}
+	return p.ForegroundCwd != ""
 }
 
 // pane.list is by far herdr's most expensive method: as of 0.6.5 it resolves
@@ -573,7 +592,7 @@ func fetchActive() (Active, string, error) {
 		PaneID: fp.PaneID, Cwd: paneCwd(*fp), CwdSource: "shell", WorkspaceID: fp.WorkspaceID,
 		TabID: fp.TabID, Agent: fp.Agent, AgentStatus: fp.AgentStatus,
 	}
-	if fp.ForegroundCwd != "" {
+	if paneCwdUsesForeground(*fp) {
 		a.CwdSource = "foreground"
 	}
 	a.TabLabel = tabLabel(fp.TabID)
