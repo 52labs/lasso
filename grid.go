@@ -265,9 +265,13 @@ func serveGridClose(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
+	ctx := r.Context()
 	errs := map[string]string{}
 	closed := 0
-	for _, p := range req.Panes {
+	for i, p := range req.Panes {
+		if i > 0 && !sleepCtx(ctx, closePace) { // breather between panes (see closePane)
+			break
+		}
 		if p.PaneID == "" || !gridHostAllowed(p.Host) {
 			errs[p.PaneID] = "host not available"
 			continue
@@ -277,7 +281,13 @@ func serveGridClose(w http.ResponseWriter, r *http.Request) {
 			errs[p.PaneID] = err.Error()
 			continue
 		}
-		if _, err := b.HerdrCall("pane.close", map[string]any{"pane_id": p.PaneID}); err != nil {
+		// Retry with backoff like serveClose: closing a pane makes herdr recompute
+		// layout, so a burst of single-shot closes races that and fails transiently.
+		closer := func(id string) error {
+			_, err := b.HerdrCall("pane.close", map[string]any{"pane_id": id})
+			return err
+		}
+		if err := closePaneWith(ctx, closer, p.PaneID); err != nil {
 			errs[p.PaneID] = err.Error()
 			continue
 		}

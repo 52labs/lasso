@@ -118,7 +118,9 @@ func lassoConfigPath() string   { return filepath.Join(lassoDir(), "config.yaml"
 // using the local ~/.lasso path on a remote host fails with "permission denied"
 // (the local home may not even exist remotely).
 func lassoDirFor(b Backend) string {
-	if _, ok := b.(*localBackend); ok {
+	// The local backend, or an explicit LASSO_DIR override (tests), resolves the
+	// local ~/.lasso. Only a real remote backend resolves against the remote home.
+	if _, ok := b.(*localBackend); ok || os.Getenv("LASSO_DIR") != "" {
 		return lassoDir()
 	}
 	home, err := b.HomeDir()

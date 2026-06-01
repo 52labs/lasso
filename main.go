@@ -850,13 +850,20 @@ var paneCloser = func(id string) error {
 	return err
 }
 
-// closePane closes one pane, absorbing the two flaky cases: a transient herdr
-// error (retried with exponential backoff) and a pane that's already gone —
-// e.g. cascade-closed when its tab's last sibling was closed — which is treated
-// as success since the goal (pane gone) is met. invalid_request is our own bug,
-// so it fails fast without burning retries. Honors ctx so a client that walks
-// away (closed tab / navigation) doesn't keep us hammering herdr.
+// closePane closes one pane on the active backend (see closePaneWith).
 func closePane(ctx context.Context, id string) error {
+	return closePaneWith(ctx, paneCloser, id)
+}
+
+// closePaneWith closes one pane via closer, absorbing the two flaky cases: a
+// transient herdr error (retried with exponential backoff) and a pane that's
+// already gone — e.g. cascade-closed when its tab's last sibling was closed —
+// which is treated as success since the goal (pane gone) is met. invalid_request
+// is our own bug, so it fails fast without burning retries. Honors ctx so a
+// client that walks away (closed tab / navigation) doesn't keep us hammering
+// herdr. closer is host-specific (the active backend for serveClose, a grid-pool
+// backend for serveGridClose) so the same resilience applies on every host.
+func closePaneWith(ctx context.Context, closer func(string) error, id string) error {
 	var last error
 	for attempt := 0; attempt < closeAttempts; attempt++ {
 		if attempt > 0 {
@@ -868,7 +875,7 @@ func closePane(ctx context.Context, id string) error {
 				return ctx.Err()
 			}
 		}
-		err := paneCloser(id)
+		err := closer(id)
 		if err == nil {
 			return nil
 		}
