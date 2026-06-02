@@ -408,14 +408,16 @@ export function CreateAgentDialog({
     <Dialog open={open} onOpenChange={setOpen}>
       <DialogTrigger asChild>
         {variant === "header" ? (
-          // Compact button for the left column's tab-strip trailing slot.
+          // Prominent (but unfilled) button for the left column's tab-strip
+          // trailing slot — the accent carried by the border + text, with only a
+          // faint tint, so it reads as the row's primary action without a solid fill.
           <button
             type="button"
-            className="my-1 flex shrink-0 items-center gap-1 self-center rounded-md border border-border bg-background px-2 py-0.5 text-[11px] text-muted-foreground transition-colors hover:border-primary hover:text-primary"
+            className="my-1 flex shrink-0 items-center gap-1 self-center rounded-md border border-primary/60 bg-primary/10 px-2.5 py-1 font-medium text-primary text-xs transition-colors hover:border-primary hover:bg-primary/20"
             title="create a new agent (⌘O)"
           >
-            <Plus className="size-3" />
-            <span className="font-medium">New Agent</span>
+            <Plus className="size-3.5" />
+            <span>New Agent</span>
           </button>
         ) : variant === "floating" ? (
           // Mirrors the HostSwitcher pill so the two footer controls read as a

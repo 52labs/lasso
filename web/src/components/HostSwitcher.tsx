@@ -60,13 +60,18 @@ function provisionable(h: HostInfo): boolean {
   return h.reachable && !h.running
 }
 
-// HostSwitcher is a floating control pinned to the bottom-left corner (so it
-// costs no layout space): it lets the app drive a herdr daemon on any
-// compatible ssh-config host as if it were local. It names the active host —
-// the local machine's hostname (laptop icon) or the remote alias (server icon,
-// primary-tinted as a "you are elsewhere" cue). Incompatible/unreachable hosts
-// are listed greyed-out with why.
-export function HostSwitcher() {
+// HostSwitcher lets the app drive a herdr daemon on any compatible ssh-config
+// host as if it were local. It names the active host — the local machine's
+// hostname (laptop icon) or the remote alias (server icon, primary-tinted as a
+// "you are elsewhere" cue). Incompatible/unreachable hosts are listed greyed-out
+// with why. The "nav" variant sits inline in the left tab strip (left of the
+// Herdr tab, menu opening downward); "floating" keeps the old pinned-pill look.
+export function HostSwitcher({
+  variant = "floating",
+}: {
+  variant?: "floating" | "nav"
+}) {
+  const isNav = variant === "nav"
   const { host: liveHost } = useApp()
   const [data, setData] = React.useState<HostsPayload | null>(null)
   const [loading, setLoading] = React.useState(false)
@@ -202,30 +207,41 @@ export function HostSwitcher() {
 
   const remotes = data?.hosts ?? []
 
+  const iconClass = isNav ? "size-3.5" : "size-3"
   return (
-    // Positioning is owned by the footer flex row in App.tsx so the New Agent
-    // pill can sit to this control's right.
     <div className="relative">
       <DropdownMenu open={open} onOpenChange={setOpen}>
         <DropdownMenuTrigger
           disabled={switching}
           title={`Host: ${activeLabel} (click to switch)`}
           className={cn(
-            "flex items-center gap-1 rounded-full border border-border bg-card/90 px-2 py-0.5 text-[11px] text-muted-foreground shadow-md backdrop-blur transition-colors hover:bg-accent hover:text-foreground disabled:opacity-60",
+            isNav
+              ? // Inline nav affordance: borderless, matching the tab strip.
+                "flex shrink-0 items-center gap-1 self-center rounded-md px-2 py-1 text-[13px] text-muted-foreground transition-colors hover:bg-accent hover:text-foreground disabled:opacity-60"
+              : "flex items-center gap-1 rounded-full border border-border bg-card/90 px-2 py-0.5 text-[11px] text-muted-foreground shadow-md backdrop-blur transition-colors hover:bg-accent hover:text-foreground disabled:opacity-60",
             // Tint when remote so it reads as an active "you are elsewhere" badge.
-            isRemote && "border-primary/40 text-foreground"
+            isRemote &&
+              (isNav ? "text-foreground" : "border-primary/40 text-foreground")
           )}
         >
           {switching ? (
-            <Loader2 className="size-3 animate-spin" />
+            <Loader2 className={cn(iconClass, "animate-spin")} />
           ) : isRemote ? (
-            <Server className="size-3 text-primary" />
+            <Server className={cn(iconClass, "text-primary")} />
           ) : (
-            <Laptop className="size-3" />
+            <Laptop className={iconClass} />
           )}
-          <span className="max-w-32 truncate font-medium">{activeLabel}</span>
+          {/* The nav variant is icon-only (host name lives in the menu + tooltip);
+              the floating pill names the active host inline. */}
+          {!isNav && (
+            <span className="max-w-32 truncate font-medium">{activeLabel}</span>
+          )}
         </DropdownMenuTrigger>
-        <DropdownMenuContent align="start" side="top" className="min-w-56">
+        <DropdownMenuContent
+          align="start"
+          side={isNav ? "bottom" : "top"}
+          className="min-w-56"
+        >
           <DropdownMenuLabel className="flex items-center justify-between">
             <span>Host</span>
             <button

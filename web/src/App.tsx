@@ -64,10 +64,12 @@ type TabDef = {
 // truncating the last tab to "Settin…" or forcing a horizontal scroll.
 function FitTabs({
   tabs,
+  leading,
   trailing,
   listClassName,
 }: {
   tabs: TabDef[]
+  leading?: React.ReactNode
   trailing?: React.ReactNode
   listClassName?: string
 }) {
@@ -94,8 +96,10 @@ function FitTabs({
 
   return (
     <TabsList className={cn(stripClass, listClassName)}>
-      {/* Tabs live in their own region; the trailing control stays fixed on the
-          row. no-scrollbar hides the scrollbar so it doesn't steal row height. */}
+      {leading}
+      {/* Tabs live in their own region; the leading/trailing controls stay fixed
+          on the row. no-scrollbar hides the scrollbar so it doesn't steal row
+          height. */}
       <div
         ref={scrollRef}
         className="no-scrollbar relative flex min-w-0 flex-1 overflow-x-auto"
@@ -340,6 +344,7 @@ function Shell() {
                 { value: "herdr", label: "Herdr", icon: Terminal },
                 { value: "grid", label: "Grid", icon: LayoutGrid },
               ]}
+              leading={<HostSwitcher variant="nav" />}
               listClassName="pr-2"
               trailing={
                 // New Agent sits at the far-right of the strip; when the sidebar
@@ -490,11 +495,6 @@ function Shell() {
         onOpenChange={setPaletteOpen}
         onFocusInHerdr={() => switchLeft("herdr")}
       />
-      {leftView === "herdr" && (
-        <div className="fixed bottom-3 left-3 z-40 flex items-center gap-2">
-          <HostSwitcher />
-        </div>
-      )}
     </div>
   )
 }
