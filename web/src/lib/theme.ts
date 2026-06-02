@@ -25,6 +25,95 @@ function termFrames(): HTMLIFrameElement[] {
   return out
 }
 
+// The terminal font stack. JetBrainsMono Nerd Font carries the icon glyphs that
+// TUIs (gh-dash, btop, …) draw with — without it xterm renders "tofu" boxes.
+// The face is vendored as woff2 under web/public/fonts and served at /fonts/*.
+const TERM_FONT_FAMILY = "JetBrainsMono Nerd Font"
+const TERM_FONT_STACK = `"${TERM_FONT_FAMILY}", ui-monospace, monospace`
+const TERM_FONT_STYLE_ID = "herdr-term-font"
+
+// The @font-face must live in the *terminal iframe's* document — a parent
+// stylesheet doesn't cross the iframe boundary. We mirror index.css here so the
+// same family resolves inside ttyd's xterm. Same-origin proxying lets us reach
+// in (see applyTermTheme); /fonts/* is the embedded build's stable URL.
+const TERM_FONT_FACE_CSS = (["Regular", "Bold", "Italic", "BoldItalic"] as const)
+  .map((variant) => {
+    const weight = variant.startsWith("Bold") ? 700 : 400
+    const style = variant.endsWith("Italic") ? "italic" : "normal"
+    return `@font-face{font-family:"${TERM_FONT_FAMILY}";font-style:${style};font-weight:${weight};font-display:swap;src:url("/fonts/JetBrainsMonoNerdFontMono-${variant}.woff2") format("woff2")}`
+  })
+  .join("")
+
+interface FontDoc extends Document {
+  __herdrFontWired?: boolean
+}
+
+// Once the webfont is actually loaded inside the iframe, set xterm's fontFamily.
+// We deliberately set it *after* the load resolves (not before): xterm only
+// rebuilds its glyph atlas when the option value changes, so assigning the final
+// family after the font is ready guarantees a remeasure against real metrics
+// rather than the fallback it would otherwise cache at startup.
+function setTermFontWhenReady(
+  doc: Document,
+  term: { options?: Record<string, unknown> }
+) {
+  const apply = () => {
+    try {
+      if (term.options) term.options.fontFamily = TERM_FONT_STACK
+    } catch {
+      /* private/locked options: never break the terminal */
+    }
+  }
+  const fonts = (doc as Document & { fonts?: FontFaceSet }).fonts
+  if (fonts && typeof fonts.load === "function") {
+    Promise.all([
+      fonts.load(`400 1em "${TERM_FONT_FAMILY}"`),
+      fonts.load(`700 1em "${TERM_FONT_FAMILY}"`),
+    ]).then(apply, apply)
+  } else {
+    setTimeout(apply, 300)
+  }
+}
+
+// applyTermFont injects the Nerd Font @font-face into every terminal iframe and
+// points xterm at it. Mirrors applyTermTheme: iterates the same frames (fixed +
+// Grid cells), and retries while an iframe is still (re)connecting. Each fresh
+// xterm lives in a fresh iframe document, so the per-document guard re-arms on
+// ttyd reconnects.
+export function applyTermFont(tries = 0) {
+  let pending = false
+  for (const el of termFrames()) {
+    try {
+      const doc = el.contentDocument as FontDoc | null
+      if (!doc?.head) {
+        pending = true
+        continue
+      }
+      // Inject the @font-face ASAP (even before xterm is ready) so the browser
+      // starts fetching; idempotent via the style id.
+      if (!doc.getElementById(TERM_FONT_STYLE_ID)) {
+        const style = doc.createElement("style")
+        style.id = TERM_FONT_STYLE_ID
+        style.textContent = TERM_FONT_FACE_CSS
+        doc.head.appendChild(style)
+      }
+      const w = el.contentWindow as unknown as {
+        term?: { options?: Record<string, unknown> }
+      }
+      if (!w?.term?.options) {
+        pending = true
+        continue
+      }
+      if (doc.__herdrFontWired) continue
+      doc.__herdrFontWired = true
+      setTermFontWhenReady(doc, w.term)
+    } catch {
+      /* same-origin: shouldn't throw, but never let it break the caller */
+    }
+  }
+  if (pending && tries < 20) setTimeout(() => applyTermFont(tries + 1), 250)
+}
+
 let lastXtermTheme: Record<string, unknown> | null = null
 
 // applyCSSVars takes the `:root { --bg: …; --accent: … }` block the Go server
@@ -86,4 +175,5 @@ export async function refreshTheme() {
   applyCSSVars(t.css)
   lastXtermTheme = t.xterm
   applyTermTheme(t.xterm, 0)
+  applyTermFont(0)
 }

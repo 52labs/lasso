@@ -1,5 +1,5 @@
 import { api } from "@/lib/api"
-import { applyTermTheme, lastTerminalTheme } from "@/lib/theme"
+import { applyTermFont, applyTermTheme, lastTerminalTheme } from "@/lib/theme"
 
 // Behavior attached to the same-origin ttyd terminal iframes (/terminal/ and
 // /shell/). All of this is ported faithfully from the original index.html —
@@ -263,9 +263,11 @@ export function bootTermFrame(id: string, suppressContext: boolean) {
   if (!el) return () => {}
   const onLoad = () => {
     applyTermTheme(lastTerminalTheme(), 0)
+    applyTermFont(0)
     wireTerminalIframe(id, suppressContext)
   }
   el.addEventListener("load", onLoad)
+  applyTermFont(0) // in case it already loaded
   wireTerminalIframe(id, suppressContext) // in case it already loaded
   return () => el.removeEventListener("load", onLoad)
 }
