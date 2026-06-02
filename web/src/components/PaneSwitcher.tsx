@@ -33,6 +33,7 @@ const haystack = (p: GridPane) =>
     p.agent,
     p.cwd,
     p.pane_id,
+    p.prompt, // full initial prompt — searchable but not shown in the list
   ]
     .filter(Boolean)
     .join(" ")
@@ -136,7 +137,7 @@ export function PaneSwitcher({
           value={query}
           onChange={(e) => setQuery(e.target.value)}
           onKeyDown={onKeyDown}
-          placeholder="Search panes by tab, workspace, host, agent, or path…"
+          placeholder="Search panes by tab, workspace, host, agent, path, or prompt…"
           className="w-full border-border border-b bg-transparent px-4 py-3 text-sm outline-none placeholder:text-muted-foreground"
         />
         <div ref={listRef} className="max-h-80 overflow-y-auto p-1">
@@ -170,6 +171,12 @@ export function PaneSwitcher({
                 </span>
                 <span className="flex w-full items-center gap-2 truncate text-muted-foreground text-xs">
                   <span className="shrink-0">{p.host_label}</span>
+                  {p.workspace_label &&
+                    p.workspace_label !== primaryLabel(p) && (
+                      <span className="shrink-0 truncate">
+                        {p.workspace_label}
+                      </span>
+                    )}
                   {p.cwd && (
                     <span className="truncate font-mono">{tilde(p.cwd)}</span>
                   )}

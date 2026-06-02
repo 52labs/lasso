@@ -63,6 +63,9 @@ export interface GridPane {
   agent_status?: string
   has_agent?: boolean
   focused?: boolean
+  // The agent's initial prompt (creation description). Carried for search only —
+  // the pane switcher matches against it but doesn't display the full text.
+  prompt?: string
 }
 
 export interface GridPayload {
