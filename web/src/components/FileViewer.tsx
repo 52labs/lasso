@@ -7,8 +7,15 @@ import rehypeHighlight from "rehype-highlight"
 import remarkGfm from "remark-gfm"
 import { Button } from "@/components/ui/button"
 import { api } from "@/lib/api"
-import { editorTheme, languageExtension } from "@/lib/codemirror"
+import { useApp } from "@/lib/app-store"
+import {
+  changedLinesHighlight,
+  editorTheme,
+  languageExtension,
+} from "@/lib/codemirror"
+import { changedNewLines } from "@/lib/diff"
 import { isImage, isMarkdown, isPdf } from "@/lib/format"
+import { useDiff } from "@/lib/git"
 
 // Above this size we skip the language extension (and its parsing cost) but
 // still open the file in the editor.
@@ -42,8 +49,34 @@ export function FileViewer({
   const [saveError, setSaveError] = React.useState<string | null>(null)
   // Markdown opens rendered; toggle into the raw editor to make changes.
   const [preview, setPreview] = React.useState(markdown)
+  // Line numbers (1-based) that differ from HEAD, barred gold in the editor when
+  // the working tree is dirty for this file.
+  const [changedLines, setChangedLines] = React.useState<number[]>([])
 
   const dirty = draft != null && text != null && draft !== text
+
+  // Is this file dirty in the working tree? Derive its repo-relative path the
+  // same way FilesPanel does and look it up in the shared (already-polled) diff
+  // metadata. Deleted files aren't viewable, so we ignore that status.
+  const { activeCwd } = useApp()
+  const diffData = useDiff().data ?? null
+  const rel = React.useMemo(() => {
+    if (!activeCwd) return null
+    const root = activeCwd.replace(/\/$/, "")
+    return path.startsWith(`${root}/`) ? path.slice(root.length + 1) : null
+  }, [activeCwd, path])
+  const fileDirty =
+    !binary &&
+    rel != null &&
+    (diffData?.dirty ?? 0) > 0 &&
+    (diffData?.files ?? []).some(
+      (f) =>
+        f.path === rel &&
+        (f.status === "modified" ||
+          f.status === "added" ||
+          f.status === "renamed" ||
+          f.status === "untracked")
+    )
 
   // Fetch the file text (binary previews load straight from the file URL).
   React.useEffect(() => {
@@ -71,6 +104,24 @@ export function FileViewer({
       cancelled = true
     }
   }, [path, binary])
+
+  // Fetch the working-tree diff (vs HEAD) for this file and bar its changed
+  // lines. "working" mode lines up with the on-disk file the viewer loads, so
+  // the new-side line numbers map directly onto the editor.
+  React.useEffect(() => {
+    if (!fileDirty || rel == null || !activeCwd) {
+      setChangedLines([])
+      return
+    }
+    let cancelled = false
+    api
+      .diffFile(activeCwd, rel, "working")
+      .then((res) => !cancelled && setChangedLines(changedNewLines(res.diff)))
+      .catch(() => !cancelled && setChangedLines([]))
+    return () => {
+      cancelled = true
+    }
+  }, [activeCwd, rel, fileDirty])
 
   const save = React.useCallback(async () => {
     if (draft == null || saving) return
@@ -193,7 +244,12 @@ export function FileViewer({
             </ReactMarkdown>
           </div>
         ) : (
-          <CodeEditor value={draft} path={path} onChange={setDraft} />
+          <CodeEditor
+            value={draft}
+            path={path}
+            onChange={setDraft}
+            changedLines={changedLines}
+          />
         )}
       </div>
     </div>
@@ -208,18 +264,26 @@ function CodeEditor({
   value,
   path,
   onChange,
+  changedLines,
 }: {
   value: string
   path: string
   onChange: (v: string) => void
+  changedLines: number[]
 }) {
-  // Recompute only when the file or the large-file threshold changes — not on
-  // every keystroke — so CodeMirror isn't reconfigured as the user types.
+  // Recompute only when the file, the large-file threshold, or the changed-line
+  // set changes — not on every keystroke — so CodeMirror isn't reconfigured as
+  // the user types.
   const big = value.length > HILITE_CAP
   const extensions = React.useMemo(() => {
     const lang = big ? null : languageExtension(path)
-    return [editorTheme, EditorView.lineWrapping, ...(lang ? [lang] : [])]
-  }, [path, big])
+    return [
+      editorTheme,
+      EditorView.lineWrapping,
+      ...(lang ? [lang] : []),
+      ...(changedLines.length ? [changedLinesHighlight(changedLines)] : []),
+    ]
+  }, [path, big, changedLines])
 
   return (
     <CodeMirror

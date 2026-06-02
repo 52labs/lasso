@@ -58,3 +58,33 @@ export function parseDiff(text: string): DiffFile[] {
   }
   return files
 }
+
+// Walk a single-file unified diff and return the 1-based line numbers (in the
+// new/working-tree file) of added lines — used to bar the edited lines in the
+// file viewer. Tracks the new-file counter from each `@@ -a,b +c,d @@` header:
+// '+' lines are recorded and advance it, ' ' context advances it, '-' deletions
+// and headers do not. Untracked files come back as an all-added diff, so every
+// line is returned.
+export function changedNewLines(text: string): number[] {
+  const out: number[] = []
+  let n = 0
+  let inHunk = false
+  for (const line of text.split("\n")) {
+    const h = line.match(/^@@ -\d+(?:,\d+)? \+(\d+)/)
+    if (h) {
+      n = Number(h[1])
+      inHunk = true
+      continue
+    }
+    if (!inHunk) continue
+    if (line.startsWith("+++") || line.startsWith("---")) continue
+    if (line.startsWith("+")) {
+      out.push(n)
+      n++
+      continue
+    }
+    if (line.startsWith("-")) continue
+    n++ // context (' ') or other in-hunk line advances the new-file counter
+  }
+  return out
+}
