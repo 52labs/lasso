@@ -19,8 +19,10 @@ import { cn } from "@/lib/utils"
 // within a host) — also the Grid's identity formula.
 const cellKey = (p: GridPane) => `${p.host}|${p.pane_id}`
 
+// The descriptive pane title shown bold at the top of each row. Prefer the
+// workspace label (e.g. "accessibility") over the bare herdr tab number.
 const primaryLabel = (p: GridPane) =>
-  p.tab_label || p.workspace_label || p.pane_id
+  p.workspace_label || p.tab_label || p.pane_id
 
 // Everything worth matching against, lowercased and joined. A query token is a
 // hit if it's a substring anywhere in here.
@@ -159,7 +161,7 @@ export function PaneSwitcher({
                 )}
               >
                 <span className="flex w-full items-center gap-2">
-                  <span className="truncate font-medium text-sm">
+                  <span className="truncate font-bold text-sm">
                     {primaryLabel(p)}
                   </span>
                   {p.has_agent && p.agent && (
@@ -171,12 +173,6 @@ export function PaneSwitcher({
                 </span>
                 <span className="flex w-full items-center gap-2 truncate text-muted-foreground text-xs">
                   <span className="shrink-0">{p.host_label}</span>
-                  {p.workspace_label &&
-                    p.workspace_label !== primaryLabel(p) && (
-                      <span className="shrink-0 truncate">
-                        {p.workspace_label}
-                      </span>
-                    )}
                   {p.cwd && (
                     <span className="truncate font-mono">{tilde(p.cwd)}</span>
                   )}
