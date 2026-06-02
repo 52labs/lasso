@@ -308,7 +308,6 @@ type createAgentIn struct {
 	BranchName   string `json:"branch_name,omitempty" jsonschema:"Name for the new branch. Defaults to a slug of the title."`
 	BranchPrefix string `json:"branch_prefix,omitempty" jsonschema:"Optional prefix for the new branch, e.g. \"worktree\" -> worktree/<name>."`
 	Agent        string `json:"agent,omitempty" jsonschema:"Which agent to launch: \"claude\" (default) or \"codex\"."`
-	PlanMode     bool   `json:"plan_mode,omitempty" jsonschema:"Launch the agent in plan mode (claude only)."`
 	Prompt       string `json:"prompt,omitempty" jsonschema:"Initial task/instructions for the agent."`
 	Notes        string `json:"notes,omitempty" jsonschema:"Extra notes; written to NOTES.md in the work dir and referenced in the prompt."`
 }
@@ -328,7 +327,7 @@ func createAgentTool(_ context.Context, _ *mcp.CallToolRequest, in createAgentIn
 		Agent:        in.Agent,
 		Prompt:       in.Prompt, // the prompt rides into agentCommand via agentPrompt; its first line is the title
 		Notes:        in.Notes,
-		PlanMode:     in.PlanMode,
+		// PlanMode intentionally omitted: agents started via MCP never run in plan mode.
 	})
 	if err != nil {
 		return nil, agentInfo{}, err
@@ -442,7 +441,7 @@ func sendAgentTool(_ context.Context, _ *mcp.CallToolRequest, in sendAgentIn) (*
 	if rec.RootPane == "" {
 		return nil, sendAgentOut{}, fmt.Errorf("agent %q has no pane to send to", in.AgentID)
 	}
-	paneRun(b, rec.RootPane, in.Text)
+	paneSubmit(b, rec.RootPane, in.Text)
 	return nil, sendAgentOut{Sent: true}, nil
 }
 

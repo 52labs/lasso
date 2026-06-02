@@ -41,8 +41,13 @@ import { r } from "@codemirror/legacy-modes/mode/r"
 import { ruby } from "@codemirror/legacy-modes/mode/ruby"
 import { shell } from "@codemirror/legacy-modes/mode/shell"
 import { swift } from "@codemirror/legacy-modes/mode/swift"
-import type { Extension } from "@codemirror/state"
-import { EditorView } from "@codemirror/view"
+import {
+  type EditorState,
+  type Extension,
+  RangeSetBuilder,
+  StateField,
+} from "@codemirror/state"
+import { Decoration, type DecorationSet, EditorView } from "@codemirror/view"
 import { tags as t } from "@lezer/highlight"
 import { langForPath } from "@/lib/format"
 
@@ -159,13 +164,28 @@ const baseTheme = EditorView.theme(
       fontSize: "12.5px",
       lineHeight: "1.5",
     },
-    ".cm-content": { padding: "14px 0", caretColor: "var(--h-fg)" },
-    ".cm-cursor, .cm-dropCursor": { borderLeftColor: "var(--h-fg)" },
-    "&.cm-focused .cm-selectionBackground, .cm-selectionBackground, .cm-content ::selection":
+    ".cm-content": { padding: "14px 0", caretColor: "var(--h-accent)" },
+    // The caret: CodeMirror's dark baseline theme styles .cm-cursor at the same
+    // specificity as a plain rule, and a 1px caret in the text color is easy to
+    // lose. Match the baseline's focused-cursor depth and paint a thicker,
+    // accent-colored caret so the cursor position is unmistakable.
+    "&.cm-focused > .cm-scroller > .cm-cursorLayer .cm-cursor, .cm-cursor, .cm-dropCursor":
       {
-        backgroundColor: "var(--h-accent-dim)",
+        borderLeftColor: "var(--h-accent)",
+        borderLeftWidth: "2px",
+      },
+    // CodeMirror's built-in dark baseline theme paints the selection with a
+    // very high-specificity rule (&.cm-focused > .cm-scroller >
+    // .cm-selectionLayer .cm-selectionBackground), so we must match that depth or
+    // it wins and the selection stays a near-invisible dark teal. Use a strong
+    // accent tint (derived live from --h-accent) that reads clearly behind text.
+    "&.cm-focused > .cm-scroller > .cm-selectionLayer .cm-selectionBackground, .cm-selectionLayer .cm-selectionBackground, .cm-content ::selection":
+      {
+        backgroundColor: "color-mix(in srgb, var(--h-accent) 40%, transparent)",
       },
     ".cm-activeLine": { backgroundColor: "var(--h-hover)" },
+    // Edited lines (vs HEAD) get a gold bar on the left — see changedLinesHighlight.
+    ".cm-changedLine": { boxShadow: "inset 3px 0 0 var(--h-warn)" },
     ".cm-gutters": {
       backgroundColor: "var(--h-bg)",
       color: "var(--h-muted)",
@@ -220,3 +240,28 @@ export const editorTheme: Extension = [
   baseTheme,
   syntaxHighlighting(highlightStyle),
 ]
+
+const changedLineDeco = Decoration.line({ class: "cm-changedLine" })
+
+// A field that bars the given 1-based line numbers (lines changed vs HEAD) with
+// the .cm-changedLine gold marker. Iterates only the changed lines (cheap on big
+// files) and maps the decorations through edits so the bars stay roughly aligned
+// as the user types. Build a fresh extension when the line set changes.
+export function changedLinesHighlight(lines: number[]): Extension {
+  const sorted = [...new Set(lines)].sort((a, b) => a - b)
+  const build = (state: EditorState) => {
+    const b = new RangeSetBuilder<Decoration>()
+    for (const n of sorted) {
+      if (n >= 1 && n <= state.doc.lines) {
+        const from = state.doc.line(n).from
+        b.add(from, from, changedLineDeco)
+      }
+    }
+    return b.finish()
+  }
+  return StateField.define<DecorationSet>({
+    create: (state) => build(state),
+    update: (deco, tr) => (tr.docChanged ? deco.map(tr.changes) : deco),
+    provide: (f) => EditorView.decorations.from(f),
+  })
+}
