@@ -181,7 +181,13 @@ const baseTheme = EditorView.theme(
     // accent tint (derived live from --h-accent) that reads clearly behind text.
     "&.cm-focused > .cm-scroller > .cm-selectionLayer .cm-selectionBackground, .cm-selectionLayer .cm-selectionBackground, .cm-content ::selection":
       {
-        backgroundColor: "color-mix(in srgb, var(--h-accent) 40%, transparent)",
+        // !important so it can't lose to CodeMirror's baseline dark-theme rule
+        // (which otherwise paints a near-invisible dark teal). An opaque tint of
+        // the live accent over the panel reads clearly as a highlight band while
+        // keeping the (light) selected text legible — a translucent wash blended
+        // too weakly into the dark base, which is why it was hard to see.
+        backgroundColor:
+          "color-mix(in srgb, var(--h-accent) 38%, var(--h-panel)) !important",
       },
     ".cm-activeLine": { backgroundColor: "var(--h-hover)" },
     // Edited lines (vs HEAD) get a gold bar on the left — see changedLinesHighlight.
