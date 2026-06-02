@@ -54,7 +54,7 @@ func registerMCPTools(s *mcp.Server) {
 
 	mcp.AddTool(s, &mcp.Tool{
 		Name:        "send_agent",
-		Description: "Send a message to a running agent — the text is typed into its pane and submitted (as if you typed it and pressed Enter). Use this to give follow-up instructions or answer a prompt the agent is blocked on.",
+		Description: "Send a message to a running agent — the text is typed into its pane and submitted (as if you typed it and pressed Enter). Use this to give follow-up instructions or answer a prompt the agent is blocked on. Works whether the agent is idle or busy: a message sent mid-turn is queued and the agent picks it up after its current turn (it does not interrupt). The call confirms the message actually submitted before returning, so you don't need to re-send; follow with wait_agent + read_agent to get the reply.",
 	}, sendAgentTool)
 
 	mcp.AddTool(s, &mcp.Tool{
