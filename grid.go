@@ -135,6 +135,10 @@ type gridPane struct {
 	AgentStatus    string `json:"agent_status"`
 	HasAgent       bool   `json:"has_agent"`
 	Focused        bool   `json:"focused"`
+	// Prompt is the initial prompt the user gave the agent when creating it
+	// (lasso's AgentRecord.Description, not anything herdr knows). It's shipped so
+	// the pane switcher can search the full prompt text; the UI need not display it.
+	Prompt string `json:"prompt,omitempty"`
 }
 
 type gridPayload struct {
@@ -436,9 +440,32 @@ func gridHostPanes(b Backend, host, hostLabel string) ([]gridPane, error) {
 		}
 	}
 
+	// Agent initial prompts live in lasso's own records (AgentRecord.Description),
+	// not in herdr — join them in by root pane (and by workspace as a fallback for
+	// the agent's pane) so the pane switcher can search the full prompt text.
+	promptByPane := map[string]string{}
+	promptByWS := map[string]string{}
+	if recs, err := listAgents(host); err == nil {
+		for _, rec := range recs {
+			if rec.Description == "" {
+				continue
+			}
+			if rec.RootPane != "" {
+				promptByPane[rec.RootPane] = rec.Description
+			}
+			if rec.WorkspaceID != "" {
+				promptByWS[rec.WorkspaceID] = rec.Description
+			}
+		}
+	}
+
 	out := make([]gridPane, 0, len(pl.Panes))
 	for _, p := range pl.Panes {
 		kind, isAgent := agentKind[p.PaneID]
+		prompt := promptByPane[p.PaneID]
+		if prompt == "" && isAgent {
+			prompt = promptByWS[p.WorkspaceID]
+		}
 		out = append(out, gridPane{
 			Host:           host,
 			HostLabel:      hostLabel,
@@ -453,6 +480,7 @@ func gridHostPanes(b Backend, host, hostLabel string) ([]gridPane, error) {
 			AgentStatus:    p.AgentStatus,
 			HasAgent:       isAgent,
 			Focused:        p.Focused,
+			Prompt:         prompt,
 		})
 	}
 	// Newest first: herdr assigns workspaces/tabs monotonically increasing numbers
