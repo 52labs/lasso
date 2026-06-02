@@ -5,8 +5,9 @@ import (
 	"testing"
 )
 
-// agentPrompt must lead with the title so the agent always knows what it's
-// building — a description alone (or none) left earlier agents working blind.
+// agentPrompt hands the agent the full prompt verbatim (stored in Description;
+// its first line is also the title), falling back to the title when no prompt
+// body was stored, plus pointers to any notes/attachments.
 func TestAgentPromptLeadsWithTitle(t *testing.T) {
 	cases := []struct {
 		name string
@@ -14,14 +15,17 @@ func TestAgentPromptLeadsWithTitle(t *testing.T) {
 		want string
 	}{
 		{
-			name: "title only",
+			name: "title only (no prompt body)",
 			rec:  AgentRecord{Title: "Add dark mode"},
 			want: "Add dark mode",
 		},
 		{
-			name: "title + description",
-			rec:  AgentRecord{Title: "Add dark mode", Description: "toggle in settings"},
-			want: "Add dark mode: toggle in settings",
+			name: "full prompt verbatim",
+			rec: AgentRecord{
+				Title:       "Add dark mode",
+				Description: "Add dark mode\ntoggle in settings",
+			},
+			want: "Add dark mode\ntoggle in settings",
 		},
 		{
 			name: "notes + attachments appended",

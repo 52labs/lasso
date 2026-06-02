@@ -107,11 +107,7 @@ function FitTabs({
             className={tabClass}
             title={compact ? label : undefined}
           >
-            {compact ? (
-              <Icon className="size-4" aria-label={label} />
-            ) : (
-              label
-            )}
+            {compact ? <Icon className="size-4" aria-label={label} /> : label}
             {badge}
           </TabsTrigger>
         ))}
@@ -243,8 +239,9 @@ function Shell() {
   React.useEffect(() => {
     const onPop = () => {
       const v = getQueryParam("view") ?? ""
-      const view =
-        (LEFT_VIEWS as string[]).includes(v) ? (v as LeftView) : "herdr"
+      const view = (LEFT_VIEWS as string[]).includes(v)
+        ? (v as LeftView)
+        : "herdr"
       switchLeft(view, true)
       const pane = getQueryParam("pane")
       if (view === "herdr" && pane) {
@@ -343,31 +340,38 @@ function Shell() {
                 { value: "herdr", label: "Herdr", icon: Terminal },
                 { value: "grid", label: "Grid", icon: LayoutGrid },
               ]}
-              listClassName={cn(collapsed && "pr-2")}
+              listClassName="pr-2"
               trailing={
-                collapsed && (
-                  // Right-aligned so it sits at the far end of the row.
-                  <div className="ml-2 flex items-center">
-                    {/* Git status at a glance while the file viewer is hidden:
-                        the uncommitted-change count (or a green dot when clean),
-                        mirroring the Files tab's badge. Sits just left of the
-                        un-collapse button. */}
-                    <GitStatusBadge
-                      dirty={diffDirty}
-                      ready={gitReady}
-                      className="mr-1.5"
-                      textClassName="self-center text-[13px]"
-                    />
-                    <button
-                      type="button"
-                      className="my-1 mr-1 flex size-6 shrink-0 items-center justify-center self-center rounded border border-border text-muted-foreground hover:border-primary hover:text-primary"
-                      title="show file viewer"
-                      onClick={expandSidebar}
-                    >
-                      <ChevronLeft className="size-4" />
-                    </button>
-                  </div>
-                )
+                // New Agent sits at the far-right of the strip; when the sidebar
+                // is collapsed the git status + expand control follow it.
+                <div className="ml-2 flex items-center gap-1.5">
+                  {/* Surface the herdr terminal on create so it's visible when
+                      the dialog's close handler hands it keyboard focus. */}
+                  <CreateAgentDialog
+                    variant="header"
+                    onCreated={() => switchLeft("herdr")}
+                  />
+                  {collapsed && (
+                    <>
+                      {/* Git status at a glance while the file viewer is hidden:
+                          the uncommitted-change count (or a green dot when clean),
+                          mirroring the Files tab's badge. */}
+                      <GitStatusBadge
+                        dirty={diffDirty}
+                        ready={gitReady}
+                        textClassName="self-center text-[13px]"
+                      />
+                      <button
+                        type="button"
+                        className="my-1 flex size-6 shrink-0 items-center justify-center self-center rounded border border-border text-muted-foreground hover:border-primary hover:text-primary"
+                        title="show file viewer"
+                        onClick={expandSidebar}
+                      >
+                        <ChevronLeft className="size-4" />
+                      </button>
+                    </>
+                  )}
+                </div>
               }
             />
             <div className="relative min-h-0 flex-1">
@@ -439,7 +443,10 @@ function Shell() {
                 // bordered box, so it sits on the same baseline as them.
                 <button
                   type="button"
-                  className={cn(tabClass, "flex items-center hover:text-primary")}
+                  className={cn(
+                    tabClass,
+                    "flex items-center hover:text-primary"
+                  )}
                   title="collapse sidebar"
                   onClick={collapseSidebar}
                 >
@@ -486,12 +493,6 @@ function Shell() {
       {leftView === "herdr" && (
         <div className="fixed bottom-3 left-3 z-40 flex items-center gap-2">
           <HostSwitcher />
-          {/* Surface the herdr terminal on create so it's visible when the
-              dialog's close handler hands it keyboard focus. */}
-          <CreateAgentDialog
-            variant="floating"
-            onCreated={() => switchLeft("herdr")}
-          />
         </div>
       )}
     </div>

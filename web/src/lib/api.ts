@@ -235,13 +235,14 @@ export interface RepoBranches {
 // The body POSTed to /api/create-agent.
 export interface CreateAgentPayload {
   type: "git" | "scratch"
-  title: string
+  // The agent's instruction; its first line becomes the title (branch/dir name,
+  // workspace label, list/toast headline).
+  prompt: string
   repo?: string
   base_branch?: string
   branch_prefix?: string
   branch_name?: string
   agent: string
-  description?: string
   notes?: string
   plan_mode: boolean
   attachments?: string[]

@@ -8,7 +8,6 @@ import { Combobox } from "@/components/ui/combobox"
 import {
   Dialog,
   DialogContent,
-  DialogDescription,
   DialogFooter,
   DialogHeader,
   DialogTitle,
@@ -28,6 +27,23 @@ const AGENTS: { value: string; label: string }[] = [
   { value: "codex", label: "Codex" },
 ]
 
+// One of these is picked at random for the Prompt field's placeholder each time
+// the dialog opens — a little personality on an otherwise blank canvas.
+const PROMPT_PLACEHOLDERS = [
+  "Let's go!",
+  "What do you want?",
+  "What are we doing here?",
+  "What are we working on today?",
+  "Shouldn't you be outside?",
+  "My body is ready.",
+  "What's the mission?",
+  "Point me at something.",
+  "What's broken?",
+  "Describe the dream.",
+  "Make it so.",
+  "The first line becomes the title…",
+]
+
 function slugify(text: string): string {
   return text
     .toLowerCase()
@@ -44,6 +60,11 @@ function generateBranchName(title: string): string {
   const words = title.trim().split(/\s+/).slice(0, 4).join(" ")
   const slug = slugify(words)
   return slug ? `${slug}-${randomSuffix()}` : ""
+}
+
+// The prompt's first line acts as the title (branch/dir name, workspace label).
+function firstLine(text: string): string {
+  return text.trim().split("\n", 1)[0].trim()
 }
 
 // Native textarea/select styled to match the shadcn <Input> (same border,
@@ -92,20 +113,23 @@ export function CreateAgentDialog({
   onCreated?: () => void
   // "button" — the inline outline button on the Agents tab header.
   // "floating" — a pill matching the host switcher, for the bottom-left footer.
-  variant?: "button" | "floating"
+  // "header" — a compact button for the left column's tab-strip trailing slot.
+  variant?: "button" | "floating" | "header"
 }) {
   const [open, setOpen] = React.useState(false)
   const [showAdvanced, setShowAdvanced] = React.useState(false)
+  const [placeholderIdx, setPlaceholderIdx] = React.useState(0)
   const queryClient = useQueryClient()
   // Set when the dialog closes because an agent was just created, so the close
   // handler hands keyboard focus to the herdr terminal instead of letting Radix
   // restore it to the trigger (which would force the user to click the pane).
   const createdRef = React.useRef(false)
 
-  // Cmd/Ctrl+O opens the creator. Bound only to the floating variant so the
-  // shortcut has a single owner even when the Agents-tab button is also mounted.
+  // Cmd/Ctrl+O opens the creator. Bound to the non-"button" variants (the
+  // header / floating triggers) so the shortcut has a single owner even when the
+  // Agents-tab button is also mounted.
   React.useEffect(() => {
-    if (variant !== "floating") return
+    if (variant === "button") return
     const onKey = (e: KeyboardEvent) => {
       if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === "o") {
         e.preventDefault()
@@ -115,6 +139,13 @@ export function CreateAgentDialog({
     document.addEventListener("keydown", onKey)
     return () => document.removeEventListener("keydown", onKey)
   }, [variant])
+
+  // Pick a fresh random Prompt placeholder each time the dialog opens — a little
+  // personality on the blank canvas, without the distraction of it animating.
+  React.useEffect(() => {
+    if (!open) return
+    setPlaceholderIdx(Math.floor(Math.random() * PROMPT_PLACEHOLDERS.length))
+  }, [open])
 
   // The form targets a host the user picks (defaults to the active host). Each
   // host's config/repos live in its own lasso.db, so the queries are keyed and
@@ -150,19 +181,17 @@ export function CreateAgentDialog({
 
   // Form state.
   const [type, setType] = React.useState<AgentType>("git")
-  const [title, setTitle] = React.useState("")
+  const [prompt, setPrompt] = React.useState("")
   const [repo, setRepo] = React.useState("")
   const [baseBranch, setBaseBranch] = React.useState("")
   const [prefix, setPrefix] = React.useState("")
   const [branchName, setBranchName] = React.useState("")
   const [autoBranch, setAutoBranch] = React.useState("")
   const [agent, setAgent] = React.useState("claude")
-  const [description, setDescription] = React.useState("")
   const [pastingImage, setPastingImage] = React.useState(false)
   const [planMode, setPlanMode] = React.useState(false)
-  const [planTouched, setPlanTouched] = React.useState(false)
   const [files, setFiles] = React.useState<File[]>([])
-  const descriptionRef = React.useRef<HTMLTextAreaElement>(null)
+  const promptRef = React.useRef<HTMLTextAreaElement>(null)
 
   const branchesQuery = useQuery({
     queryKey: qk.repoBranches(selectedHost, repo),
@@ -235,24 +264,23 @@ export function CreateAgentDialog({
     // this guards the case where it's empty but main/master still exists.)
     const fallback =
       b.default ||
-      (all.includes("main") ? "main" : all.includes("master") ? "master" : "") ||
+      (all.includes("main")
+        ? "main"
+        : all.includes("master")
+          ? "master"
+          : "") ||
       all[0] ||
       "main"
     setBaseBranch(preferred && all.includes(preferred) ? preferred : fallback)
   }, [repo, open, type, branchesQuery.data, branchesQuery.isError])
 
-  const onTitleChange = (v: string) => {
-    setTitle(v)
-    setAutoBranch(generateBranchName(v))
+  const onPromptChange = (v: string) => {
+    setPrompt(v)
+    // The first line drives the auto-generated branch/dir name.
+    setAutoBranch(generateBranchName(firstLine(v)))
   }
 
-  const onDescriptionChange = (v: string) => {
-    setDescription(v)
-    // Description present ⇒ plan mode, unless the user toggled it themselves.
-    if (!planTouched) setPlanMode(v.trim().length > 0)
-  }
-
-  const onDescriptionPaste = async (
+  const onPromptPaste = async (
     e: React.ClipboardEvent<HTMLTextAreaElement>
   ) => {
     const item = Array.from(e.clipboardData?.items ?? []).find(
@@ -266,21 +294,21 @@ export function CreateAgentDialog({
     setPastingImage(true)
     try {
       const { path } = await api.pasteImage(file, selectedHost)
-      const textarea = descriptionRef.current
+      const textarea = promptRef.current
       if (!textarea) {
-        onDescriptionChange(description + (description ? "\n" : "") + path)
+        onPromptChange(prompt + (prompt ? "\n" : "") + path)
         return
       }
 
       const start = textarea.selectionStart
       const end = textarea.selectionEnd
-      const before = description.slice(0, start)
-      const after = description.slice(end)
+      const before = prompt.slice(0, start)
+      const after = prompt.slice(end)
       const prefix = before && !before.endsWith("\n") ? "\n" : ""
       const suffix = after && !after.startsWith("\n") ? "\n" : ""
       const inserted = `${prefix}${path}${suffix}`
       const next = before + inserted + after
-      onDescriptionChange(next)
+      onPromptChange(next)
       requestAnimationFrame(() => {
         textarea.focus()
         const cursor = before.length + inserted.length
@@ -296,14 +324,12 @@ export function CreateAgentDialog({
   }
 
   const reset = () => {
-    setTitle("")
-    setDescription("")
+    setPrompt("")
     setPastingImage(false)
     setBranchName("")
     setAutoBranch("")
     setFiles([])
     setPlanMode(false)
-    setPlanTouched(false)
     setShowAdvanced(false)
   }
 
@@ -325,10 +351,9 @@ export function CreateAgentDialog({
       }
       const payload: CreateAgentPayload = {
         type,
-        title: title.trim(),
+        prompt: prompt.trim(),
         agent,
         plan_mode: planMode,
-        description: description.trim() || undefined,
         attachments,
         upload_dir: uploadDir,
       }
@@ -364,7 +389,7 @@ export function CreateAgentDialog({
   const canSubmit =
     !createMutation.isPending &&
     !pastingImage &&
-    title.trim().length > 0 &&
+    prompt.trim().length > 0 &&
     (type === "scratch" || !!repo)
 
   const submit = () => {
@@ -377,12 +402,22 @@ export function CreateAgentDialog({
     const p = prefix.trim().replace(/\/+$/, "")
     return p && raw ? `${p}/${raw}` : raw
   })()
-  const pastedImagePaths = extractImagePaths(description)
+  const pastedImagePaths = extractImagePaths(prompt)
 
   return (
     <Dialog open={open} onOpenChange={setOpen}>
       <DialogTrigger asChild>
-        {variant === "floating" ? (
+        {variant === "header" ? (
+          // Compact button for the left column's tab-strip trailing slot.
+          <button
+            type="button"
+            className="my-1 flex shrink-0 items-center gap-1 self-center rounded-md border border-border bg-background px-2 py-0.5 text-[11px] text-muted-foreground transition-colors hover:border-primary hover:text-primary"
+            title="create a new agent (⌘O)"
+          >
+            <Plus className="size-3" />
+            <span className="font-medium">New Agent</span>
+          </button>
+        ) : variant === "floating" ? (
           // Mirrors the HostSwitcher pill so the two footer controls read as a
           // pair (see App.tsx, where this sits to the host button's right).
           <button
@@ -402,6 +437,8 @@ export function CreateAgentDialog({
       </DialogTrigger>
       <DialogContent
         className="flex max-h-[85dvh] flex-col overflow-hidden sm:max-w-md"
+        // No DialogDescription — opt out so Radix doesn't warn about a missing one.
+        aria-describedby={undefined}
         onCloseAutoFocus={(e) => {
           // On a create-driven close, send focus to the herdr terminal so the
           // user can type into the new agent immediately. Otherwise (cancel /
@@ -415,16 +452,12 @@ export function CreateAgentDialog({
       >
         <DialogHeader>
           <DialogTitle>New Agent</DialogTitle>
-          <DialogDescription>
-            Spin up a coding agent in a herdr worktree or scratch workspace.
-          </DialogDescription>
         </DialogHeader>
 
-        {/* A real <form> gives us the "Enter submits unless on the description"
-            behavior for free: a native <input> (e.g. Title) submits on Enter
-            while the description <textarea> inserts a newline. Comboboxes keep
-            their own Enter (item select). The keydown handler adds Cmd/Ctrl+Enter
-            as an always-submit, including from the description and comboboxes. */}
+        {/* A real <form> lets the comboboxes keep their own Enter (item select)
+            while the prompt <textarea> inserts a newline. The keydown handler
+            adds Cmd/Ctrl+Enter as an always-submit, including from the prompt and
+            comboboxes. */}
         <form
           onSubmit={(e) => {
             e.preventDefault()
@@ -458,34 +491,24 @@ export function CreateAgentDialog({
               ))}
             </div>
 
-            <Field label="Title" htmlFor="agent-title">
-              <Input
-                id="agent-title"
-                className="bg-background dark:bg-background"
-                value={title}
-                onChange={(e) => onTitleChange(e.target.value)}
-                placeholder="What should this agent work on?"
-                autoFocus
-              />
-            </Field>
-
-            <Field label="Description" htmlFor="agent-description">
+            <Field label="Prompt" htmlFor="agent-prompt">
               <div className="flex flex-col gap-2">
                 <div className="relative">
                   <textarea
-                    ref={descriptionRef}
-                    id="agent-description"
+                    ref={promptRef}
+                    id="agent-prompt"
                     className={cn(
                       fieldClass,
                       "resize-none",
                       pastingImage && "opacity-50"
                     )}
-                    rows={3}
-                    value={description}
-                    onChange={(e) => onDescriptionChange(e.target.value)}
-                    onPaste={onDescriptionPaste}
+                    rows={6}
+                    value={prompt}
+                    onChange={(e) => onPromptChange(e.target.value)}
+                    onPaste={onPromptPaste}
                     disabled={pastingImage}
-                    placeholder="Optional — fills the agent's first prompt. If set, the agent starts in plan mode."
+                    placeholder={PROMPT_PLACEHOLDERS[placeholderIdx]}
+                    autoFocus
                   />
                   {pastingImage && (
                     <div className="absolute inset-0 flex items-center justify-center rounded-lg bg-background/60 text-muted-foreground text-sm">
@@ -519,17 +542,13 @@ export function CreateAgentDialog({
               <Checkbox
                 id="agent-plan-mode"
                 checked={planMode}
-                onCheckedChange={(v) => {
-                  setPlanMode(v === true)
-                  setPlanTouched(true)
-                }}
+                onCheckedChange={(v) => setPlanMode(v === true)}
                 // Checkboxes toggle on Space by ARIA convention; this form is
                 // otherwise Enter-driven, so accept Enter to toggle too.
                 onKeyDown={(e) => {
                   if (e.key === "Enter") {
                     e.preventDefault()
                     setPlanMode((v) => !v)
-                    setPlanTouched(true)
                   }
                 }}
               />
@@ -564,7 +583,7 @@ export function CreateAgentDialog({
             </div>
 
             {type === "git" && (
-              <>
+              <div className="grid grid-cols-2 gap-3">
                 <Field label="Repository" htmlFor="agent-repo">
                   <Combobox
                     id="agent-repo"
@@ -588,23 +607,8 @@ export function CreateAgentDialog({
                     emptyText="No branches found."
                   />
                 </Field>
-              </>
+              </div>
             )}
-
-            <Field label="AI agent" htmlFor="agent-agent">
-              <select
-                id="agent-agent"
-                className={fieldClass}
-                value={agent}
-                onChange={(e) => setAgent(e.target.value)}
-              >
-                {AGENTS.map((a) => (
-                  <option key={a.value} value={a.value}>
-                    {a.label}
-                  </option>
-                ))}
-              </select>
-            </Field>
 
             {/* Advanced */}
             <button
@@ -623,6 +627,20 @@ export function CreateAgentDialog({
 
             {showAdvanced && (
               <div className="flex flex-col gap-3 border-border border-l pl-3">
+                <Field label="AI agent" htmlFor="agent-agent">
+                  <select
+                    id="agent-agent"
+                    className={fieldClass}
+                    value={agent}
+                    onChange={(e) => setAgent(e.target.value)}
+                  >
+                    {AGENTS.map((a) => (
+                      <option key={a.value} value={a.value}>
+                        {a.label}
+                      </option>
+                    ))}
+                  </select>
+                </Field>
                 {type === "git" && (
                   <>
                     <Field label="Branch prefix" htmlFor="agent-prefix">
@@ -692,7 +710,9 @@ export function CreateAgentDialog({
             )}
           </div>
 
-          <DialogFooter>
+          {/* Drop the shared footer's muted bar/border — it reads as a stray
+              block once the form's content is short. */}
+          <DialogFooter className="border-t-0 bg-transparent pt-0">
             <Button
               type="button"
               variant="outline"

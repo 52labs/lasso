@@ -272,14 +272,14 @@ func gitDefaultBranch(cur Backend, repo string) string {
 // ---------------------------------------------------------------------------
 
 type createAgentReq struct {
-	Type         string   `json:"type"` // "git" | "scratch"
-	Title        string   `json:"title"`
+	Type         string   `json:"type"`   // "git" | "scratch"
+	Prompt       string   `json:"prompt"` // the agent's instruction; its first line is the title
+	Title        string   `json:"title"`  // optional explicit title override; defaults to the prompt's first line
 	Repo         string   `json:"repo"`
 	BaseBranch   string   `json:"base_branch"`
 	BranchPrefix string   `json:"branch_prefix"`
 	BranchName   string   `json:"branch_name"`
 	Agent        string   `json:"agent"`
-	Description  string   `json:"description"`
 	Notes        string   `json:"notes"`
 	PlanMode     bool     `json:"plan_mode"`
 	Attachments  []string `json:"attachments"` // filenames staged under UploadDir
@@ -326,9 +326,13 @@ func (e *createErr) Error() string { return e.err.Error() }
 // (any host, via gridHostBackend) — so every herdr/file call goes through b
 // rather than the package-level helpers that always hit the active host.
 func createAgent(b Backend, req createAgentReq) (AgentRecord, error) {
+	req.Prompt = strings.TrimSpace(req.Prompt)
 	req.Title = strings.TrimSpace(req.Title)
 	if req.Title == "" {
-		return AgentRecord{}, &createErr{http.StatusBadRequest, errors.New("title required")}
+		req.Title = firstLine(req.Prompt)
+	}
+	if req.Title == "" {
+		return AgentRecord{}, &createErr{http.StatusBadRequest, errors.New("prompt required")}
 	}
 	if req.Agent == "" {
 		req.Agent = "claude"
@@ -347,7 +351,7 @@ func createAgent(b Backend, req createAgentReq) (AgentRecord, error) {
 		Title:       req.Title,
 		Type:        req.Type,
 		Agent:       req.Agent,
-		Description: strings.TrimSpace(req.Description),
+		Description: req.Prompt,
 		Notes:       strings.TrimSpace(req.Notes),
 		Attachments: req.Attachments,
 		PlanMode:    req.PlanMode,
@@ -646,18 +650,17 @@ func copyOnBackend(cur Backend, src, dst string) {
 	_, _ = io.Copy(out, in)
 }
 
-// agentPrompt builds the prompt handed to the agent: the title (always present —
-// it's the task's headline), then the fuller description, plus a pointer to any
-// notes/attachments that landed in the work dir. Leading with the title mirrors
-// fulcrum's "<title>: <description>" so the agent never starts on description
-// alone with no idea what it's building.
+// agentPrompt builds the prompt handed to the agent: the full prompt verbatim
+// (stored in Description; its first line is also the title), plus a pointer to
+// any notes/attachments that landed in the work dir. Falls back to the title
+// when no prompt body was stored (e.g. a title-only record).
 func agentPrompt(rec AgentRecord) string {
 	var b strings.Builder
-	b.WriteString(rec.Title)
-	if rec.Description != "" {
-		b.WriteString(": ")
-		b.WriteString(rec.Description)
+	body := rec.Description
+	if body == "" {
+		body = rec.Title
 	}
+	b.WriteString(body)
 	if rec.Notes != "" {
 		b.WriteString("\n\nSee NOTES.md for additional notes.")
 	}

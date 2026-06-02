@@ -302,7 +302,7 @@ func listBranchesTool(_ context.Context, _ *mcp.CallToolRequest, in listBranches
 type createAgentIn struct {
 	Host         string `json:"host,omitempty" jsonschema:"Host to create the agent on; omit for the local box."`
 	Type         string `json:"type" jsonschema:"\"git\" (a new worktree off base_branch) or \"scratch\" (an empty workspace)."`
-	Title        string `json:"title" jsonschema:"Short human-readable title for the agent/worktree."`
+	Title        string `json:"title,omitempty" jsonschema:"Optional short title for the agent/worktree; defaults to the prompt's first line."`
 	Repo         string `json:"repo,omitempty" jsonschema:"Absolute path to the git repository. Required when type is \"git\"."`
 	BaseBranch   string `json:"base_branch,omitempty" jsonschema:"Branch (or ref) to branch the new worktree off. Defaults to the repo's HEAD. Use list_branches to choose one."`
 	BranchName   string `json:"branch_name,omitempty" jsonschema:"Name for the new branch. Defaults to a slug of the title."`
@@ -326,7 +326,7 @@ func createAgentTool(_ context.Context, _ *mcp.CallToolRequest, in createAgentIn
 		BranchPrefix: in.BranchPrefix,
 		BranchName:   in.BranchName,
 		Agent:        in.Agent,
-		Description:  in.Prompt, // the prompt rides into agentCommand via agentPrompt
+		Prompt:       in.Prompt, // the prompt rides into agentCommand via agentPrompt; its first line is the title
 		Notes:        in.Notes,
 		PlanMode:     in.PlanMode,
 	})
