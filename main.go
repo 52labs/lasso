@@ -51,7 +51,7 @@ import (
 var distFS embed.FS
 
 var (
-	listenAddr  = flag.String("listen", "127.0.0.1:8090", "address for the web server (loopback by default — the terminal is a writable shell)")
+	listenAddr  = flag.String("listen", defaultListenAddr, "address for the web server (loopback by default — the terminal is a writable shell)")
 	ttydPort    = flag.Int("ttyd-port", 7682, "loopback port ttyd listens on")
 	herdrSock   = flag.String("herdr-sock", defaultSock(), "path to the herdr unix socket")
 	termCmd     = flag.String("term-cmd", "herdr", "command ttyd runs in the terminal")
@@ -89,7 +89,11 @@ func defaultSock() string {
 	return filepath.Join(home, ".config", "herdr", "herdr.sock")
 }
 
-func main() {
+// runServer is the foreground HTTP server — the historical `./lasso` behavior.
+// main() (cli.go) dispatches here for a bare invocation or the `serve`
+// subcommand; the CLI subcommands (start/stop/restart/update/doctor) never reach
+// it. It parses flags from os.Args, so `serve` strips its own arg first.
+func runServer() {
 	flag.Parse()
 
 	// Start out driving the local herdr daemon. The footer's host switcher swaps
@@ -1065,6 +1069,11 @@ type versionInfo struct {
 	// counts how far behind main, when known.
 	UpdateState   string `json:"update_state,omitempty"`
 	CommitsBehind int    `json:"commits_behind,omitempty"`
+	// LatestVersion is the newest published GitHub release tag, set only for a
+	// release-binary install (not the supervised/pitchfork checkout, which tracks
+	// main by commit instead). When it's newer than this build the Settings tab
+	// shows an "update available" hint pointing at `lasso update`.
+	LatestVersion string `json:"latest_version,omitempty"`
 	Err           string `json:"err,omitempty"`
 }
 
@@ -1079,7 +1088,20 @@ func serveVersion(w http.ResponseWriter, r *http.Request) {
 		Updatable:     selfUpdateAvailable(),
 	}
 	if vi.Updatable {
+		// Supervised checkout: compare the build commit to main's tip (local git).
 		vi.UpdateState, vi.CommitsBehind = selfUpdateStatus()
+	} else if !*devMode {
+		// Release binary: compare this build's version to the latest GitHub release
+		// (non-blocking — the tag is "" until the background fetch lands, then the
+		// next poll picks it up). Dev/worktree runs skip this; they update by rebuild.
+		if latest, ok := cachedLatestTag(); ok {
+			vi.LatestVersion = latest
+			if semverNewer(lassoSemver, latest) {
+				vi.UpdateState = "available"
+			} else {
+				vi.UpdateState = "current"
+			}
+		}
 	}
 	if v, p, err := herdrPinger(); err != nil {
 		vi.Err = err.Error()
