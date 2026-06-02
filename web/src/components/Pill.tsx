@@ -12,8 +12,11 @@ const toneClass: Record<Tone, string> = {
   warn: "text-warn border-warn",
 }
 
-// A rounded status pill — the original UI's `.pill`, rebuilt on shadcn's Badge
-// so it inherits the live theme. Tones map to herdr's semantic palette.
+// A rounded status tag — the original UI's `.pill`, rebuilt on shadcn's Badge
+// so it inherits the live theme. Tones map to herdr's semantic palette. Uses a
+// modest corner radius (rounded-md) rather than a full stadium: capsule ends
+// read as tacky once the content is wide or wraps to multiple lines (a long
+// repo path, the version strings on a narrow Settings column).
 export function Pill({
   tone = "muted",
   className,
@@ -32,7 +35,7 @@ export function Pill({
       asChild
       variant="outline"
       className={cn(
-        "rounded-full px-2 py-px font-normal text-[13px]",
+        "rounded-md px-2 py-px font-normal text-[13px]",
         multiline
           ? "h-auto items-start overflow-visible whitespace-normal break-all py-0.5 leading-snug"
           : "whitespace-nowrap",

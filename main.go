@@ -395,7 +395,7 @@ func startTtydArgv(ctx context.Context, sock, basePath string, cmdArgv []string,
 		"-b", basePath, // base path so assets/ws resolve under the proxy
 		"-W",                           // writable
 		"-t", "disableLeaveAlert=true", // no confirm dialog inside the iframe
-		"-t", "fontSize=13",
+		"-t", "fontSize=14",
 		// Keep a solid block cursor even when xterm thinks it's unfocused.
 		// We live in an iframe whose focus is handed over programmatically
 		// (contentWindow.focus()), which doesn't always flip xterm's internal
