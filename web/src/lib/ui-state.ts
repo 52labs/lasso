@@ -1,6 +1,6 @@
 import { useQuery } from "@tanstack/react-query"
 
-import { type UIState, api } from "@/lib/api"
+import { api, type UIState } from "@/lib/api"
 import { qk, queryClient } from "@/lib/query"
 
 // Persisted, SQLite-backed UI preferences (Grid filters + sidebar collapse).
@@ -37,8 +37,31 @@ export function uiStateNow(): UIState {
 // optimistically (so the UI reflects it immediately), and persists the whole
 // object. Fire-and-forget; a failed save just leaves the server on its prior
 // value, which the next fetch would reconcile.
+//
+// Because the client sends the WHOLE object, the merge base must be the real
+// persisted prefs — never DEFAULTS. If we patched before the initial fetch
+// landed (e.g. the sidebar panel's onResize fires during the first layout
+// settle on every page load), merging into DEFAULTS would POST empty
+// grid_hidden_hosts/grid_selected and clobber the saved selection on restart.
+// So when the cache is still cold, fetch the persisted value first and merge
+// into that. fetchQuery dedupes with useUIState's in-flight query, so this
+// reuses the same GET rather than issuing a second one.
 export function patchUIState(patch: Partial<UIState>) {
-  const next: UIState = { ...uiStateNow(), ...patch }
-  queryClient.setQueryData(qk.uiState, next)
-  void api.saveUIState(next).catch(() => {})
+  const cached = queryClient.getQueryData<UIState>(qk.uiState)
+  if (cached) {
+    const next: UIState = { ...cached, ...patch }
+    queryClient.setQueryData(qk.uiState, next)
+    void api.saveUIState(next).catch(() => {})
+    return
+  }
+  void queryClient
+    .fetchQuery<UIState>({ queryKey: qk.uiState, queryFn: () => api.uiState() })
+    .then((server) => {
+      // Re-read the cache after awaiting in case another patch landed meanwhile.
+      const base = queryClient.getQueryData<UIState>(qk.uiState) ?? server
+      const next: UIState = { ...base, ...patch }
+      queryClient.setQueryData(qk.uiState, next)
+      return api.saveUIState(next)
+    })
+    .catch(() => {})
 }
