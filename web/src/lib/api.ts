@@ -138,6 +138,10 @@ export interface VersionInfo {
   // offers the button. Absent on non-updatable installs.
   update_state?: "available" | "current" | "unknown"
   commits_behind?: number
+  // The newest published GitHub release tag — set only for a release-binary
+  // install (not the supervised checkout). When newer than lasso_version, the
+  // Settings tab shows an "update available" hint pointing at `lasso update`.
+  latest_version?: string
   err?: string
 }
 
