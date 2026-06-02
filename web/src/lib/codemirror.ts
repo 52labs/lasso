@@ -164,8 +164,16 @@ const baseTheme = EditorView.theme(
       fontSize: "12.5px",
       lineHeight: "1.5",
     },
-    ".cm-content": { padding: "14px 0", caretColor: "var(--h-fg)" },
-    ".cm-cursor, .cm-dropCursor": { borderLeftColor: "var(--h-fg)" },
+    ".cm-content": { padding: "14px 0", caretColor: "var(--h-accent)" },
+    // The caret: CodeMirror's dark baseline theme styles .cm-cursor at the same
+    // specificity as a plain rule, and a 1px caret in the text color is easy to
+    // lose. Match the baseline's focused-cursor depth and paint a thicker,
+    // accent-colored caret so the cursor position is unmistakable.
+    "&.cm-focused > .cm-scroller > .cm-cursorLayer .cm-cursor, .cm-cursor, .cm-dropCursor":
+      {
+        borderLeftColor: "var(--h-accent)",
+        borderLeftWidth: "2px",
+      },
     // CodeMirror's built-in dark baseline theme paints the selection with a
     // very high-specificity rule (&.cm-focused > .cm-scroller >
     // .cm-selectionLayer .cm-selectionBackground), so we must match that depth or
