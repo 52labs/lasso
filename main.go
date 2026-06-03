@@ -1041,7 +1041,7 @@ func outsideHerdrEnv() []string {
 
 // lassoHerdrProtocol is the herdr wire-protocol version this lasso build targets:
 // the protocol of the *released* herdr lasso is developed and tested against
-// (herdr 0.6.7 → protocol 12), NOT whatever the herdr source tree is mid-bumping
+// (herdr 0.6.8 → protocol 12), NOT whatever the herdr source tree is mid-bumping
 // to. Bump it in lockstep when lasso adopts a newer herdr release. We target one
 // protocol exactly — no backwards compatibility — so a mismatch in either
 // direction reads as incompatible. The Settings tab compares it against the
@@ -1050,10 +1050,10 @@ func outsideHerdrEnv() []string {
 //
 // Bumped 11→12 for herdr 0.6.7. Protocol 12 first shipped in 0.6.6, which lasso
 // briefly targeted then reverted to 11 (0.6.5) over a 0.6.6 idle-CPU regression
-// (commit 29b1e2d). 0.6.7 keeps protocol 12 and fixes that regression — idle panes
-// no longer rescan foreground processes and pane input no longer waits on the PTY
-// idle poll — so the fleet moves forward to 0.6.7. The bump is value-only: the 11↔12
-// wire formats lasso uses are identical, so no request/response handling changed.
+// (commit 29b1e2d). 0.6.7 kept protocol 12 and fixed that regression; 0.6.8 also
+// keeps protocol 12 (verified by pinging the 0.6.8 binary on an isolated socket —
+// it pongs protocol 12, capabilities.live_handoff), so adopting it is value-only:
+// the wire formats lasso uses are unchanged, no request/response handling differs.
 const lassoHerdrProtocol = 12
 
 // versionInfo is the /api/version payload: the herdr socket protocol this lasso
