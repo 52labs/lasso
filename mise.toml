@@ -96,11 +96,11 @@ description = "Like `dev`, but the backend talks to an ISOLATED herdr release (s
 depends = ["build"]
 shell = "bash -c"
 usage = '''
-arg "[version]" help="herdr release to smoke-test (e.g. 0.6.7); downloaded + cached on first use" default="0.6.7"
+arg "[version]" help="herdr release to smoke-test (e.g. 0.6.8); downloaded + cached on first use" default="0.6.8"
 '''
 run = '''
 set -euo pipefail
-ver="${usage_version:-0.6.7}"; ver="${ver#v}"   # accept 0.6.7 or v0.6.7
+ver="${usage_version:-0.6.8}"; ver="${ver#v}"   # accept 0.6.8 or v0.6.8
 
 # Map this machine to a herdr release asset.
 case "$(uname -s)-$(uname -m)" in
