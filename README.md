@@ -26,11 +26,12 @@ The UI follows herdr's active pane live and repaints to match herdr's theme.
 ## Install
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/knowsuchagency/lasso/main/install.sh | sh
+curl -fsSL https://go.52labs.us/install-lasso | sh
 ```
 
 This drops a prebuilt binary at `~/.local/bin/lasso` (override with
-`LASSO_INSTALL_DIR`). lasso drives **herdr**, so install that too if you haven't:
+`LASSO_INSTALL_DIR`). lasso drives **herdr**, which the installer fetches
+automatically if it's missing (set `LASSO_SKIP_HERDR=1` to install it yourself):
 
 ```bash
 curl -fsSL https://herdr.dev/install.sh | sh
