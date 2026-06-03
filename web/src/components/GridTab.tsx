@@ -427,7 +427,9 @@ export function GridTab({
             <AlertDialogTitle>
               {closeTargets && closeTargets.length > 1
                 ? `Close ${closeTargets.length} panes?`
-                : "Close pane?"}
+                : closeTargets?.[0]?.has_agent
+                  ? "Close agent?"
+                  : "Close pane?"}
             </AlertDialogTitle>
             <AlertDialogDescription>
               {closeTargets && closeTargets.length === 1
@@ -581,7 +583,9 @@ function GridCell({
   const closeLabel =
     selected && selectionCount > 1
       ? `Close ${selectionCount} panes`
-      : "Close pane"
+      : p.has_agent
+        ? "Close agent"
+        : "Close pane"
 
   return (
     <div

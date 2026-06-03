@@ -288,6 +288,10 @@ func serveGridClose(w http.ResponseWriter, r *http.Request) {
 			errs[p.PaneID] = err.Error()
 			continue
 		}
+		// If an agent (claude/codex) is running in this pane, kill its process
+		// first so it exits cleanly instead of being yanked out from under the
+		// closing pane. No-op for panes without an agent — those just close.
+		killPaneAgent(b, p.PaneID)
 		// Retry with backoff like serveClose: closing a pane makes herdr recompute
 		// layout, so a burst of single-shot closes races that and fails transiently.
 		closer := func(id string) error {
