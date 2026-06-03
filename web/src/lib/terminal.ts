@@ -1,5 +1,10 @@
 import { api } from "@/lib/api"
-import { applyTermFont, applyTermTheme, lastTerminalTheme } from "@/lib/theme"
+import {
+  applyTermFont,
+  applyTermTheme,
+  lastTerminalTheme,
+  startTermThemeReconciler,
+} from "@/lib/theme"
 
 // Behavior attached to the same-origin ttyd terminal iframes (/terminal/ and
 // /shell/). All of this is ported faithfully from the original index.html —
@@ -280,6 +285,10 @@ export function bootTermFrame(id: string, suppressContext: boolean) {
     wireTerminalIframe(id, suppressContext)
   }
   el.addEventListener("load", onLoad)
+  // A ttyd WebSocket reconnect rebuilds xterm with its default theme without
+  // reloading the iframe (no `load` event above), so arm the periodic reconcile
+  // that re-pins the cached palette. Idempotent — safe to call per frame.
+  startTermThemeReconciler()
   applyTermFont(0) // in case it already loaded
   wireTerminalIframe(id, suppressContext) // in case it already loaded
   return () => el.removeEventListener("load", onLoad)

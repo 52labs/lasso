@@ -162,6 +162,49 @@ export function lastTerminalTheme() {
   return lastXtermTheme
 }
 
+// reconcileTermTheme re-pins any terminal whose live xterm theme has drifted
+// from the cached palette. ttyd rebuilds its xterm with a built-in default
+// (light) theme whenever its WebSocket reconnects — idle timeout, laptop
+// sleep/wake, a network blip — and that reconnect happens *inside the existing
+// iframe document*, so it fires no iframe `load` event for bootTermFrame to
+// hook. Without this, a reconnected terminal keeps ttyd's default theme until
+// the next herdr theme change or a full page reload, while the React/CSS side
+// (whose --h-* vars live on the parent document and persist) stays correctly
+// themed — the half-light/half-dark desync. We compare the live background
+// against the cached one and only write when they differ, so xterm rebuilds its
+// glyph atlas on a real drift, never every tick.
+function reconcileTermTheme() {
+  if (!lastXtermTheme) return
+  const want = (lastXtermTheme as { background?: unknown }).background
+  for (const el of termFrames()) {
+    try {
+      const w = el.contentWindow as unknown as {
+        term?: { options?: Record<string, unknown> }
+      }
+      const opts = w?.term?.options
+      if (!opts) continue
+      const live = (opts.theme as { background?: unknown } | undefined)
+        ?.background
+      if (live === want) continue
+      opts.theme = lastXtermTheme
+    } catch {
+      /* same-origin: never let a reconcile break the terminal */
+    }
+  }
+}
+
+let termThemeReconciler: ReturnType<typeof setInterval> | null = null
+
+// startTermThemeReconciler arms a single shared interval that keeps every
+// terminal pinned to the latest palette across ttyd reconnects (see
+// reconcileTermTheme). Idempotent: the first caller starts it and the rest are
+// no-ops, so the per-frame bootTermFrame can call it freely. Runs for the app's
+// lifetime — a few DOM reads and a string compare every couple of seconds.
+export function startTermThemeReconciler() {
+  if (termThemeReconciler) return
+  termThemeReconciler = setInterval(reconcileTermTheme, 1500)
+}
+
 // refreshTheme pulls the resolved palette and repaints both halves of the UI:
 // the React/CSS side (rewrite the --h-* vars) and the live terminals (set the
 // xterm.js theme inside the same-origin ttyd iframes — no reconnect).
