@@ -68,6 +68,22 @@ export function PaneSwitcher({
   })
   const panes = q.data?.panes ?? [] // backend order = newest first (mirrors Grid)
 
+  // Workspaces with more than one tab — the only ones where a per-row tab badge
+  // earns its keep. Computed off the full set (not the filtered view) so the
+  // search query never flips a badge on or off.
+  const multiTabWorkspaces = React.useMemo(() => {
+    const tabsByWs = new Map<string, Set<string>>()
+    for (const p of panes) {
+      if (!p.workspace_id || !p.tab_id) continue
+      const set = tabsByWs.get(p.workspace_id) ?? new Set<string>()
+      set.add(p.tab_id)
+      tabsByWs.set(p.workspace_id, set)
+    }
+    const multi = new Set<string>()
+    for (const [ws, tabs] of tabsByWs) if (tabs.size > 1) multi.add(ws)
+    return multi
+  }, [panes])
+
   const filtered = React.useMemo(() => {
     const tokens = query.trim().toLowerCase().split(/\s+/).filter(Boolean)
     if (tokens.length === 0) return panes
@@ -164,6 +180,18 @@ export function PaneSwitcher({
                   <span className="truncate font-bold text-sm">
                     {primaryLabel(p)}
                   </span>
+                  {/* Tab label differentiates sibling tabs in one workspace
+                      (the bold title is the shared workspace label). Only shown
+                      when the workspace actually has more than one tab, and not
+                      when it's just the title's fallback. */}
+                  {p.workspace_id &&
+                    multiTabWorkspaces.has(p.workspace_id) &&
+                    p.tab_label &&
+                    p.tab_label !== primaryLabel(p) && (
+                      <span className="shrink-0 rounded bg-foreground/10 px-1.5 py-0.5 font-medium text-[11px] text-foreground/70">
+                        {p.tab_label}
+                      </span>
+                    )}
                   {p.has_agent && p.agent && (
                     <span className="shrink-0 rounded bg-primary/15 px-1.5 py-0.5 font-medium text-[11px] text-primary">
                       {p.agent}
