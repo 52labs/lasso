@@ -210,6 +210,7 @@ func runServer() {
 	mux.HandleFunc("/api/workspace/close", serveWorkspaceClose)
 	mux.HandleFunc("/api/repo/pin", serveRepoPin)
 	mux.HandleFunc("/api/repo/rename", serveRepoRename)
+	mux.HandleFunc("/api/repo/open", serveOpenRepo)
 	mux.HandleFunc("/api/create-worktree", serveCreateWorktreeOnly)
 	mux.HandleFunc("/api/ui-state", serveUIState)
 	mux.HandleFunc("/api/focus", serveFocus)

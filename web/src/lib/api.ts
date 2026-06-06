@@ -199,7 +199,13 @@ export interface TreeRepo {
   primary_branch: string
   pinned: boolean
   last_commit: number
-  workspaces: TreeWorkspace[]
+  workspaces: TreeWorkspace[] // linked worktrees only
+  // The repo row is itself the main checkout (primary branch). main_tab_id is
+  // its tab if one exists; otherwise click calls openRepo to create one.
+  main_workspace_id?: string
+  main_tab_id?: string
+  agent_status?: AgentStatus
+  agent_kind?: string
 }
 
 export interface TreePayload {
@@ -486,6 +492,12 @@ export const api = {
     postJSON<{ ok: boolean }>("/api/workspace/close", { workspace_id }),
   pinRepo: (repo: string, pinned: boolean) =>
     postJSON<{ ok: boolean }>("/api/repo/pin", { repo, pinned }),
+  // Open (creating on first use) a terminal on a repo's primary branch — its
+  // main checkout at the repo root.
+  openRepo: (repo: string) =>
+    postJSON<{ tab_id: string; workspace_id: string }>("/api/repo/open", {
+      repo,
+    }),
   renameRepo: (repo: string, name: string) =>
     postJSON<{ ok: boolean }>("/api/repo/rename", { repo, name }),
 

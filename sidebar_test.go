@@ -56,11 +56,18 @@ func TestServeTreeOrderingAndPin(t *testing.T) {
 	t.Cleanup(func() { setBackend(prev) })
 
 	root := t.TempDir()
-	initRepo(t, filepath.Join(root, "old"), "2020-01-01T00:00:00")
-	initRepo(t, filepath.Join(root, "new"), "2024-01-01T00:00:00")
+	oldPath := filepath.Join(root, "old")
+	newPath := filepath.Join(root, "new")
+	initRepo(t, oldPath, "2020-01-01T00:00:00")
+	initRepo(t, newPath, "2024-01-01T00:00:00")
 	if err := setSetting("repos_root", root); err != nil {
 		t.Fatal(err)
 	}
+	// Repos appear in the tree only when they have a workspace (like herdr); give
+	// each a main-checkout workspace (work_dir == repo root) so ordering + pinning
+	// are exercised.
+	_ = insertWorkspace(Workspace{ID: "wold", Host: "local", Title: "old", Repo: oldPath, WorkDir: oldPath, Kind: "git"})
+	_ = insertWorkspace(Workspace{ID: "wnew", Host: "local", Title: "new", Repo: newPath, WorkDir: newPath, Kind: "git"})
 
 	get := func() treePayload {
 		req := httptest.NewRequest(http.MethodGet, "/api/tree", nil)

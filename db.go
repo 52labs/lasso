@@ -672,7 +672,106 @@ func migrateSchema() error {
 			return err
 		}
 	}
+	if v < 2 {
+		if err := migrateV2(); err != nil {
+			return err
+		}
+		if _, err := db.Exec(`PRAGMA user_version = 2`); err != nil {
+			return err
+		}
+	}
 	return nil
+}
+
+// migrateV2 prunes the V1 backfill. lasso's agents table is an append-only log
+// with no closed/archived state: closure was only ever recorded in herdr's
+// session.json (closing a workspace removes its entry there), which lasso never
+// read — so the V1 backfill imported every historical agent as a LIVE workspace,
+// including long-closed throwaways. This one-time step reconciles against herdr's
+// authoritative live set and soft-closes any backfilled workspace whose work_dir
+// herdr no longer lists. Best-effort: if herdr's state is absent/unreadable we
+// leave everything live rather than guess. After this, lasso owns workspace
+// lifecycle entirely via workspaces.closed_at.
+func migrateV2() error {
+	live, ok := herdrLiveWorkDirs()
+	if !ok || len(live) == 0 {
+		return nil // no herdr state to reconcile against — don't prune blindly
+	}
+	rows, err := db.Query(`SELECT id, work_dir FROM workspaces WHERE closed_at=''`)
+	if err != nil {
+		return err
+	}
+	type ws struct{ id, dir string }
+	var all []ws
+	for rows.Next() {
+		var x ws
+		if err := rows.Scan(&x.id, &x.dir); err != nil {
+			rows.Close()
+			return err
+		}
+		all = append(all, x)
+	}
+	rows.Close()
+	if err := rows.Err(); err != nil {
+		return err
+	}
+	for _, x := range all {
+		if x.dir == "" || live[x.dir] {
+			continue
+		}
+		// Not in herdr's live set → the user had closed it. Soft-close it and its
+		// tabs (reversible: clear closed_at to restore).
+		for _, t := range mustListTabs(x.id) {
+			_ = closeTab(t.ID)
+		}
+		_ = closeWorkspace(x.id)
+	}
+	return nil
+}
+
+// mustListTabs is listTabs with the error swallowed (migration best-effort).
+func mustListTabs(wsID string) []Tab { t, _ := listTabs(wsID); return t }
+
+// herdrLiveWorkDirs reads herdr's authoritative live session (default session at
+// ~/.config/herdr/session.json) and returns the set of working directories it
+// still tracks. ok=false when the file is missing/unreadable. This is read ONCE,
+// at migration time, purely to clean up the backfill — lasso does not depend on
+// herdr at runtime.
+func herdrLiveWorkDirs() (map[string]bool, bool) {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return nil, false
+	}
+	path := filepath.Join(home, ".config", "herdr", "session.json")
+	b, err := os.ReadFile(path)
+	if err != nil {
+		return nil, false
+	}
+	var doc any
+	if err := json.Unmarshal(b, &doc); err != nil {
+		return nil, false
+	}
+	out := map[string]bool{}
+	var walk func(v any)
+	walk = func(v any) {
+		switch t := v.(type) {
+		case map[string]any:
+			for k, val := range t {
+				if k == "cwd" || k == "checkout_path" || k == "path" {
+					if s, ok := val.(string); ok && s != "" {
+						out[s] = true
+					}
+				}
+				walk(val)
+			}
+		case []any:
+			for _, e := range t {
+				walk(e)
+			}
+		}
+	}
+	walk(doc)
+	return out, true
 }
 
 // migrateV1 adds the tmux-era columns to pre-existing tables and backfills a

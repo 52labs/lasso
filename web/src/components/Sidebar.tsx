@@ -121,7 +121,28 @@ function RepoNode({
   selectedTabId: string | null
   onSelectTab: (tabId: string) => void
 }) {
+  const { agentStatuses } = useApp()
   const [open, setOpen] = React.useState(true)
+  const worktrees = repo.workspaces ?? []
+  const status =
+    (repo.main_tab_id && agentStatuses[repo.main_tab_id]) || repo.agent_status
+  const selected = !!repo.main_tab_id && repo.main_tab_id === selectedTabId
+
+  // Clicking the repo row opens a terminal on its primary branch (the main
+  // checkout) — like herdr, a repo is a workspace, not just a worktree grouping.
+  const openRepo = async () => {
+    if (repo.main_tab_id) {
+      onSelectTab(repo.main_tab_id)
+      return
+    }
+    try {
+      const { tab_id } = await api.openRepo(repo.path)
+      refreshTree()
+      onSelectTab(tab_id)
+    } catch (e) {
+      toast.error(String(e))
+    }
+  }
   const rename = async () => {
     const name = window.prompt("Repo display name:", repo.name)
     if (name == null) return
@@ -134,25 +155,53 @@ function RepoNode({
     <div>
       <ContextMenu>
         <ContextMenuTrigger asChild>
-          <button
-            type="button"
-            onClick={() => setOpen((o) => !o)}
-            className="flex w-full items-center gap-1 px-2 py-1 text-left hover:bg-accent/40"
-          >
-            <ChevronRight
-              className={cn(
-                "size-3 shrink-0 transition-transform",
-                open && "rotate-90"
-              )}
-            />
-            {repo.pinned && (
-              <Pin className="size-3 shrink-0 text-[var(--h-accent)]" />
+          <div
+            className={cn(
+              "flex w-full items-center gap-1 px-2 py-1 hover:bg-accent/40",
+              selected && "bg-accent/60"
             )}
-            <span className="truncate font-medium">{repo.name}</span>
-            <span className="ml-auto shrink-0 text-[11px] text-muted-foreground">
-              {repo.primary_branch}
-            </span>
-          </button>
+          >
+            <button
+              type="button"
+              aria-label={open ? "collapse" : "expand"}
+              onClick={(e) => {
+                e.stopPropagation()
+                setOpen((o) => !o)
+              }}
+              className={cn(
+                "shrink-0",
+                worktrees.length === 0 && "pointer-events-none opacity-0"
+              )}
+            >
+              <ChevronRight
+                className={cn(
+                  "size-3 transition-transform",
+                  open && "rotate-90"
+                )}
+              />
+            </button>
+            <button
+              type="button"
+              onClick={openRepo}
+              className="flex min-w-0 flex-1 items-center gap-1.5 text-left"
+            >
+              {repo.pinned && (
+                <Pin className="size-3 shrink-0 text-[var(--h-accent)]" />
+              )}
+              {status && (
+                <span
+                  className={cn(
+                    "size-2 shrink-0 rounded-full",
+                    STATUS_DOT[status]
+                  )}
+                />
+              )}
+              <span className="truncate font-medium">{repo.name}</span>
+              <span className="ml-auto shrink-0 pl-1 text-[11px] text-muted-foreground">
+                {repo.primary_branch}
+              </span>
+            </button>
+          </div>
         </ContextMenuTrigger>
         <ContextMenuContent>
           <ContextMenuItem
@@ -193,7 +242,7 @@ function RepoNode({
         </ContextMenuContent>
       </ContextMenu>
       {open &&
-        (repo.workspaces ?? []).map((ws) => (
+        worktrees.map((ws) => (
           <WorkspaceNode
             key={ws.id}
             ws={ws}
@@ -202,11 +251,6 @@ function RepoNode({
             depth={2}
           />
         ))}
-      {open && (repo.workspaces ?? []).length === 0 && (
-        <div className="py-1 pl-8 text-[11px] text-muted-foreground">
-          no worktrees
-        </div>
-      )}
     </div>
   )
 }

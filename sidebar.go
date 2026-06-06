@@ -56,7 +56,14 @@ type treeRepo struct {
 	PrimaryBranch string          `json:"primary_branch"`
 	Pinned        bool            `json:"pinned"`
 	LastCommit    int64           `json:"last_commit"` // unix secs (ordering + display)
-	Workspaces    []treeWorkspace `json:"workspaces"`
+	Workspaces    []treeWorkspace `json:"workspaces"`  // linked worktrees only
+	// The repo row is itself the main checkout (like herdr): clicking it opens a
+	// terminal on the primary branch. MainTabID is its tab if one already exists,
+	// else "" — the frontend then asks /api/repo/open to create one on click.
+	MainWorkspaceID string `json:"main_workspace_id,omitempty"`
+	MainTabID       string `json:"main_tab_id,omitempty"`
+	AgentStatus     string `json:"agent_status,omitempty"`
+	AgentKind       string `json:"agent_kind,omitempty"`
 }
 
 type treePayload struct {
@@ -73,28 +80,39 @@ func serveTree(w http.ResponseWriter, r *http.Request) {
 	kinds := tabAgentKinds() // tab id → live agent kind (process-based)
 
 	byRepo := map[string][]treeWorkspace{}
+	mainByRepo := map[string]treeWorkspace{} // the repo-root checkout, per repo
 	scratch := []treeWorkspace{}
 	for _, ws := range wss {
 		tw := buildTreeWorkspace(be, ws, statuses, kinds)
-		if ws.Kind == "git" && ws.Repo != "" {
-			byRepo[ws.Repo] = append(byRepo[ws.Repo], tw)
-		} else {
+		switch {
+		case ws.Kind == "git" && ws.Repo != "" && ws.WorkDir == ws.Repo:
+			// The main checkout (work_dir == repo root) IS the repo row, not a child.
+			mainByRepo[ws.Repo] = tw
+		case ws.Kind == "git" && ws.Repo != "":
+			byRepo[ws.Repo] = append(byRepo[ws.Repo], tw) // linked worktree
+		default:
 			scratch = append(scratch, tw)
 		}
 	}
 
-	// Repos shown = those under repos_root, unioned with any repo that has a live
-	// worktree (so a worktree always has a parent even if its repo moved out of
-	// repos_root).
+	// Repos shown = only those with a live workspace (a linked worktree or a
+	// main checkout) — like herdr, which lists workspaces grouped by repo, not
+	// every repo under repos_root. (New repos are reached via New Agent / ⌘K; a
+	// settings allowlist to pin extra repos can layer on later.) reposList only
+	// supplies display names + a stable order seed.
 	nameOf := map[string]string{}
-	order := []string{}
-	seen := map[string]bool{}
 	for _, re := range repos {
 		nameOf[re.Path] = re.Name
-		order = append(order, re.Path)
-		seen[re.Path] = true
 	}
+	order := []string{}
+	seen := map[string]bool{}
 	for path := range byRepo {
+		if !seen[path] {
+			order = append(order, path)
+			seen[path] = true
+		}
+	}
+	for path := range mainByRepo {
 		if !seen[path] {
 			order = append(order, path)
 			seen[path] = true
@@ -119,10 +137,19 @@ func serveTree(w http.ResponseWriter, r *http.Request) {
 		if repoWss == nil {
 			repoWss = []treeWorkspace{}
 		}
-		out = append(out, treeRepo{
+		tr := treeRepo{
 			Path: path, Name: name, PrimaryBranch: primary, Pinned: pinned,
 			LastCommit: ct, Workspaces: repoWss,
-		})
+		}
+		if main, ok := mainByRepo[path]; ok {
+			tr.MainWorkspaceID = main.ID
+			tr.AgentStatus = main.AgentStatus
+			tr.AgentKind = main.AgentKind
+			if len(main.Tabs) > 0 {
+				tr.MainTabID = main.Tabs[0].ID
+			}
+		}
+		out = append(out, tr)
 	}
 	// Pinned first, then most-recently-committed, then name.
 	sort.SliceStable(out, func(i, j int) bool {
@@ -412,6 +439,62 @@ func serveNewTab(w http.ResponseWriter, r *http.Request) {
 	}
 	kickHub()
 	writeJSON(w, tab)
+}
+
+// serveOpenRepo opens a terminal on a repo's primary branch — the repo's main
+// checkout (work_dir == repo root). Like herdr, a repo row isn't just a grouping
+// of worktrees: it's itself a workspace. Returns the tab to select, creating the
+// main-checkout workspace + a shell tab on first open.
+func serveOpenRepo(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		Repo string `json:"repo"`
+	}
+	if !decodeJSON(w, r, &req) {
+		return
+	}
+	be := curBackend()
+	repo := expandTildeOn(be, req.Repo)
+	if repo == "" {
+		http.Error(w, "repo required", http.StatusBadRequest)
+		return
+	}
+	// Reuse the existing main-checkout workspace if there is one.
+	if wss, err := listWorkspaces(sidebarHost); err == nil {
+		for _, ws := range wss {
+			if ws.Kind == "git" && ws.WorkDir == repo {
+				if tabs, _ := listTabs(ws.ID); len(tabs) > 0 {
+					writeJSON(w, map[string]any{"tab_id": tabs[0].ID, "workspace_id": ws.ID})
+					return
+				}
+				// Workspace exists but has no live tab — fall through to add one.
+				tabID := newID()
+				if err := tmuxNewSession(tabSession(tabID), repo, []string{"LASSO_TAB_ID=" + tabID}); err != nil {
+					http.Error(w, err.Error(), http.StatusInternalServerError)
+					return
+				}
+				_ = insertTab(Tab{ID: tabID, WorkspaceID: ws.ID, Title: "shell", Cwd: repo, Kind: "shell", CreatedAt: time.Now()})
+				kickHub()
+				writeJSON(w, map[string]any{"tab_id": tabID, "workspace_id": ws.ID})
+				return
+			}
+		}
+	}
+	// Create the main-checkout workspace + an initial shell tab at the repo root.
+	wsID := "w" + newID()
+	tabID := newID()
+	if err := tmuxNewSession(tabSession(tabID), repo, []string{"LASSO_TAB_ID=" + tabID}); err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	now := time.Now()
+	title := filepath.Base(repo)
+	if rc, err := getRepoState(sidebarHost, repo); err == nil && rc.DisplayName != "" {
+		title = rc.DisplayName
+	}
+	_ = insertWorkspace(Workspace{ID: wsID, Host: sidebarHost, Title: title, Repo: repo, WorkDir: repo, Kind: "git", CreatedAt: now})
+	_ = insertTab(Tab{ID: tabID, WorkspaceID: wsID, Title: "shell", Cwd: repo, Kind: "shell", CreatedAt: now})
+	kickHub()
+	writeJSON(w, map[string]any{"tab_id": tabID, "workspace_id": wsID})
 }
 
 // serveRepoPin toggles a repo's pinned flag (floats it to the top of the tree).
