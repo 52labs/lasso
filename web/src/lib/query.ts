@@ -1,4 +1,5 @@
 import { QueryClient } from "@tanstack/react-query"
+import type { TreePayload, TreeTab, TreeWorkspace } from "@/lib/api"
 
 // One shared QueryClient for the app's server state. Exported (not just provided)
 // so non-component code — the SSE host-change handler in app-store — can
@@ -31,6 +32,73 @@ export const qk = {
   uiState: ["ui-state"] as const,
   sidebarPct: ["sidebar-pct"] as const,
   version: ["version"] as const,
+}
+
+// Optimistic tree edits: a freshly-created tab/workspace is written into the
+// cached /api/tree immediately so the tab strip + sidebar render it without
+// waiting for the (slower) refetch. The next refetch reconciles authoritatively.
+
+// treeAddTab appends a tab to an existing workspace (the "+" new-tab flow).
+export function treeAddTab(workspaceId: string, tab: TreeTab) {
+  queryClient.setQueryData<TreePayload>(qk.tree, (old) => {
+    if (!old) return old
+    const add = (w: TreeWorkspace): TreeWorkspace =>
+      w.id === workspaceId ? { ...w, tabs: [...(w.tabs ?? []), tab] } : w
+    return {
+      scratch: (old.scratch ?? []).map(add),
+      repos: (old.repos ?? []).map((r) => ({
+        ...r,
+        workspaces: (r.workspaces ?? []).map(add),
+        main_workspace: r.main_workspace
+          ? add(r.main_workspace)
+          : r.main_workspace,
+      })),
+    }
+  })
+}
+
+// treeAddScratchWorkspace prepends a new scratch workspace (a scratch agent).
+export function treeAddScratchWorkspace(ws: TreeWorkspace) {
+  queryClient.setQueryData<TreePayload>(qk.tree, (old) => {
+    if (!old || (old.scratch ?? []).some((w) => w.id === ws.id)) return old
+    return { ...old, scratch: [ws, ...(old.scratch ?? [])] }
+  })
+}
+
+// treeAddWorktree adds a worktree workspace under an already-listed repo. (If the
+// repo isn't in the tree yet, the refetch will surface it.)
+export function treeAddWorktree(repoPath: string, ws: TreeWorkspace) {
+  queryClient.setQueryData<TreePayload>(qk.tree, (old) => {
+    if (!old) return old
+    return {
+      ...old,
+      repos: (old.repos ?? []).map((r) =>
+        r.path === repoPath
+          ? { ...r, workspaces: [...(r.workspaces ?? []), ws] }
+          : r
+      ),
+    }
+  })
+}
+
+// treeSetRepoMain attaches a freshly-opened main-checkout workspace to its repo.
+export function treeSetRepoMain(repoPath: string, ws: TreeWorkspace) {
+  queryClient.setQueryData<TreePayload>(qk.tree, (old) => {
+    if (!old) return old
+    return {
+      ...old,
+      repos: (old.repos ?? []).map((r) =>
+        r.path === repoPath
+          ? {
+              ...r,
+              main_workspace: ws,
+              main_workspace_id: ws.id,
+              main_tab_id: ws.tabs?.[0]?.id,
+            }
+          : r
+      ),
+    }
+  })
 }
 
 // invalidateHostScoped refetches everything tied to a host, called when the

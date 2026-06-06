@@ -60,10 +60,13 @@ type treeRepo struct {
 	// The repo row is itself the main checkout (like herdr): clicking it opens a
 	// terminal on the primary branch. MainTabID is its tab if one already exists,
 	// else "" — the frontend then asks /api/repo/open to create one on click.
-	MainWorkspaceID string `json:"main_workspace_id,omitempty"`
-	MainTabID       string `json:"main_tab_id,omitempty"`
-	AgentStatus     string `json:"agent_status,omitempty"`
-	AgentKind       string `json:"agent_kind,omitempty"`
+	// MainWorkspace carries the full main-checkout workspace (with its tabs) so
+	// the tab strip can resolve it; it is NOT rendered as a child in the tree.
+	MainWorkspaceID string         `json:"main_workspace_id,omitempty"`
+	MainTabID       string         `json:"main_tab_id,omitempty"`
+	MainWorkspace   *treeWorkspace `json:"main_workspace,omitempty"`
+	AgentStatus     string         `json:"agent_status,omitempty"`
+	AgentKind       string         `json:"agent_kind,omitempty"`
 }
 
 type treePayload struct {
@@ -142,6 +145,8 @@ func serveTree(w http.ResponseWriter, r *http.Request) {
 			LastCommit: ct, Workspaces: repoWss,
 		}
 		if main, ok := mainByRepo[path]; ok {
+			m := main
+			tr.MainWorkspace = &m
 			tr.MainWorkspaceID = main.ID
 			tr.AgentStatus = main.AgentStatus
 			tr.AgentKind = main.AgentKind

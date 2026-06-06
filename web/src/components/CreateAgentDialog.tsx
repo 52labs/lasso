@@ -16,7 +16,7 @@ import {
 import { Input } from "@/components/ui/input"
 import { api, type CreateAgentPayload, type HostInfo } from "@/lib/api"
 import { useApp } from "@/lib/app-store"
-import { qk } from "@/lib/query"
+import { qk, treeAddScratchWorkspace, treeAddWorktree } from "@/lib/query"
 import { cn } from "@/lib/utils"
 
 type AgentType = "git" | "scratch"
@@ -389,6 +389,38 @@ export function CreateAgentDialog({
     },
     onSuccess: (rec) => {
       toast.success(`Created agent “${rec.title}”`)
+      // Surface the new agent's workspace in the tree immediately so the tab
+      // strip + sidebar render it before the refetch lands.
+      if (rec.workspace_id && rec.tab_id) {
+        const tab = {
+          id: rec.tab_id,
+          title: rec.title,
+          kind: "agent" as const,
+          agent: rec.agent,
+          status: "idle" as const,
+        }
+        if (rec.type === "git" && rec.repo) {
+          treeAddWorktree(rec.repo, {
+            id: rec.workspace_id,
+            title: rec.title,
+            repo: rec.repo,
+            work_dir: rec.work_dir,
+            kind: "git",
+            pinned: false,
+            branch: rec.branch,
+            tabs: [tab],
+          })
+        } else {
+          treeAddScratchWorkspace({
+            id: rec.workspace_id,
+            title: rec.title,
+            work_dir: rec.work_dir,
+            kind: "scratch",
+            pinned: false,
+            tabs: [tab],
+          })
+        }
+      }
       // Focus the new agent in the UI — select its tab (and show its terminal).
       // Only the UI creator does this; agents created via MCP must NOT steal the
       // user's focus, and they don't (MCP never dispatches this).

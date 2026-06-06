@@ -3,7 +3,7 @@ import { toast } from "sonner"
 
 import { api, type TreeWorkspace } from "@/lib/api"
 import { useApp } from "@/lib/app-store"
-import { qk, queryClient } from "@/lib/query"
+import { qk, queryClient, treeAddTab } from "@/lib/query"
 import { cn } from "@/lib/utils"
 
 const STATUS_DOT: Record<string, string> = {
@@ -83,8 +83,14 @@ export function TabStrip({
         onClick={async () => {
           try {
             const t = await api.newTab(workspace.id)
-            refresh()
+            // Show the tab in the strip immediately, then reconcile.
+            treeAddTab(workspace.id, {
+              id: t.id,
+              title: t.title,
+              kind: "shell",
+            })
             onSelectTab(t.id)
+            refresh()
           } catch (e) {
             toast.error(String(e))
           }

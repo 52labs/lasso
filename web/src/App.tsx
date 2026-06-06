@@ -70,19 +70,40 @@ export function App() {
   )
 }
 
-// findWorkspace locates the workspace owning a tab id across repos + scratch.
-function findWorkspace(
+// allWorkspaces flattens every selectable workspace: scratch, repo worktrees, and
+// each repo's main checkout (which is folded into the repo header in the tree but
+// must still resolve for the tab strip).
+function allWorkspaces(
   tree:
-    | { repos: { workspaces: TreeWorkspace[] }[]; scratch: TreeWorkspace[] }
-    | undefined,
+    | {
+        repos: {
+          workspaces?: TreeWorkspace[]
+          main_workspace?: TreeWorkspace
+        }[]
+        scratch?: TreeWorkspace[]
+      }
+    | undefined
+): TreeWorkspace[] {
+  if (!tree) return []
+  const out: TreeWorkspace[] = [...(tree.scratch ?? [])]
+  for (const r of tree.repos ?? []) {
+    out.push(...(r.workspaces ?? []))
+    if (r.main_workspace) out.push(r.main_workspace)
+  }
+  return out
+}
+
+// findWorkspace locates the workspace owning a tab id.
+function findWorkspace(
+  tree: Parameters<typeof allWorkspaces>[0],
   tabId: string | null
 ): TreeWorkspace | null {
-  if (!tree || !tabId) return null
-  const all = [
-    ...(tree.scratch ?? []),
-    ...(tree.repos ?? []).flatMap((r) => r.workspaces ?? []),
-  ]
-  return all.find((ws) => (ws.tabs ?? []).some((t) => t.id === tabId)) ?? null
+  if (!tabId) return null
+  return (
+    allWorkspaces(tree).find((ws) =>
+      (ws.tabs ?? []).some((t) => t.id === tabId)
+    ) ?? null
+  )
 }
 
 function Shell() {
@@ -118,11 +139,7 @@ function Shell() {
   // selection whose tab was closed — but never off one still loading in.
   React.useEffect(() => {
     if (!tree.data) return
-    const all = [
-      ...(tree.data.scratch ?? []),
-      ...(tree.data.repos ?? []).flatMap((r) => r.workspaces ?? []),
-    ]
-    const tabs = all.flatMap((ws) => ws.tabs ?? [])
+    const tabs = allWorkspaces(tree.data).flatMap((ws) => ws.tabs ?? [])
     for (const t of tabs) seenTabs.current.add(t.id)
     if (selectedTabId) {
       const exists = tabs.some((t) => t.id === selectedTabId)

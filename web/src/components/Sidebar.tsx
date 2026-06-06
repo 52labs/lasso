@@ -17,7 +17,7 @@ import {
   type TreeWorkspace,
 } from "@/lib/api"
 import { useApp } from "@/lib/app-store"
-import { qk, queryClient } from "@/lib/query"
+import { qk, queryClient, treeAddTab, treeSetRepoMain } from "@/lib/query"
 import { cn } from "@/lib/utils"
 
 // The left sidebar: a "spaces" tree (git repos with their worktrees nested,
@@ -136,9 +136,20 @@ function RepoNode({
       return
     }
     try {
-      const { tab_id } = await api.openRepo(repo.path)
-      refreshTree()
+      const { tab_id, workspace_id } = await api.openRepo(repo.path)
+      // Surface the main checkout immediately so the tab strip resolves it.
+      treeSetRepoMain(repo.path, {
+        id: workspace_id,
+        title: repo.name,
+        repo: repo.path,
+        work_dir: repo.path,
+        kind: "git",
+        pinned: false,
+        branch: repo.primary_branch,
+        tabs: [{ id: tab_id, title: "shell", kind: "shell" }],
+      })
       onSelectTab(tab_id)
+      refreshTree()
     } catch (e) {
       toast.error(String(e))
     }
@@ -328,8 +339,11 @@ function WorkspaceNode({
               toast.error(String(e))
               return null
             })
+            if (t) {
+              treeAddTab(ws.id, { id: t.id, title: t.title, kind: "shell" })
+              onSelectTab(t.id)
+            }
             refreshTree()
-            if (t) onSelectTab(t.id)
           }}
         >
           New tab

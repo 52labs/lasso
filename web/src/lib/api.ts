@@ -202,8 +202,11 @@ export interface TreeRepo {
   workspaces: TreeWorkspace[] // linked worktrees only
   // The repo row is itself the main checkout (primary branch). main_tab_id is
   // its tab if one exists; otherwise click calls openRepo to create one.
+  // main_workspace carries that checkout's full workspace (with tabs) so the tab
+  // strip can resolve it — it is not rendered as a child in the tree.
   main_workspace_id?: string
   main_tab_id?: string
+  main_workspace?: TreeWorkspace
   agent_status?: AgentStatus
   agent_kind?: string
 }
