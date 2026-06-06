@@ -16,6 +16,8 @@ interface AppState {
   // Active host name ("local" or an alias), kept live off the SSE stream so the
   // footer reflects switches initiated anywhere.
   host: string | null
+  // tab id → agent status (idle|working|blocked), pushed by the status poller.
+  agentStatuses: Record<string, string>
 }
 
 // Fired when the active host changes (term_rev bumped) so terminal iframes can
@@ -31,6 +33,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     panesRev: -1,
     themeRev: -1,
     host: null,
+    agentStatuses: {},
   })
 
   // Last seen term_rev — a change means the active host switched, so terminals
@@ -53,7 +56,23 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
       panesRev: typeof a.panes_rev === "number" ? a.panes_rev : prev.panesRev,
       themeRev: typeof a.theme_rev === "number" ? a.theme_rev : prev.themeRev,
       host: a.host || prev.host,
+      agentStatuses: a.agent_statuses ?? prev.agentStatuses,
     }))
+  }, [])
+
+  // The Files/Diff panel follows the selected tab's working directory. Selection
+  // lives in the Shell, so it tells the store which cwd to track via this event
+  // (keeping the existing useApp().activeCwd consumers — git.ts, FilesPanel —
+  // unchanged).
+  React.useEffect(() => {
+    const onCwd = (e: Event) => {
+      const cwd = (e as CustomEvent).detail as string
+      setState((prev) =>
+        cwd && cwd !== prev.activeCwd ? { ...prev, activeCwd: cwd } : prev
+      )
+    }
+    window.addEventListener("lasso:cwd", onCwd)
+    return () => window.removeEventListener("lasso:cwd", onCwd)
   }, [])
 
   // Initial state + live SSE updates.

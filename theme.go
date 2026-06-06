@@ -23,6 +23,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"sort"
 	"strconv"
 	"strings"
 )
@@ -331,6 +332,43 @@ var themeAliases = map[string]string{
 	"rosepine-dawn":    "rose-pine-dawn",
 	"dawn":             "rose-pine-dawn",
 	"lotus":            "kanagawa-lotus",
+}
+
+// defaultThemeName is the theme used when none is selected in settings.
+const defaultThemeName = "catppuccin"
+
+// loadTheme resolves the theme selected in settings (key "theme"), defaulting to
+// catppuccin. This replaced reading herdr's config.toml — the user now picks the
+// theme in lasso's own Settings (the 18 palettes below are unchanged).
+func loadTheme() resolvedTheme {
+	name := getSettingValue("theme")
+	if name == "" {
+		name = defaultThemeName
+	}
+	return loadHerdrTheme(name)
+}
+
+// themeMeta is one selectable theme for the settings picker.
+type themeMeta struct {
+	Name  string `json:"name"`
+	Light bool   `json:"light"`
+}
+
+// lightThemes marks which built-in palettes are light (dark-on-light).
+var lightThemes = map[string]bool{
+	"catppuccin-latte": true, "tokyo-night-day": true, "gruvbox-light": true,
+	"one-light": true, "solarized-light": true, "kanagawa-lotus": true,
+	"rose-pine-dawn": true,
+}
+
+// availableThemes returns every selectable theme, sorted by name.
+func availableThemes() []themeMeta {
+	out := make([]themeMeta, 0, len(themes))
+	for name := range themes {
+		out = append(out, themeMeta{Name: name, Light: lightThemes[name]})
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].Name < out[j].Name })
+	return out
 }
 
 // resolvedTheme is a concrete palette after applying config overrides.

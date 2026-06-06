@@ -36,7 +36,9 @@ const TERM_FONT_STYLE_ID = "herdr-term-font"
 // stylesheet doesn't cross the iframe boundary. We mirror index.css here so the
 // same family resolves inside ttyd's xterm. Same-origin proxying lets us reach
 // in (see applyTermTheme); /fonts/* is the embedded build's stable URL.
-const TERM_FONT_FACE_CSS = (["Regular", "Bold", "Italic", "BoldItalic"] as const)
+const TERM_FONT_FACE_CSS = (
+  ["Regular", "Bold", "Italic", "BoldItalic"] as const
+)
   .map((variant) => {
     const weight = variant.startsWith("Bold") ? 700 : 400
     const style = variant.endsWith("Italic") ? "italic" : "normal"

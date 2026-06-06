@@ -24,6 +24,9 @@ export const qk = {
   repoBranches: (host: string, path: string) =>
     ["repo-branches", host, path] as const,
   grid: ["grid"] as const,
+  tree: ["tree"] as const,
+  agents: ["agents"] as const,
+  themes: ["themes"] as const,
   diff: (host: string, path: string) => ["diff", host, path] as const,
   uiState: ["ui-state"] as const,
   sidebarPct: ["sidebar-pct"] as const,

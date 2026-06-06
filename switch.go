@@ -165,7 +165,6 @@ func serveHostSwitch(w http.ResponseWriter, r *http.Request) {
 	invalidatePaneList()          // drop stale pane data from the old host
 	applyBackendToTerminals(newB) // respawn ttyd terminals on the new host
 	if srvHub != nil {
-		srvHub.startSub()    // re-subscribe events against the new socket
 		srvHub.bumpTermRev() // tell the browser to reload the terminal iframes
 		srvHub.kick()        // push fresh state without waiting for the poll tick
 	}

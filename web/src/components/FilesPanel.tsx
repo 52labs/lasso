@@ -73,9 +73,7 @@ export function FilesPanel() {
           <span
             className={cn(
               data != null &&
-                (dirty > 0
-                  ? "font-semibold text-warn underline"
-                  : "text-good")
+                (dirty > 0 ? "font-semibold text-warn underline" : "text-good")
             )}
           >
             Diff

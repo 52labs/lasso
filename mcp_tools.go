@@ -41,7 +41,7 @@ func registerMCPTools(s *mcp.Server) {
 
 	mcp.AddTool(s, &mcp.Tool{
 		Name:        "create_agent",
-		Description: "Spawn a coding agent (claude or codex) in its own herdr workspace. type=git creates a fresh git worktree off base_branch (default the repo's HEAD) under a new branch; type=scratch creates an empty workspace. The optional prompt becomes the agent's initial task. Returns immediately with the agent's id, workspace, and root pane; the agent boots asynchronously. By default it does NOT switch the herdr view to the new pane (so it won't yank a watching user away); pass focus:true to land on it. To bring many repos up to date, call this once per repo.",
+		Description: "Spawn a coding agent (claude or codex) in its own lasso workspace (a tmux session). type=git creates a fresh git worktree off base_branch (default the repo's HEAD) under a new branch; type=scratch creates an empty workspace. The optional prompt becomes the agent's initial task. Returns immediately with the agent's id and workspace; the agent boots asynchronously. To bring many repos up to date, call this once per repo.",
 	}, createAgentTool)
 
 	mcp.AddTool(s, &mcp.Tool{
@@ -51,7 +51,7 @@ func registerMCPTools(s *mcp.Server) {
 
 	mcp.AddTool(s, &mcp.Tool{
 		Name:        "whoami",
-		Description: "Identify the calling agent's OWN lasso agent record, so it can then act on itself — most commonly to call close_agent with the returned id once its work is done. Pass the value of your $HERDR_PANE_ID environment variable as pane_id (e.g. \"p_82\"); lasso maps that herdr pane to the agent it created there. The lasso MCP server runs in lasso's own process, NOT your shell, so it cannot read your environment — you MUST supply $HERDR_PANE_ID yourself. On success returns found:true and the same fields as a list_agents entry (id, type, title, repo, branch, work_dir, root_pane, workspace_id, status, host, ...) under `agent`. If it can't resolve (no pane_id given, or the pane isn't one lasso manages) it returns found:false with a human-readable `detail` instead of erroring.",
+		Description: "Identify the calling agent's OWN lasso agent record, so it can then act on itself — most commonly to call close_agent with the returned id once its work is done. Pass the value of your $LASSO_TAB_ID environment variable as tab_id; lasso maps that tab to the agent it created there. The lasso MCP server runs in lasso's own process, NOT your shell, so it cannot read your environment — you MUST supply $LASSO_TAB_ID yourself. On success returns found:true and the same fields as a list_agents entry under `agent`. If it can't resolve it returns found:false with a human-readable `detail` instead of erroring.",
 	}, whoamiTool)
 
 	mcp.AddTool(s, &mcp.Tool{
@@ -76,7 +76,7 @@ func registerMCPTools(s *mcp.Server) {
 
 	mcp.AddTool(s, &mcp.Tool{
 		Name:        "close_agent",
-		Description: "Stop an agent: first kill the agent process (claude/codex) in its pane, then — unless close_pane is false — close the associated herdr pane. For a git agent, set remove_worktree=true to also delete its git worktree (this discards any uncommitted work, so it defaults to false, and implies closing the pane).",
+		Description: "Stop an agent: first kill the agent process (claude/codex) in its terminal, then — unless close_pane is false — close the associated tab (its tmux session). For a git agent, set remove_worktree=true to also delete its git worktree (this discards any uncommitted work, so it defaults to false, and implies closing the tab).",
 	}, closeAgentTool)
 }
 
@@ -106,9 +106,51 @@ func agentInfoFrom(host string, rec AgentRecord, status string) agentInfo {
 	return agentInfo{
 		ID: rec.ID, Host: host, Title: rec.Title, Type: rec.Type, Agent: rec.Agent,
 		Repo: rec.Repo, Branch: rec.Branch, BaseBranch: rec.BaseBranch,
-		WorkDir: rec.WorkDir, WorkspaceID: rec.WorkspaceID, RootPane: rec.RootPane,
+		WorkDir: rec.WorkDir, WorkspaceID: rec.WorkspaceID, RootPane: agentSession(rec),
 		Status: status, CreatedAt: rec.CreatedAt.Format(time.RFC3339),
 	}
+}
+
+// agentSession is the tmux session backing an agent (its tab). Replaces herdr's
+// root pane id as the runtime handle for read/send/wait/close.
+func agentSession(rec AgentRecord) string {
+	id := rec.TabID
+	if id == "" {
+		id = rec.ID // pre-migration records used the agent id as the tab id
+	}
+	return tabSession(id)
+}
+
+// agentStatusNow detects an agent's status on demand by scraping its tmux pane —
+// not the poller cache, which is paused when no browser is connected (so MCP
+// callers always get a fresh read). A gone session / exited agent reads idle.
+func agentStatusNow(rec AgentRecord) string {
+	session := agentSession(rec)
+	if !tmuxHasSession(session) || !isAgentCommand(tmuxForegroundCmd(session)) {
+		return string(StatusIdle)
+	}
+	screen, err := tmuxCapture(session)
+	if err != nil {
+		return string(StatusUnknown)
+	}
+	var lw time.Time
+	return string(detectAgentStatus(rec.Agent, screen, agentStatuses.status(rec.TabID), &lw, time.Now()))
+}
+
+// agentReadText reads an agent's terminal: "visible" = the current screen,
+// anything else = recent scrollback (lines, default 200).
+func agentReadText(rec AgentRecord, source string, lines int) (string, error) {
+	session := agentSession(rec)
+	if !tmuxHasSession(session) {
+		return "", fmt.Errorf("agent %q has no live terminal", rec.ID)
+	}
+	if source == "visible" {
+		return tmuxCapture(session)
+	}
+	if lines <= 0 {
+		lines = 200
+	}
+	return tmuxCaptureScroll(session, lines)
 }
 
 // paneAgentStatus returns the herdr agent_status for a pane (working/idle/
@@ -396,24 +438,9 @@ func listAgentsTool(_ context.Context, _ *mcp.CallToolRequest, in listAgentsIn) 
 	if err != nil {
 		return nil, listAgentsOut{}, err
 	}
-	// One pane.list for the whole host, so status enrichment is a single RPC.
-	b, berr := resolveBackend(host)
-	statuses := map[string]string{}
-	if berr == nil {
-		if res, e := b.HerdrCall("pane.list", map[string]any{}); e == nil {
-			var pl struct {
-				Panes []pane `json:"panes"`
-			}
-			if json.Unmarshal(res, &pl) == nil {
-				for _, p := range pl.Panes {
-					statuses[p.PaneID] = p.AgentStatus
-				}
-			}
-		}
-	}
 	out := listAgentsOut{Host: host}
 	for _, rec := range recs {
-		out.Agents = append(out.Agents, agentInfoFrom(host, rec, statuses[rec.RootPane]))
+		out.Agents = append(out.Agents, agentInfoFrom(host, rec, agentStatusNow(rec)))
 	}
 	return nil, out, nil
 }
@@ -423,12 +450,12 @@ func listAgentsTool(_ context.Context, _ *mcp.CallToolRequest, in listAgentsIn) 
 // ---------------------------------------------------------------------------
 
 type whoamiIn struct {
-	Host   string `json:"host,omitempty" jsonschema:"Host the calling agent runs on; omit for the local box."`
-	PaneID string `json:"pane_id,omitempty" jsonschema:"Your own herdr pane id — the value of the $HERDR_PANE_ID environment variable in your shell (e.g. \"p_82\"). The server cannot read your environment, so you must pass it. The public form (\"w<workspace>-<n>\") is also accepted."`
+	Host  string `json:"host,omitempty" jsonschema:"Host the calling agent runs on; omit for the local box."`
+	TabID string `json:"tab_id,omitempty" jsonschema:"Your own lasso tab id — the value of the $LASSO_TAB_ID environment variable in your shell. The server cannot read your environment, so you must pass it. If unset you are not running inside a lasso-managed terminal."`
 }
 
 type whoamiOut struct {
-	Found  bool       `json:"found"`            // true if the pane resolved to a lasso agent
+	Found  bool       `json:"found"`            // true if the tab resolved to a lasso agent
 	Agent  *agentInfo `json:"agent,omitempty"`  // the resolved agent (null when found is false)
 	Detail string     `json:"detail,omitempty"` // why resolution failed, when found is false
 }
@@ -438,45 +465,29 @@ func whoamiTool(_ context.Context, _ *mcp.CallToolRequest, in whoamiIn) (*mcp.Ca
 	if host == "" {
 		host = "local"
 	}
-	b, err := resolveBackend(host)
-	if err != nil {
-		return nil, whoamiOut{}, err
-	}
 	recs, err := listAgents(host)
 	if err != nil {
 		return nil, whoamiOut{}, err
 	}
-	return nil, resolveWhoami(b, host, recs, in.PaneID), nil
+	return nil, resolveWhoami(host, recs, in.TabID), nil
 }
 
-// resolveWhoami maps a herdr pane id to the lasso agent that owns it. It asks
-// herdr to canonicalize the id (so the raw $HERDR_PANE_ID form resolves to the
-// public root_pane lasso stores), then matches it against the host's agents.
-// Never errors — an unresolvable pane yields found:false with an explanation, so
-// an agent calling whoami on itself gets a usable answer either way.
-func resolveWhoami(b Backend, host string, recs []AgentRecord, paneID string) whoamiOut {
-	paneID = strings.TrimSpace(paneID)
-	if paneID == "" {
-		return whoamiOut{Detail: "no pane_id given: pass the value of your $HERDR_PANE_ID environment variable (e.g. \"p_82\"). If that variable is empty or unset, you are not running inside a lasso-managed herdr pane."}
-	}
-	// herdr's pane.get accepts both the raw env form and the public form and
-	// echoes the public pane id lasso records as root_pane. Fall back to the raw
-	// id if herdr can't resolve it (so a caller that already passed the public
-	// form still matches even when herdr is unreachable).
-	match, status := paneID, ""
-	if info, ok := paneGet(b, paneID); ok {
-		match, status = info.PaneID, info.AgentStatus
+// resolveWhoami maps a $LASSO_TAB_ID value to the lasso agent that owns that tab.
+// Each agent's tmux session is created with LASSO_TAB_ID set, so an agent reads
+// the var and passes it here. Never errors — an unresolvable id yields
+// found:false with an explanation.
+func resolveWhoami(host string, recs []AgentRecord, tabID string) whoamiOut {
+	tabID = strings.TrimSpace(tabID)
+	if tabID == "" {
+		return whoamiOut{Detail: "no tab_id given: pass the value of your $LASSO_TAB_ID environment variable. If it's empty or unset, you are not running inside a lasso-managed terminal."}
 	}
 	for _, rec := range recs {
-		if rec.RootPane != "" && rec.RootPane == match {
-			if status == "" {
-				status = paneAgentStatus(b, rec.RootPane)
-			}
-			ai := agentInfoFrom(host, rec, status)
+		if (rec.TabID != "" && rec.TabID == tabID) || rec.ID == tabID {
+			ai := agentInfoFrom(host, rec, agentStatusNow(rec))
 			return whoamiOut{Found: true, Agent: &ai}
 		}
 	}
-	return whoamiOut{Detail: fmt.Sprintf("pane %q does not map to any lasso agent on host %q — you may be in a herdr pane lasso did not create, or on a different host than the one you queried.", paneID, host)}
+	return whoamiOut{Detail: fmt.Sprintf("tab %q does not map to any lasso agent on host %q — you may be in a terminal lasso did not create.", tabID, host)}
 }
 
 // ---------------------------------------------------------------------------
@@ -499,17 +510,12 @@ func getAgentTool(_ context.Context, _ *mcp.CallToolRequest, in getAgentIn) (*mc
 	if err != nil {
 		return nil, getAgentOut{}, err
 	}
-	b, err := resolveBackend(in.Host)
-	if err != nil {
-		return nil, getAgentOut{}, err
-	}
 	lines := in.Lines
 	if lines == 0 {
 		lines = 50
 	}
-	status := paneAgentStatus(b, rec.RootPane)
-	output, _ := paneReadText(b, rec.RootPane, "recent", lines)
-	return nil, getAgentOut{Agent: agentInfoFrom(b.Name(), rec, status), Output: output}, nil
+	output, _ := agentReadText(rec, "recent", lines)
+	return nil, getAgentOut{Agent: agentInfoFrom(hostOrLocal(in.Host), rec, agentStatusNow(rec)), Output: output}, nil
 }
 
 // ---------------------------------------------------------------------------
@@ -534,14 +540,11 @@ func sendAgentTool(_ context.Context, _ *mcp.CallToolRequest, in sendAgentIn) (*
 	if err != nil {
 		return nil, sendAgentOut{}, err
 	}
-	b, err := resolveBackend(in.Host)
-	if err != nil {
-		return nil, sendAgentOut{}, err
+	session := agentSession(rec)
+	if !tmuxHasSession(session) {
+		return nil, sendAgentOut{}, fmt.Errorf("agent %q has no live terminal to send to", in.AgentID)
 	}
-	if rec.RootPane == "" {
-		return nil, sendAgentOut{}, fmt.Errorf("agent %q has no pane to send to", in.AgentID)
-	}
-	paneSubmit(b, rec.RootPane, in.Text)
+	tmuxSubmit(session, in.Text)
 	return nil, sendAgentOut{Sent: true}, nil
 }
 
@@ -565,10 +568,6 @@ func readAgentTool(_ context.Context, _ *mcp.CallToolRequest, in readAgentIn) (*
 	if err != nil {
 		return nil, readAgentOut{}, err
 	}
-	b, err := resolveBackend(in.Host)
-	if err != nil {
-		return nil, readAgentOut{}, err
-	}
 	source := in.Source
 	if source == "" {
 		source = "recent"
@@ -577,7 +576,7 @@ func readAgentTool(_ context.Context, _ *mcp.CallToolRequest, in readAgentIn) (*
 	if lines == 0 {
 		lines = 100
 	}
-	text, err := paneReadText(b, rec.RootPane, source, lines)
+	text, err := agentReadText(rec, source, lines)
 	if err != nil {
 		return nil, readAgentOut{}, err
 	}
@@ -605,10 +604,6 @@ func waitAgentTool(ctx context.Context, _ *mcp.CallToolRequest, in waitAgentIn) 
 	if err != nil {
 		return nil, waitAgentOut{}, err
 	}
-	b, err := resolveBackend(in.Host)
-	if err != nil {
-		return nil, waitAgentOut{}, err
-	}
 	want := in.Status
 	if want == "" {
 		want = "idle"
@@ -620,7 +615,7 @@ func waitAgentTool(ctx context.Context, _ *mcp.CallToolRequest, in waitAgentIn) 
 	deadline := time.Now().Add(timeout)
 	var last string
 	for time.Now().Before(deadline) {
-		last = paneAgentStatus(b, rec.RootPane)
+		last = agentStatusNow(rec)
 		if last == want {
 			return nil, waitAgentOut{Status: last, Matched: true}, nil
 		}
@@ -659,38 +654,50 @@ func closeAgentTool(_ context.Context, _ *mcp.CallToolRequest, in closeAgentIn) 
 	if err != nil {
 		return nil, closeAgentOut{}, err
 	}
+	session := agentSession(rec)
 
-	// 1. Always kill the agent process first, so it dies even if the pane is kept.
-	killed := killPaneAgent(b, rec.RootPane)
+	// 1. Always kill the agent process first (Ctrl-C), so it dies even if the
+	//    tab/shell is kept.
+	killed := tmuxKillAgent(session)
 	out := closeAgentOut{AgentKilled: killed}
 
-	// 2. remove_worktree (git only) tears down the worktree, which also closes
-	//    the pane — so it supersedes the close_pane choice.
+	// 2. remove_worktree (git only) tears down the whole workspace + git worktree,
+	//    which supersedes the close_pane choice.
 	if in.RemoveWorktree && rec.Type == "git" {
-		if rec.WorkspaceID == "" {
-			return nil, out, fmt.Errorf("agent %q has no workspace to remove", in.AgentID)
+		if rec.WorkspaceID != "" {
+			for _, t := range mustTabs(rec.WorkspaceID) {
+				closeOneTab(t.ID)
+			}
+			_ = closeWorkspace(rec.WorkspaceID)
+		} else {
+			closeOneTab(rec.TabID)
 		}
-		if _, err := b.HerdrCall("worktree.remove", map[string]any{
-			"workspace_id": rec.WorkspaceID,
-			"force":        true,
-		}); err != nil {
-			return nil, out, fmt.Errorf("worktree.remove: %w", err)
+		if rec.Repo != "" && rec.WorkDir != "" {
+			if _, err := b.GitOut(rec.Repo, "worktree", "remove", "--force", rec.WorkDir); err != nil {
+				return nil, out, fmt.Errorf("git worktree remove: %w", err)
+			}
 		}
 		out.PaneClosed, out.RemovedWorktree = true, true
+		kickHub()
 		return nil, out, nil
 	}
 
-	// 3. Close the pane unless the caller opted to keep it (default: close).
+	// 3. Close the tab unless the caller opted to keep it as a bare shell.
 	closePane := in.ClosePane == nil || *in.ClosePane
 	if !closePane {
-		return nil, out, nil
+		return nil, out, nil // agent killed; tab/shell left running
 	}
-	if rec.RootPane == "" {
-		return nil, out, fmt.Errorf("agent %q has no pane to close", in.AgentID)
-	}
-	if _, err := b.HerdrCall("pane.close", map[string]any{"pane_id": rec.RootPane}); err != nil {
-		return nil, out, fmt.Errorf("pane.close: %w", err)
+	closeOneTab(rec.TabID)
+	if len(mustTabs(rec.WorkspaceID)) == 0 {
+		_ = closeWorkspace(rec.WorkspaceID)
 	}
 	out.PaneClosed = true
+	kickHub()
 	return nil, out, nil
+}
+
+// mustTabs lists a workspace's live tabs, ignoring errors (best-effort teardown).
+func mustTabs(workspaceID string) []Tab {
+	tabs, _ := listTabs(workspaceID)
+	return tabs
 }

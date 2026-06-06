@@ -169,3 +169,38 @@ accent = "cyan"
 		t.Error("expected Customized=true")
 	}
 }
+
+func TestLoadThemeFromSettings(t *testing.T) {
+	openTestDB(t)
+	// Default when unset.
+	if rt := loadTheme(); rt.Resolved != defaultThemeName {
+		t.Errorf("default loadTheme = %q, want %q", rt.Resolved, defaultThemeName)
+	}
+	// Selecting a theme persists + resolves.
+	if err := setSetting("theme", "tokyo-night"); err != nil {
+		t.Fatal(err)
+	}
+	if rt := loadTheme(); rt.Resolved != "tokyo-night" {
+		t.Errorf("loadTheme = %q, want tokyo-night", rt.Resolved)
+	}
+}
+
+func TestAvailableThemes(t *testing.T) {
+	all := availableThemes()
+	if len(all) != len(themes) {
+		t.Fatalf("availableThemes = %d, want %d", len(all), len(themes))
+	}
+	// Sorted, and light flags propagated.
+	for i := 1; i < len(all); i++ {
+		if all[i-1].Name > all[i].Name {
+			t.Fatalf("not sorted at %d: %s > %s", i, all[i-1].Name, all[i].Name)
+		}
+	}
+	byName := map[string]themeMeta{}
+	for _, m := range all {
+		byName[m.Name] = m
+	}
+	if !byName["rose-pine-dawn"].Light || byName["tokyo-night"].Light {
+		t.Errorf("light flags wrong: dawn=%v tokyo=%v", byName["rose-pine-dawn"].Light, byName["tokyo-night"].Light)
+	}
+}

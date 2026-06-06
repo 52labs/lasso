@@ -363,7 +363,6 @@ func createAgent(b Backend, req createAgentReq) (AgentRecord, error) {
 		CreatedAt:   time.Now(),
 	}
 
-	var rootPane string
 	var setup string
 
 	switch req.Type {
@@ -385,36 +384,17 @@ func createAgent(b Backend, req createAgentReq) (AgentRecord, error) {
 		}
 		branch = uniqueBranch(b, repo, branch)
 
-		// Nest the worktree under the repo's name so worktrees from different
-		// repos don't share one flat namespace (and don't collide on slug).
-		repoSlug := slugify(filepath.Base(repo))
-		if repoSlug == "" {
-			repoSlug = "repo"
-		}
-		parent := filepath.Join(lassoWorktreesDirFor(b), repoSlug)
-		workDir := uniqueChildDir(parent, worktreeDirSlug(branch, slug))
 		base := strings.TrimSpace(req.BaseBranch)
 		if base == "" {
 			base = "HEAD"
 		}
-		res, err := b.HerdrCall("worktree.create", map[string]any{
-			"cwd":    repo,
-			"branch": branch,
-			"base":   base,
-			"path":   workDir,
-			"label":  req.Title,
-			// Focus the new worktree's pane so the user lands on the agent as it
-			// boots (the New Agent flow is an explicit "take me there"); suppressed
-			// for MCP-spawned agents so they don't yank a watching user away.
-			"focus": !req.NoFocus,
-		})
+		// Create the git worktree directly (was herdr's worktree.create).
+		workDir, err := createWorktree(b, repo, base, branch, slug)
 		if err != nil {
-			return AgentRecord{}, &createErr{http.StatusBadGateway, fmt.Errorf("worktree.create: %w", err)}
+			return AgentRecord{}, &createErr{http.StatusBadGateway, err}
 		}
-		ws, pane := parseCreateResult(res)
 		rec.Repo, rec.BaseBranch, rec.Branch = repo, base, branch
-		rec.WorkDir, rec.WorkspaceID, rec.RootPane = workDir, ws, pane
-		rootPane = pane
+		rec.WorkDir = workDir
 
 		// Copy the repo's configured files into the worktree and run its setup
 		// script before the agent (both per-repo settings, keyed by host+repo).
@@ -431,21 +411,35 @@ func createAgent(b Backend, req createAgentReq) (AgentRecord, error) {
 		if err := b.MkdirAll(workDir, 0o755); err != nil {
 			return AgentRecord{}, &createErr{http.StatusInternalServerError, fmt.Errorf("mkdir %s: %w", workDir, err)}
 		}
-		res, err := b.HerdrCall("workspace.create", map[string]any{
-			"cwd":   workDir,
-			"label": req.Title,
-			"focus": !req.NoFocus, // land on the new agent's pane as it boots (web flow); suppressed for MCP
-		})
-		if err != nil {
-			return AgentRecord{}, &createErr{http.StatusBadGateway, fmt.Errorf("workspace.create: %w", err)}
-		}
-		ws, pane := parseCreateResult(res)
-		rec.WorkDir, rec.WorkspaceID, rec.RootPane = workDir, ws, pane
-		rootPane = pane
+		rec.WorkDir = workDir
 		setup = defaults.ScratchSetup
 
 	default:
 		return AgentRecord{}, &createErr{http.StatusBadRequest, errors.New(`type must be "git" or "scratch"`)}
+	}
+
+	// Create the workspace + its initial agent tab, and the tmux session backing
+	// that tab (was herdr's workspace/pane). The agent id doubles as the tab id, so
+	// the session is tabSession(rec.ID); the workspace id is "w"+rec.ID.
+	rec.TabID = rec.ID
+	rec.WorkspaceID = "w" + rec.ID
+	session := tabSession(rec.TabID)
+	if err := tmuxNewSession(session, rec.WorkDir, []string{"LASSO_TAB_ID=" + rec.TabID}); err != nil {
+		return AgentRecord{}, &createErr{http.StatusInternalServerError, fmt.Errorf("tmux new-session: %w", err)}
+	}
+	if err := insertWorkspace(Workspace{
+		ID: rec.WorkspaceID, Host: host, Title: rec.Title, Repo: rec.Repo,
+		WorkDir: rec.WorkDir, Kind: req.Type, CreatedAt: rec.CreatedAt,
+	}); err != nil {
+		_ = tmuxKillSession(session)
+		return AgentRecord{}, &createErr{http.StatusInternalServerError, fmt.Errorf("save workspace: %w", err)}
+	}
+	if err := insertTab(Tab{
+		ID: rec.TabID, WorkspaceID: rec.WorkspaceID, Title: rec.Title, Cwd: rec.WorkDir,
+		Kind: "agent", AgentID: rec.ID, CreatedAt: rec.CreatedAt,
+	}); err != nil {
+		_ = tmuxKillSession(session)
+		return AgentRecord{}, &createErr{http.StatusInternalServerError, fmt.Errorf("save tab: %w", err)}
 	}
 
 	// Move staged attachments into the work dir; write notes to NOTES.md.
@@ -461,9 +455,7 @@ func createAgent(b Backend, req createAgentReq) (AgentRecord, error) {
 	// slow over SSH on a remote host) and types sent into it before it's ready get
 	// their leading characters eaten. The backend is captured so the launch always
 	// targets the host the agent was created on, even if the active host changes.
-	if rootPane != "" {
-		go launchAgentInPane(b, rootPane, setup, agentCommand(req.Agent, rec.PlanMode, agentPrompt(rec)))
-	}
+	go launchAgentInSession(session, setup, agentCommand(req.Agent, rec.PlanMode, agentPrompt(rec)))
 
 	// Persist this host's remembered selections, then append the record. Errors
 	// here are non-fatal: the agent is already running, so we still return it.
@@ -477,21 +469,6 @@ func createAgent(b Backend, req createAgentReq) (AgentRecord, error) {
 		return AgentRecord{}, &createErr{http.StatusInternalServerError, fmt.Errorf("save agent: %w", err)}
 	}
 	return rec, nil
-}
-
-// parseCreateResult pulls the workspace_id and root pane_id out of a
-// worktree.create / workspace.create response.
-func parseCreateResult(res json.RawMessage) (workspaceID, rootPane string) {
-	var r struct {
-		Workspace struct {
-			WorkspaceID string `json:"workspace_id"`
-		} `json:"workspace"`
-		RootPane struct {
-			PaneID string `json:"pane_id"`
-		} `json:"root_pane"`
-	}
-	_ = json.Unmarshal(res, &r)
-	return r.Workspace.WorkspaceID, r.RootPane.PaneID
 }
 
 // uniqueBranch returns branch, suffixing -2, -3, … until it doesn't match an
@@ -708,6 +685,48 @@ func agentCommand(agent string, planMode bool, prompt string) string {
 		}
 		return cmd
 	}
+}
+
+// createWorktree creates a git worktree for branch (off base) under
+// ~/.lasso/worktrees/<repoSlug>/<branchSlug> and returns its path. It's the
+// agent-less core of a git workspace, shared by the New Agent flow and the
+// sidebar's right-click "create worktree" (which makes a workspace without
+// launching an agent). titleSlug is a fallback dir name when the branch leaf
+// doesn't slugify. Replaces herdr's worktree.create.
+func createWorktree(b Backend, repo, base, branch, titleSlug string) (string, error) {
+	// Nest the worktree under the repo's name so worktrees from different repos
+	// don't share one flat namespace (and don't collide on slug).
+	repoSlug := slugify(filepath.Base(repo))
+	if repoSlug == "" {
+		repoSlug = "repo"
+	}
+	parent := filepath.Join(lassoWorktreesDirFor(b), repoSlug)
+	workDir := uniqueChildDir(parent, worktreeDirSlug(branch, titleSlug))
+	if err := b.MkdirAll(parent, 0o755); err != nil {
+		return "", fmt.Errorf("mkdir worktree parent: %w", err)
+	}
+	if _, err := b.GitOut(repo, "worktree", "add", "-b", branch, workDir, base); err != nil {
+		return "", fmt.Errorf("git worktree add: %w", err)
+	}
+	return workDir, nil
+}
+
+// launchAgentInSession runs the optional setup script then the agent command in a
+// freshly-created tmux session, then auto-accepts the agent's trust dialog. It
+// first waits for the session's shell to settle (tmuxWaitReady): a new shell is
+// still sourcing its rc, and characters typed before it's ready get their leading
+// bytes eaten. Runs in a goroutine so createAgent returns immediately. tmux is
+// local, so no backend is needed.
+func launchAgentInSession(session, setup, agentCmd string) {
+	tmuxWaitReady(session)
+	if s := strings.TrimSpace(setup); s != "" {
+		_ = tmuxSendLine(session, s)
+	}
+	_ = tmuxSendLine(session, agentCmd)
+	// Both claude and codex show a per-directory trust dialog at boot that their
+	// --dangerously-* flags do NOT bypass; accept it so the agent boots straight
+	// into the task (the prompt rode along as a CLI arg).
+	tmuxConfirmTrust(session)
 }
 
 // launchAgentInPane runs the optional setup script then the agent command in a

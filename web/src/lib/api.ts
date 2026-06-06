@@ -11,6 +11,8 @@ export interface ActiveState {
   // every host switch so the browser can reload the terminal iframes.
   host?: string
   term_rev?: number
+  // tab id → agent status (idle|working|blocked), pushed by the status poller.
+  agent_statuses?: Record<string, string>
 }
 
 // One ssh-config host as a herdr target. Selectable in the footer switcher only
@@ -159,6 +161,64 @@ export interface ThemePayload {
   css: string
   // xterm.js ITheme — shape is opaque to us; we hand it straight to the iframe.
   xterm: Record<string, unknown>
+}
+
+// ---------------------------------------------------------------------------
+// Sidebar tree (tmux era): repos → worktrees, plus a flat agent list.
+// ---------------------------------------------------------------------------
+
+export type AgentStatus = "idle" | "working" | "blocked" | "unknown"
+
+export interface TreeTab {
+  id: string
+  title: string
+  kind: "shell" | "agent"
+  agent_id?: string
+  agent?: string // claude | codex
+  status?: AgentStatus
+}
+
+export interface TreeWorkspace {
+  id: string
+  title: string
+  repo?: string
+  work_dir: string
+  kind: "git" | "scratch"
+  pinned: boolean
+  branch?: string
+  tabs: TreeTab[]
+}
+
+export interface TreeRepo {
+  path: string
+  name: string
+  primary_branch: string
+  pinned: boolean
+  last_commit: number
+  workspaces: TreeWorkspace[]
+}
+
+export interface TreePayload {
+  repos: TreeRepo[]
+  scratch: TreeWorkspace[]
+}
+
+export interface AgentRow {
+  tab_id: string
+  agent_id: string
+  title: string
+  agent: string
+  status: AgentStatus
+  workspace_id: string
+  workspace_title: string
+  repo?: string
+  cwd: string
+  prompt?: string
+}
+
+export interface ThemeMeta {
+  name: string
+  light: boolean
 }
 
 // httpError builds a concise Error from a non-OK response. lasso/herdr return
@@ -392,6 +452,55 @@ export const api = {
   uiState: () => getJSON<UIState>("/api/ui-state"),
   saveUIState: (s: UIState) => postJSON<UIState>("/api/ui-state", s),
   version: () => getJSON<VersionInfo>("/api/version"),
+
+  // --- sidebar tree + workspace/tab/repo mutations (tmux era) ---
+  tree: () => getJSON<TreePayload>("/api/tree"),
+  agentsList: () => getJSON<{ agents: AgentRow[] }>("/api/agents"),
+
+  // Attach a ttyd to a tab's tmux session; returns the iframe base path.
+  tabTerm: (tab_id: string) =>
+    postJSON<{ base: string }>("/api/tab/term", { tab_id }),
+  tabTermTouch: (tab_id: string) =>
+    postJSON<{ alive: boolean }>("/api/tab/term-touch", { tab_id }),
+  tabTermRelease: (tab_id: string) =>
+    fetch("/api/tab/term-release", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ tab_id }),
+      keepalive: true,
+    }).catch(() => {}),
+
+  newTab: (workspace_id: string, title?: string) =>
+    postJSON<TreeTab>("/api/tab/new", { workspace_id, title }),
+  renameTab: (tab_id: string, title: string) =>
+    postJSON<{ ok: boolean }>("/api/tab/rename", { tab_id, title }),
+  closeTab: (tab_id: string) =>
+    postJSON<{ ok: boolean }>("/api/tab/close", { tab_id }),
+  renameWorkspace: (workspace_id: string, title: string) =>
+    postJSON<{ ok: boolean }>("/api/workspace/rename", { workspace_id, title }),
+  closeWorkspace: (workspace_id: string) =>
+    postJSON<{ ok: boolean }>("/api/workspace/close", { workspace_id }),
+  pinRepo: (repo: string, pinned: boolean) =>
+    postJSON<{ ok: boolean }>("/api/repo/pin", { repo, pinned }),
+  renameRepo: (repo: string, name: string) =>
+    postJSON<{ ok: boolean }>("/api/repo/rename", { repo, name }),
+
+  // Make a git worktree + workspace with a shell tab but NO agent.
+  createWorktree: (body: {
+    repo: string
+    base_branch?: string
+    branch_name?: string
+    title?: string
+  }) =>
+    postJSON<{ workspace_id: string; work_dir: string; branch: string }>(
+      "/api/create-worktree",
+      body
+    ),
+
+  // Themes: list available + select one (the select repaints via SSE).
+  themes: () =>
+    getJSON<{ themes: ThemeMeta[]; selected: string }>("/api/themes"),
+  setTheme: (name: string) => postJSON<{ ok: boolean }>("/api/theme", { name }),
 
   files: (path: string) =>
     getJSON<DirListing>(`/api/files?path=${encodeURIComponent(path)}`),

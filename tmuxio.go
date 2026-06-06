@@ -1,0 +1,343 @@
+package main
+
+import (
+	"bytes"
+	"fmt"
+	"os/exec"
+	"strings"
+	"time"
+)
+
+// tmux is lasso's terminal/persistence layer (it replaced the herdr daemon).
+// Every terminal — an agent's shell, a plain shell tab — is a tmux *session* on
+// a DEDICATED tmux server so lasso's sessions are isolated from the user's own
+// tmux and survive lasso restarts/version updates (the tmux server is a separate
+// long-lived process; killing lasso only detaches viewers). ttyd attaches a
+// browser terminal to a session with `tmux attach -t <session>`.
+//
+// CRITICAL: every tmux invocation MUST carry -S (our private socket) and
+// -f /dev/null (ignore the user's ~/.tmux.conf, whose prefix rebinds / plugins /
+// `destroy-unattached on` would corrupt lasso sessions). A single invocation
+// without -S would hit the user's real tmux server — destructive. So ALL tmux
+// calls funnel through tmux()/tmuxOut()/tmuxIn() below, which prepend the prefix;
+// no other code in lasso should exec tmux directly.
+
+// tabSession is the tmux session name for a tab id. Tab ids are base36
+// (strconv.FormatInt(UnixNano, 36)), which contain no '.'/':' — both illegal in
+// tmux session names — so they're safe verbatim.
+func tabSession(tabID string) string { return "lasso_" + tabID }
+
+// tmuxPrefix is the leading argv every tmux call carries: our private socket and
+// "no user config". Built fresh per call so the socket path is always current.
+func tmuxPrefix() []string {
+	return []string{"-S", lassoTmuxSock(), "-f", "/dev/null"}
+}
+
+// tmux runs a tmux command on our server, discarding stdout (returns any error,
+// with stderr folded into the message like gitOutLocal does).
+func tmux(args ...string) error {
+	_, err := tmuxOut(args...)
+	return err
+}
+
+// tmuxOut runs a tmux command on our server and returns its stdout.
+func tmuxOut(args ...string) (string, error) {
+	return tmuxIn("", args...)
+}
+
+// tmuxIn runs a tmux command on our server with stdin wired to in (used by
+// load-buffer for the bracketed-paste path). Empty in means no stdin.
+func tmuxIn(in string, args ...string) (string, error) {
+	cmd := exec.Command("tmux", append(tmuxPrefix(), args...)...)
+	if in != "" {
+		cmd.Stdin = strings.NewReader(in)
+	}
+	var stdout, stderr bytes.Buffer
+	cmd.Stdout = &stdout
+	cmd.Stderr = &stderr
+	if err := cmd.Run(); err != nil {
+		if msg := strings.TrimSpace(stderr.String()); msg != "" {
+			return stdout.String(), fmt.Errorf("tmux %s: %s", args[0], msg)
+		}
+		return stdout.String(), fmt.Errorf("tmux %s: %w", args[0], err)
+	}
+	return stdout.String(), nil
+}
+
+// tmuxEnsureServer starts our tmux server (idempotent) and pins the server-wide
+// options lasso relies on. destroy-unattached MUST be off before any session
+// goes unattached, or a detached (background) session would vanish — so this is
+// called once at startup before any new-session, and defensively by
+// tmuxNewSession. start-server on a running server is a no-op.
+func tmuxEnsureServer() error {
+	// One round-trip: start the server, then set options. The `;` separators are
+	// their own argv entries (tmux command sequence), not shell tokens.
+	return tmux(
+		"start-server", ";",
+		"set", "-g", "destroy-unattached", "off", ";",
+		"set", "-g", "status", "off", ";",
+		"set", "-g", "history-limit", "50000", ";",
+		"set", "-g", "default-terminal", "tmux-256color", ";",
+		"setw", "-g", "aggressive-resize", "on",
+	)
+}
+
+// tmuxNewSession creates a detached session named session, rooted at cwd, with
+// each "KEY=VAL" in env exported into the session (tmux >=3.2 `new-session -e`).
+// We always tag the session with LASSO_TAB_ID so an agent running inside can
+// identify which tab/agent it is (MCP whoami) — there is no $HERDR_PANE_ID now.
+// Initial geometry is generous; ttyd resizes the pane to the real viewport on
+// attach (aggressive-resize sizes per attached client).
+func tmuxNewSession(session, cwd string, env []string) error {
+	if err := tmuxEnsureServer(); err != nil {
+		return err
+	}
+	args := []string{"new-session", "-d", "-s", session, "-x", "200", "-y", "50"}
+	if cwd != "" {
+		args = append(args, "-c", cwd)
+	}
+	for _, kv := range env {
+		args = append(args, "-e", kv)
+	}
+	return tmux(args...)
+}
+
+// tmuxHasSession reports whether session exists on our server.
+func tmuxHasSession(session string) bool {
+	return tmux("has-session", "-t", session) == nil
+}
+
+// tmuxListSessions returns the names of all sessions on our server (empty when
+// the server isn't running / has none).
+func tmuxListSessions() []string {
+	out, err := tmuxOut("list-sessions", "-F", "#{session_name}")
+	if err != nil {
+		return nil
+	}
+	var names []string
+	for _, line := range strings.Split(strings.TrimSpace(out), "\n") {
+		if line = strings.TrimSpace(line); line != "" {
+			names = append(names, line)
+		}
+	}
+	return names
+}
+
+// tmuxKillSession terminates a session (and the processes inside it). Used when
+// a tab/workspace is closed.
+func tmuxKillSession(session string) error {
+	return tmux("kill-session", "-t", session)
+}
+
+// tmuxCapture returns the visible screen of a session's active pane, the input
+// to the agent-status heuristics (detect.go) and the composer/trust checks.
+func tmuxCapture(session string) (string, error) {
+	return tmuxOut("capture-pane", "-p", "-t", session)
+}
+
+// tmuxCaptureScroll returns the last n lines of scrollback + screen (n>0), for
+// the "recent output" MCP read. n is clamped to a sane ceiling by the caller.
+func tmuxCaptureScroll(session string, n int) (string, error) {
+	return tmuxOut("capture-pane", "-p", "-S", fmt.Sprintf("-%d", n), "-t", session)
+}
+
+// tmuxCurrentPath returns the live cwd of a session's foreground process — the
+// foreground_cwd herdr used to surface (drives the file viewer + the cwd we save
+// to recreate a shell after a reboot).
+func tmuxCurrentPath(session string) (string, error) {
+	out, err := tmuxOut("display-message", "-p", "-t", session, "#{pane_current_path}")
+	return strings.TrimSpace(out), err
+}
+
+// tmuxForegroundCmd returns the command name of the session's foreground process
+// (e.g. "claude", "codex", "bash"). Replaces herdr's pane.agent field: when an
+// agent exits the foreground falls back to a shell, which is how we detect the
+// agent is gone.
+func tmuxForegroundCmd(session string) string {
+	out, _ := tmuxOut("display-message", "-p", "-t", session, "#{pane_current_command}")
+	return strings.TrimSpace(out)
+}
+
+// tmuxSendLine types one command line into a cooked-mode shell (text, then a
+// SEPARATE Enter keypress) — the equivalent of herdr's `pane run`. The literal
+// flag (-l) and "--" stop tmux from interpreting text that looks like a key name
+// ("Enter", "C-c") or starts with "-".
+func tmuxSendLine(session, line string) error {
+	if err := tmux("send-keys", "-t", session, "-l", "--", line); err != nil {
+		return err
+	}
+	return tmuxSendEnter(session)
+}
+
+// tmuxSendEnter sends a real Enter keypress (distinct from a pasted "\n"). For an
+// interactive agent TUI this is what actually submits a turn — see tmuxSubmit.
+func tmuxSendEnter(session string) error {
+	return tmux("send-keys", "-t", session, "Enter")
+}
+
+// tmuxSendCtrlC sends Ctrl-C (interrupt) — used to stop a running agent.
+func tmuxSendCtrlC(session string) error {
+	return tmux("send-keys", "-t", session, "C-c")
+}
+
+// tmuxSendText pastes text into a session as a BRACKETED PASTE (no trailing
+// Enter). Going through load-buffer + `paste-buffer -p` makes the TUI treat it as
+// a paste, so an embedded newline stays literal instead of submitting and
+// per-character autocomplete doesn't fire — the tmux-native form of the lesson
+// baked into the old herdr paneSubmit. The buffer is named per-call and deleted
+// after paste (-d) so concurrent sends don't clobber each other.
+func tmuxSendText(session, text string) error {
+	buf := "lasso_" + randSuffix()
+	if _, err := tmuxIn(text, "load-buffer", "-b", buf, "-"); err != nil {
+		return err
+	}
+	return tmux("paste-buffer", "-p", "-d", "-b", buf, "-t", session)
+}
+
+// tmuxWaitReady blocks until a fresh session's shell stops changing its visible
+// output (it finished sourcing rc — mise/fnox/etc.) or a timeout elapses, so the
+// command we send next isn't raced by shell startup and lose its leading bytes.
+// Prompt-agnostic: watches for the screen to stabilize, mirroring the old
+// waitPaneReady.
+func tmuxWaitReady(session string) {
+	deadline := time.Now().Add(10 * time.Second)
+	var prev string
+	stable := 0
+	for time.Now().Before(deadline) {
+		time.Sleep(300 * time.Millisecond)
+		out, err := tmuxCapture(session)
+		if err != nil {
+			continue
+		}
+		t := strings.TrimRight(out, " \t\n")
+		if t != "" && t == prev {
+			if stable++; stable >= 2 { // ~600ms unchanged → settled
+				return
+			}
+		} else {
+			stable = 0
+		}
+		prev = t
+	}
+}
+
+// tmuxSubmit types text into an interactive agent TUI (claude/codex) and submits
+// it as a turn. Two hazards, both handled (the hard-won herdr paneSubmit lesson,
+// re-expressed on tmux):
+//
+//  1. Bracketed paste vs Enter. The TUIs run in raw mode with bracketed paste, so
+//     a newline appended to the message pastes literally and never submits. The
+//     Enter must be a separate real keypress (tmuxSendEnter), not part of the
+//     paste — hence tmuxSendText (paste) then tmuxSendEnter.
+//
+//  2. A race between the paste committing and the Enter. The paste and the Enter
+//     are separate writes; a busy TUI applies the paste a beat late, so an Enter
+//     sent immediately hits a still-empty composer and is a no-op — the message
+//     then sits unsubmitted. So: paste, wait until the composer actually shows it,
+//     then send Enter, re-sending until the composer is observed empty (the turn
+//     went through). A repeat Enter is harmless on an empty/submitted composer.
+func tmuxSubmit(session, text string) {
+	_ = tmuxSendText(session, text)
+	// Wait for the paste to land before pressing Enter; if we never see it (read
+	// failures, an unfamiliar composer) fall through and try Enter anyway rather
+	// than dropping the turn.
+	commit := time.Now().Add(3 * time.Second)
+	for time.Now().Before(commit) {
+		time.Sleep(150 * time.Millisecond)
+		if !tmuxComposerEmpty(session) {
+			break
+		}
+	}
+	deadline := time.Now().Add(5 * time.Second)
+	for {
+		_ = tmuxSendEnter(session)
+		time.Sleep(300 * time.Millisecond)
+		if tmuxComposerEmpty(session) || time.Now().After(deadline) {
+			return
+		}
+	}
+}
+
+// tmuxComposerEmpty reports whether the agent TUI's composer holds no pending
+// draft — tmuxSubmit uses it to confirm a turn submitted. The composer sits
+// between the last pair of horizontal-rule lines the TUI draws above its footer;
+// an empty box is just the prompt marker ("❯"/"›"/">") with nothing after. When
+// the composer can't be located it returns false (don't claim empty), so
+// tmuxSubmit errs toward an extra harmless Enter rather than a dropped message.
+func tmuxComposerEmpty(session string) bool {
+	out, err := tmuxCapture(session)
+	if err != nil {
+		return false
+	}
+	return composerEmpty(out)
+}
+
+// composerEmpty is the pure-text core of tmuxComposerEmpty (also unit-tested).
+func composerEmpty(screen string) bool {
+	lines := strings.Split(screen, "\n")
+	isRule := func(s string) bool {
+		t := strings.TrimSpace(s)
+		return len([]rune(t)) >= 10 && strings.Trim(t, "─") == ""
+	}
+	last, prev := -1, -1
+	for i, ln := range lines {
+		if isRule(ln) {
+			prev, last = last, i
+		}
+	}
+	if prev < 0 || last <= prev {
+		return false // composer geometry not found
+	}
+	box := strings.TrimSpace(strings.Join(lines[prev+1:last], ""))
+	box = strings.TrimSpace(strings.TrimLeft(box, "❯›> "))
+	return box == ""
+}
+
+// tmuxConfirmTrust watches a freshly-launched agent session for its per-directory
+// trust dialog (claude's "trust this folder" / codex's "trust the contents of
+// this directory") and accepts it (both default to "Yes", confirm on Enter).
+// Neither agent's --dangerously-* flag bypasses this gate. Polls rather than
+// sleeping so it survives a slow setup script; if already trusted the dialog
+// never appears and this times out harmlessly.
+func tmuxConfirmTrust(session string) {
+	deadline := time.Now().Add(30 * time.Second)
+	for time.Now().Before(deadline) {
+		time.Sleep(500 * time.Millisecond)
+		out, err := tmuxCapture(session)
+		if err != nil {
+			continue
+		}
+		if strings.Contains(out, "trust this folder") || // claude
+			strings.Contains(out, "trust the contents of this directory") { // codex
+			_ = tmuxSendEnter(session)
+			return
+		}
+	}
+}
+
+// tmuxKillAgent stops the agent running in a session: Ctrl-C, then poll until the
+// foreground process is back to a shell (the agent exited). It does NOT kill the
+// session — the shell stays so the tab survives. Returns whether the agent
+// actually went away within the deadline.
+func tmuxKillAgent(session string) bool {
+	for i := 0; i < 3; i++ {
+		_ = tmuxSendCtrlC(session)
+		deadline := time.Now().Add(2 * time.Second)
+		for time.Now().Before(deadline) {
+			time.Sleep(200 * time.Millisecond)
+			if !isAgentCommand(tmuxForegroundCmd(session)) {
+				return true
+			}
+		}
+	}
+	return !isAgentCommand(tmuxForegroundCmd(session))
+}
+
+// isAgentCommand reports whether a foreground command name is one of our agents.
+func isAgentCommand(cmd string) bool {
+	switch strings.ToLower(strings.TrimPrefix(cmd, ".")) {
+	case "claude", "claude-code", "codex":
+		return true
+	}
+	return false
+}

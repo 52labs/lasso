@@ -125,9 +125,15 @@ export function CreateAgentDialog({
   // restore it to the trigger (which would force the user to click the pane).
   const createdRef = React.useRef(false)
 
-  // Cmd/Ctrl+O opens the creator. Bound to the non-"button" variants (the
-  // header / floating triggers) so the shortcut has a single owner even when the
-  // Agents-tab button is also mounted.
+  // A repo (+ base) the sidebar's "New agent…" wants the form prefilled with,
+  // applied in the seed effect on the next open. Cleared once consumed.
+  const pendingPrefill = React.useRef<{ repo?: string; base?: string } | null>(
+    null
+  )
+
+  // Cmd/Ctrl+O opens the creator, and the "lasso:new-agent" event opens it
+  // prefilled (from the sidebar's repo right-click). Bound to the non-"button"
+  // variants so the shortcut/event has a single owner.
   React.useEffect(() => {
     if (variant === "button") return
     const onKey = (e: KeyboardEvent) => {
@@ -136,8 +142,17 @@ export function CreateAgentDialog({
         setOpen(true)
       }
     }
+    const onNew = (e: Event) => {
+      pendingPrefill.current =
+        ((e as CustomEvent).detail as { repo?: string; base?: string }) ?? null
+      setOpen(true)
+    }
     document.addEventListener("keydown", onKey)
-    return () => document.removeEventListener("keydown", onKey)
+    window.addEventListener("lasso:new-agent", onNew)
+    return () => {
+      document.removeEventListener("keydown", onKey)
+      window.removeEventListener("lasso:new-agent", onNew)
+    }
   }, [variant])
 
   // Pick a fresh random Prompt placeholder each time the dialog opens — a little
@@ -229,13 +244,21 @@ export function CreateAgentDialog({
     if (!config || !reposQuery.isSuccess || reposQuery.isFetching) return
     if (seededForHost.current === selectedHost) return
     seededForHost.current = selectedHost
-    setType(config.last_agent_type || "git")
+    const pf = pendingPrefill.current
+    pendingPrefill.current = null
+    setType(pf?.repo ? "git" : config.last_agent_type || "git")
     setPrefix(config.branch_prefix || "")
     setAgent(config.default_agent || config.last_agent || "claude")
-    const last = config.last_repo
-    setRepo(
-      last && repos.some((r) => r.path === last) ? last : (repos[0]?.path ?? "")
-    )
+    if (pf?.repo) {
+      setRepo(pf.repo) // base auto-resolves via the branches effect below
+    } else {
+      const last = config.last_repo
+      setRepo(
+        last && repos.some((r) => r.path === last)
+          ? last
+          : (repos[0]?.path ?? "")
+      )
+    }
   }, [
     open,
     selectedHost,

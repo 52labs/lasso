@@ -127,6 +127,128 @@ func TestLoadLassoConfigPerHost(t *testing.T) {
 	}
 }
 
+func TestWorkspaceTabCRUD(t *testing.T) {
+	openTestDB(t)
+	ws := Workspace{ID: "w1", Host: "local", Title: "feature x", Repo: "/r", WorkDir: "/wt", Kind: "git"}
+	if err := insertWorkspace(ws); err != nil {
+		t.Fatalf("insertWorkspace: %v", err)
+	}
+	if err := insertTab(Tab{ID: "t1", WorkspaceID: "w1", Title: "agent", Cwd: "/wt", Kind: "agent", AgentID: "a1"}); err != nil {
+		t.Fatalf("insertTab: %v", err)
+	}
+	if err := insertTab(Tab{ID: "t2", WorkspaceID: "w1", Title: "shell", Cwd: "/wt", Kind: "shell", Ordinal: 1}); err != nil {
+		t.Fatalf("insertTab: %v", err)
+	}
+
+	got, err := getWorkspace("w1")
+	if err != nil || got.Title != "feature x" || got.Kind != "git" {
+		t.Fatalf("getWorkspace = %+v err=%v", got, err)
+	}
+	wss, _ := listWorkspaces("local")
+	if len(wss) != 1 {
+		t.Fatalf("listWorkspaces = %d, want 1", len(wss))
+	}
+	tabs, _ := listTabs("w1")
+	if len(tabs) != 2 || tabs[0].ID != "t1" || tabs[1].ID != "t2" {
+		t.Fatalf("listTabs ordering wrong: %+v", tabs)
+	}
+	if agentTabs, _ := liveAgentTabs(); len(agentTabs) != 1 || agentTabs[0].ID != "t1" {
+		t.Fatalf("liveAgentTabs = %+v", agentTabs)
+	}
+	if n := nextTabOrdinal("w1"); n != 2 {
+		t.Errorf("nextTabOrdinal = %d, want 2", n)
+	}
+
+	// rename + pin + cwd
+	_ = renameWorkspace("w1", "renamed")
+	_ = setWorkspacePinned("w1", true)
+	_ = renameTab("t1", "Bob")
+	_ = setTabCwd("t1", "/wt/sub")
+	got, _ = getWorkspace("w1")
+	if got.Title != "renamed" || !got.Pinned {
+		t.Errorf("after rename/pin: %+v", got)
+	}
+	tb, _ := getTab("t1")
+	if tb.Title != "Bob" || tb.Cwd != "/wt/sub" {
+		t.Errorf("after tab rename/cwd: %+v", tb)
+	}
+
+	// close tab → drops from live lists
+	_ = closeTab("t2")
+	if tabs, _ := listTabs("w1"); len(tabs) != 1 {
+		t.Errorf("after closeTab, live tabs = %d, want 1", len(tabs))
+	}
+	// close workspace → closes it and remaining tabs
+	_ = closeWorkspace("w1")
+	if wss, _ := listWorkspaces("local"); len(wss) != 0 {
+		t.Errorf("after closeWorkspace, live workspaces = %d, want 0", len(wss))
+	}
+	if tabs, _ := listTabs("w1"); len(tabs) != 0 {
+		t.Errorf("after closeWorkspace, live tabs = %d, want 0", len(tabs))
+	}
+}
+
+func TestRepoPinAndDisplayName(t *testing.T) {
+	openTestDB(t)
+	if err := pinRepo("local", "/r", true); err != nil {
+		t.Fatal(err)
+	}
+	if err := setRepoDisplayName("local", "/r", "My Repo"); err != nil {
+		t.Fatal(err)
+	}
+	rc, _ := getRepoState("local", "/r")
+	if !rc.Pinned || rc.DisplayName != "My Repo" {
+		t.Errorf("repo state = %+v, want pinned + display name", rc)
+	}
+	// Round-trips through listRepoState too.
+	all, _ := listRepoState("local")
+	if all["/r"] == nil || !all["/r"].Pinned || all["/r"].DisplayName != "My Repo" {
+		t.Errorf("listRepoState = %+v", all["/r"])
+	}
+}
+
+// TestBackfillFromLegacyAgents verifies a legacy agents row (no workspace/tab)
+// gets a synthesized workspace + agent-tab on migrateSchema, and the agent row is
+// wired to them.
+func TestBackfillFromLegacyAgents(t *testing.T) {
+	openTestDB(t)
+	if err := appendAgent("local", AgentRecord{
+		ID: "ag1", Title: "Legacy", Type: "git", Repo: "/r", WorkDir: "/wt", Agent: "claude", CreatedAt: time.Now(),
+	}); err != nil {
+		t.Fatal(err)
+	}
+	// Simulate a pre-migration DB by clearing the agent's tab link and resetting
+	// user_version, then re-running the migration.
+	if _, err := db.Exec(`UPDATE agents SET tab_id='', workspace_id=''`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.Exec(`PRAGMA user_version = 0`); err != nil {
+		t.Fatal(err)
+	}
+	if err := migrateSchema(); err != nil {
+		t.Fatalf("migrateSchema: %v", err)
+	}
+	ws, err := getWorkspace("wag1")
+	if err != nil || ws.Repo != "/r" || ws.Kind != "git" {
+		t.Fatalf("backfilled workspace = %+v err=%v", ws, err)
+	}
+	tab, err := getTab("ag1")
+	if err != nil || tab.Kind != "agent" || tab.AgentID != "ag1" || tab.WorkspaceID != "wag1" {
+		t.Fatalf("backfilled tab = %+v err=%v", tab, err)
+	}
+	ags, _ := listAgents("local")
+	if len(ags) != 1 || ags[0].TabID != "ag1" || ags[0].WorkspaceID != "wag1" {
+		t.Fatalf("agent not wired to tab/workspace: %+v", ags)
+	}
+	// Idempotent: a second run doesn't duplicate.
+	if err := migrateSchema(); err != nil {
+		t.Fatal(err)
+	}
+	if tabs, _ := listTabs("wag1"); len(tabs) != 1 {
+		t.Errorf("re-run created duplicate tabs: %d", len(tabs))
+	}
+}
+
 func TestMigrateFromYAML(t *testing.T) {
 	dir := t.TempDir()
 	t.Setenv("LASSO_DIR", dir)

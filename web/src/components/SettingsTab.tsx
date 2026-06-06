@@ -160,6 +160,7 @@ export function SettingsTab({ active }: { active: boolean }) {
       </header>
 
       <div className="@container min-h-0 flex-1 overflow-y-auto px-3 py-4">
+        <ThemePicker active={active} />
         <div className="mb-4 flex flex-col gap-1">
           <label className={labelClass} htmlFor="settings-host">
             Configuring host
@@ -221,6 +222,45 @@ function ShortcutsDialog({
         </ul>
       </DialogContent>
     </Dialog>
+  )
+}
+
+// ThemePicker selects the UI/terminal color theme (one of herdr's ported
+// palettes). The choice persists in settings and repaints live over SSE.
+function ThemePicker({ active }: { active: boolean }) {
+  const qc = useQueryClient()
+  const themesQuery = useQuery({
+    queryKey: qk.themes,
+    queryFn: () => api.themes(),
+    enabled: active,
+  })
+  const mutation = useMutation({
+    mutationFn: (name: string) => api.setTheme(name),
+    onSuccess: () => qc.invalidateQueries({ queryKey: qk.themes }),
+  })
+  const data = themesQuery.data
+  return (
+    <div className="mb-4 flex max-w-xs flex-col gap-1">
+      <label className={labelClass} htmlFor="settings-theme">
+        Theme
+      </label>
+      <select
+        id="settings-theme"
+        className={fieldClass}
+        value={data?.selected || "catppuccin"}
+        onChange={(e) => mutation.mutate(e.target.value)}
+      >
+        {(data?.themes ?? []).map((t) => (
+          <option key={t.name} value={t.name}>
+            {t.name}
+            {t.light ? " (light)" : ""}
+          </option>
+        ))}
+      </select>
+      <p className="text-[11px] text-muted-foreground">
+        Applies live to the UI and terminals.
+      </p>
+    </div>
   )
 }
 
