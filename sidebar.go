@@ -385,6 +385,7 @@ func serveTabClose(w http.ResponseWriter, r *http.Request) {
 // would also close the workspace).
 func closeOneTab(tabID string) {
 	unsee(tabID)
+	primePending.Delete(tabSession(tabID)) // drop any unconsumed prime mark
 	// No per-tab ttyd to detach now (one shared viewport); killing the session is
 	// enough. If this tab was the viewport's current target, the frontend repoints
 	// it at the next selected tab (and the watcher follows).

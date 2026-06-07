@@ -238,38 +238,64 @@ func waitAttached(session string) bool {
 	return false
 }
 
-// primeShellPromptWhenAttached makes a SHELL session paint its prompt. Some
-// prompt frameworks (notably starship on bash) don't draw the first prompt until
-// the shell both (a) has a client attached to answer the terminal queries
-// starship makes while rendering, and (b) processes an input event — readline
-// computes the prompt and sits idle in select() without painting it, so the pane
-// stays blank until the user types.
+// primeShellPromptWhenAttached makes a freshly-created SHELL session paint its
+// first prompt. Some prompt frameworks (notably starship on bash) don't draw the
+// first prompt until the shell both (a) has a client attached to answer the
+// terminal queries starship makes while rendering, and (b) processes an input
+// event — readline computes the prompt and idles in select() without painting it,
+// so the pane stays blank until the user types.
 //
-// We prime with a single Enter (an empty command — harmless) rather than a
-// resize: a resize only repaints starship's LAST line, leaving an orphan `❯`
-// above the real prompt the Enter then draws in full (the "double prompt"). One
-// line-accept on a still-blank shell draws the FULL multi-line prompt cleanly and
-// alone. We re-check before each Enter and stop the moment the prompt appears, so
-// a shell that's already painted (or that the user has started typing in) is
-// never touched.
-//
-// SHELL-ONLY: never call this on an agent session — the Enter could submit a
-// half-typed agent command.
+// It only acts on sessions explicitly marked fresh at creation (markPrimePending)
+// and runs once — so it never types into an existing shell (which could submit a
+// half-typed command) or an agent. The viewport switches to a new tab WHILE its
+// rc is still booting, so we can't just fire Enter: any Enter sent before bash is
+// reading stdin buffers in the pty and replays at the first prompt — one buffered
+// Enter per send → a STACK of prompts. So we wait for the screen to QUIESCE (rc
+// finished), send exactly ONE Enter (the input event that makes starship paint),
+// then a resize nudge to push that freshly-painted grid to the warm client (which
+// otherwise wouldn't repaint until the user resized/typed — tmux streams reliably
+// to a client only on resize/input). This draws one clean prompt; the path/git
+// top line fills in on the first real command, as starship does.
 func primeShellPromptWhenAttached(session string) {
+	if _, ok := primePending.LoadAndDelete(session); !ok {
+		return // not a freshly-created shell — leave it untouched
+	}
 	if !waitAttached(session) {
 		return
 	}
-	deadline := time.Now().Add(12 * time.Second)
+	// Wait for rc to finish (the screen stops changing) before the single Enter.
+	deadline := time.Now().Add(20 * time.Second)
+	prev, stable := "\x00", 0
 	for time.Now().Before(deadline) {
 		if !tmuxHasSession(session) {
 			return
 		}
-		if out, _ := tmuxCapture(session); strings.TrimSpace(out) != "" {
-			return // prompt is up — nothing to prime
+		if stable >= 3 { // ~1s unchanged → rc has quiesced at its (unpainted) prompt
+			break
 		}
-		_ = tmuxSendEnter(session)
-		time.Sleep(300 * time.Millisecond)
+		cur, _ := tmuxCapture(session)
+		if cur == prev {
+			stable++
+		} else {
+			prev, stable = cur, 0
+		}
+		time.Sleep(350 * time.Millisecond)
 	}
+	if !tmuxHasSession(session) {
+		return
+	}
+	_ = tmuxSendEnter(session) // the single, effective line-accept
+	// Wait for the prompt to paint, then push it to the (idle) warm client.
+	for i := 0; i < 15; i++ {
+		if !tmuxHasSession(session) {
+			return
+		}
+		if out, _ := tmuxCapture(session); strings.TrimSpace(out) != "" {
+			break
+		}
+		time.Sleep(200 * time.Millisecond)
+	}
+	nudgeRedraw(session)
 }
 
 // --- the persistent viewport: one ttyd, switched between sessions -------------

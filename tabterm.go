@@ -42,6 +42,15 @@ var viewport struct {
 	watcher bool            // viewportWatcher started
 }
 
+// primePending holds tmux sessions that were JUST created as fresh shells and
+// still need their first prompt primed (see primeShellPromptWhenAttached). Set by
+// every shell-creating path (markPrimePending) and consumed once by the prime, so
+// priming only ever types into a brand-new shell — never an existing one (where an
+// Enter could submit a half-typed command) or an agent.
+var primePending sync.Map // session name → struct{}
+
+func markPrimePending(session string) { primePending.Store(session, struct{}{}) }
+
 // tabIDRe restricts a tab id to characters safe to drop into the tmux/ttyd argv.
 var tabIDRe = regexp.MustCompile(`^[A-Za-z0-9_-]+$`)
 
@@ -85,7 +94,7 @@ func serveTabTerm(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if req.TabID != "" {
-		session, created, err := ensureTabSession(req.TabID)
+		session, _, err := ensureTabSession(req.TabID)
 		if err != nil {
 			http.Error(w, err.Error(), http.StatusBadGateway)
 			return
@@ -93,14 +102,17 @@ func serveTabTerm(w http.ResponseWriter, r *http.Request) {
 		viewport.mu.Lock()
 		viewport.want = session
 		viewport.mu.Unlock()
-		// A freshly created session is a blank shell/agent; prime its first frame
-		// once a client lands on it (the watcher switches one over within a tick).
-		if created {
-			if t, err := getTab(req.TabID); err == nil && t.Kind == "agent" {
-				go nudgeRedrawWhenAttached(session)
-			} else {
-				go primeShellPromptWhenAttached(session)
-			}
+		// Prime the first frame once a client lands on the session (the watcher
+		// switches one over within a tick). Driven on EVERY switch, not only when
+		// WE created the session: a new tab's session is usually created by
+		// serveNewTab/createAgent/createWorkspace before the viewport ever points
+		// here, so gating on "created" would skip priming exactly the fresh shells
+		// that need it. Both primers are self-gating — a session that already
+		// painted is left untouched (switch-client already streamed it).
+		if t, err := getTab(req.TabID); err == nil && t.Kind == "agent" {
+			go nudgeRedrawWhenAttached(session)
+		} else {
+			go primeShellPromptWhenAttached(session)
 		}
 	}
 	writeJSON(w, map[string]any{"base": base})

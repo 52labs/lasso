@@ -123,6 +123,9 @@ func ensureTabSession(tabID string) (string, bool, error) {
 	if err := tmuxNewSession(session, cwd, []string{"LASSO_TAB_ID=" + tabID}); err != nil {
 		return "", false, err
 	}
+	// A reboot-recreated tab is a fresh bare shell — prime its prompt too (agents
+	// aren't relaunched, so a kind=="agent" tab is also just a shell here).
+	markPrimePending(session)
 	markSeen(tabID)
 	return session, true, nil
 }

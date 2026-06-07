@@ -480,6 +480,12 @@ func insertTab(t Tab) error {
 		 VALUES(?,?,?,?,?,?,?,?,?)`,
 		t.ID, t.WorkspaceID, t.Title, t.Cwd, t.Kind, t.AgentID, t.Ordinal,
 		t.CreatedAt.Format(time.RFC3339Nano), tsOrEmpty(t.ClosedAt))
+	if err == nil && t.Kind != "agent" {
+		// A brand-new shell tab: its tmux session (created just before this insert)
+		// needs its first prompt primed once the viewport points at it. Agents
+		// paint their own TUI, so they're excluded. See primeShellPromptWhenAttached.
+		markPrimePending(tabSession(t.ID))
+	}
 	return err
 }
 
