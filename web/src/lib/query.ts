@@ -1,8 +1,8 @@
 import { QueryClient } from "@tanstack/react-query"
+import type { TreePayload, TreeTab, TreeWorkspace } from "@/lib/api"
 
 // One shared QueryClient for the app's server state. Exported (not just provided)
-// so non-component code — the SSE host-change handler in app-store — can
-// invalidate queries when the active host switches.
+// so non-component code — the SSE handler in app-store — can invalidate queries.
 export const queryClient = new QueryClient({
   defaultOptions: {
     queries: {
@@ -15,24 +15,90 @@ export const queryClient = new QueryClient({
   },
 })
 
-// Centralized query keys for the agent-creation data flow. Config keys embed the
-// host, since each host's settings live in its own lasso.db and the Settings tab
-// can address any host — invalidateHostScoped clears every host by key prefix.
+// Centralized query keys for the agent-creation data flow. The backend is
+// local-only; the host segment is always "local" and kept only to preserve the
+// existing key shape.
 export const qk = {
   agentConfig: (host: string) => ["agent-config", host] as const,
   repos: (host: string) => ["repos", host] as const,
   repoBranches: (host: string, path: string) =>
     ["repo-branches", host, path] as const,
-  grid: ["grid"] as const,
+  tree: ["tree"] as const,
+  agents: ["agents"] as const,
   diff: (host: string, path: string) => ["diff", host, path] as const,
-  uiState: ["ui-state"] as const,
   sidebarPct: ["sidebar-pct"] as const,
   version: ["version"] as const,
 }
 
-// invalidateHostScoped refetches everything tied to a host, called when the
-// active host switches so the creator reloads the new host's remembered
-// selections. Matches every host's config by key prefix.
+// Optimistic tree edits: a freshly-created tab/workspace is written into the
+// cached /api/tree immediately so the tab strip + sidebar render it without
+// waiting for the (slower) refetch. The next refetch reconciles authoritatively.
+
+// treeAddTab appends a tab to an existing workspace (the "+" new-tab flow).
+export function treeAddTab(workspaceId: string, tab: TreeTab) {
+  queryClient.setQueryData<TreePayload>(qk.tree, (old) => {
+    if (!old) return old
+    const add = (w: TreeWorkspace): TreeWorkspace =>
+      w.id === workspaceId ? { ...w, tabs: [...(w.tabs ?? []), tab] } : w
+    return {
+      scratch: (old.scratch ?? []).map(add),
+      repos: (old.repos ?? []).map((r) => ({
+        ...r,
+        workspaces: (r.workspaces ?? []).map(add),
+        main_workspace: r.main_workspace
+          ? add(r.main_workspace)
+          : r.main_workspace,
+      })),
+    }
+  })
+}
+
+// treeAddScratchWorkspace prepends a new scratch workspace (a scratch agent).
+export function treeAddScratchWorkspace(ws: TreeWorkspace) {
+  queryClient.setQueryData<TreePayload>(qk.tree, (old) => {
+    if (!old || (old.scratch ?? []).some((w) => w.id === ws.id)) return old
+    return { ...old, scratch: [ws, ...(old.scratch ?? [])] }
+  })
+}
+
+// treeAddWorktree adds a worktree workspace under an already-listed repo. (If the
+// repo isn't in the tree yet, the refetch will surface it.)
+export function treeAddWorktree(repoPath: string, ws: TreeWorkspace) {
+  queryClient.setQueryData<TreePayload>(qk.tree, (old) => {
+    if (!old) return old
+    return {
+      ...old,
+      repos: (old.repos ?? []).map((r) =>
+        r.path === repoPath
+          ? { ...r, workspaces: [...(r.workspaces ?? []), ws] }
+          : r
+      ),
+    }
+  })
+}
+
+// treeSetRepoMain attaches a freshly-opened main-checkout workspace to its repo.
+export function treeSetRepoMain(repoPath: string, ws: TreeWorkspace) {
+  queryClient.setQueryData<TreePayload>(qk.tree, (old) => {
+    if (!old) return old
+    return {
+      ...old,
+      repos: (old.repos ?? []).map((r) =>
+        r.path === repoPath
+          ? {
+              ...r,
+              main_workspace: ws,
+              main_workspace_id: ws.id,
+              main_tab_id: ws.tabs?.[0]?.id,
+            }
+          : r
+      ),
+    }
+  })
+}
+
+// invalidateHostScoped refetches the creator data + version, called when the
+// backend signals terminals must reload so the creator picks up fresh state.
 export function invalidateHostScoped() {
   queryClient.invalidateQueries({ queryKey: ["agent-config"] })
   queryClient.invalidateQueries({ queryKey: ["repos"] })

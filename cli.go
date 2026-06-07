@@ -22,7 +22,7 @@ import (
 //	lasso restart         stop (if running) then start
 //	lasso status          report whether the background server is running
 //	lasso update          update to the latest release (or git-pull a supervised checkout)
-//	lasso doctor          check the local install (herdr, socket, port, version)
+//	lasso doctor          check the local install (tmux, ttyd, port, version)
 //	lasso version         print the version
 //
 // Subcommands are dispatched in main() BEFORE flag.Parse so the server's flags
@@ -80,7 +80,7 @@ func main() {
 }
 
 func printUsage(w *os.File) {
-	fmt.Fprint(w, `lasso — a web UI over herdr for launching and managing agents
+	fmt.Fprint(w, `lasso — a web UI for launching and managing agents
 
 usage:
   lasso [flags]            run the server in the foreground

@@ -1,11 +1,7 @@
 package main
 
 import (
-	"encoding/json"
-	"net/http"
-	"net/http/httptest"
 	"path/filepath"
-	"strings"
 	"testing"
 )
 
@@ -14,35 +10,17 @@ type createAgentBackend struct {
 	worktreePath string
 }
 
-func (b *createAgentBackend) HerdrCall(method string, params any) (json.RawMessage, error) {
-	if method == "worktree.create" {
-		if p, ok := params.(map[string]any); ok {
-			if path, ok := p["path"].(string); ok {
-				b.worktreePath = path
-			}
-		}
-	}
-	return json.RawMessage(`{"workspace":{"workspace_id":"ws"},"root_pane":{"pane_id":""}}`), nil
-}
-
+// GitOut captures the worktree path from `git worktree add -b <branch> <path> <base>`.
 func (b *createAgentBackend) GitOut(dir string, args ...string) (string, error) {
+	if len(args) >= 5 && args[0] == "worktree" && args[1] == "add" {
+		b.worktreePath = args[4]
+	}
 	return "", nil
 }
 
 func TestCreateGitAgentUsesUniqueBranchLeafForWorktreeDir(t *testing.T) {
 	lasso := t.TempDir()
 	t.Setenv("LASSO_DIR", lasso)
-	// serveCreateAgent persists the host's remembered selections + agent log, so
-	// it needs the state DB open.
-	if err := openDB(); err != nil {
-		t.Fatalf("openDB: %v", err)
-	}
-	t.Cleanup(func() {
-		if db != nil {
-			db.Close()
-			db = nil
-		}
-	})
 
 	b := &createAgentBackend{memBackend: newMemBackend()}
 	existing := filepath.Join(lasso, "worktrees", "app", "fix-login-a1b2")
@@ -52,35 +30,58 @@ func TestCreateGitAgentUsesUniqueBranchLeafForWorktreeDir(t *testing.T) {
 	setBackend(b)
 	t.Cleanup(func() { setBackend(prev) })
 
-	reqBody := `{
-		"type": "git",
-		"title": "Fix login",
-		"repo": "/repo/app",
-		"base_branch": "main",
-		"branch_prefix": "feature",
-		"branch_name": "fix-login-a1b2",
-		"agent": "codex",
-		"plan_mode": false
-	}`
-	req := httptest.NewRequest(http.MethodPost, "/api/create-agent", strings.NewReader(reqBody))
-	rec := httptest.NewRecorder()
-
-	serveCreateAgent(rec, req)
-
-	if rec.Code != http.StatusOK {
-		t.Fatalf("serveCreateAgent status = %d, body = %s", rec.Code, rec.Body.String())
-	}
+	// createWorktree is the agent-less core of a git workspace (shared by the New
+	// Agent flow and the sidebar's "create worktree"); it derives the worktree dir
+	// from the branch leaf, suffixing -2 when the name is taken.
 	want := filepath.Join(lasso, "worktrees", "app", "fix-login-a1b2-2")
+	workDir, err := createWorktree(b, "/repo/app", "main", "feature/fix-login-a1b2", "fix-login")
+	if err != nil {
+		t.Fatalf("createWorktree: %v", err)
+	}
+	if workDir != want {
+		t.Fatalf("worktree path = %q, want %q", workDir, want)
+	}
 	if b.worktreePath != want {
-		t.Fatalf("worktree path = %q, want %q", b.worktreePath, want)
+		t.Fatalf("git worktree add path = %q, want %q", b.worktreePath, want)
 	}
+}
 
-	var agent AgentRecord
-	if err := json.Unmarshal(rec.Body.Bytes(), &agent); err != nil {
-		t.Fatalf("decode response: %v", err)
+// TestCreateScratchAgentPersists exercises the full createAgent flow for a
+// scratch agent against real tmux + a real ~/.lasso: it must mkdir the scratch
+// dir, create the backing tmux session, and persist a workspace + agent tab.
+func TestCreateScratchAgentPersists(t *testing.T) {
+	requireTmux(t) // sets LASSO_DIR to a temp dir + kills our tmux server on cleanup
+	if err := openDB(); err != nil {
+		t.Fatalf("openDB: %v", err)
 	}
-	if agent.WorkDir != want {
-		t.Errorf("response work_dir = %q, want %q", agent.WorkDir, want)
+	t.Cleanup(func() {
+		if db != nil {
+			db.Close()
+			db = nil
+		}
+	})
+	prev := curBackend()
+	setBackend(&localBackend{})
+	t.Cleanup(func() { setBackend(prev) })
+
+	rec, err := createAgent(curBackend(), createAgentReq{
+		Type: "scratch", Title: "Hey boss", Prompt: "do a thing", Agent: "claude", NoFocus: true,
+	})
+	if err != nil {
+		t.Fatalf("createAgent: %v", err)
+	}
+	if rec.TabID == "" || rec.WorkspaceID == "" {
+		t.Fatalf("record missing tab/workspace ids: %+v", rec)
+	}
+	if !tmuxHasSession(tabSession(rec.TabID)) {
+		t.Fatalf("tmux session %s not created", tabSession(rec.TabID))
+	}
+	if ws, err := getWorkspace(rec.WorkspaceID); err != nil || ws.Kind != "scratch" {
+		t.Fatalf("workspace = %+v err=%v", ws, err)
+	}
+	tab, err := getTab(rec.TabID)
+	if err != nil || tab.Kind != "agent" || tab.WorkspaceID != rec.WorkspaceID {
+		t.Fatalf("agent tab not persisted: %+v err=%v", tab, err)
 	}
 }
 

@@ -6,8 +6,8 @@ import { qk, queryClient } from "@/lib/query"
 // restart. react-resizable-panels' own expand() only remembers a size within
 // the current session, so without this a sidebar reopened after a reload snaps
 // back to the default width instead of where the user left it. The React Query
-// cache is the in-memory source of truth (mirrors ui-state.ts); localStorage is
-// the durable backing store.
+// cache is the in-memory source of truth; localStorage is the durable backing
+// store.
 
 const KEY = "lasso-sidebar-pct"
 const DEFAULT_PCT = 40

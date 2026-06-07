@@ -2,11 +2,59 @@
 @import "tw-animate-css";
 @import "shadcn/tailwind.css";
 
+/* Onyx design-system fonts, self-hosted via @fontsource (Vite bundles the woff2
+ * into the embedded build — no Google Fonts CDN on this loopback tool). Geist is
+ * the UI sans, Space Grotesk the display/heading face, JetBrains Mono the code
+ * face. The *terminal* keeps its own vendored JetBrainsMono Nerd Font (injected
+ * into the ttyd iframe by lib/theme.ts) for the Nerd glyphs TUIs draw with. */
+@import "@fontsource/geist-sans/400.css";
+@import "@fontsource/geist-sans/500.css";
+@import "@fontsource/geist-sans/600.css";
+@import "@fontsource/geist-sans/700.css";
+@import "@fontsource/space-grotesk/500.css";
+@import "@fontsource/space-grotesk/600.css";
+@import "@fontsource/space-grotesk/700.css";
+@import "@fontsource/jetbrains-mono/400.css";
+@import "@fontsource/jetbrains-mono/500.css";
+@import "@fontsource/jetbrains-mono/600.css";
+
 @custom-variant dark (&:is(.dark *));
 
 @theme inline {
-  --font-sans: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
-  --font-mono: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  /* Onyx type stacks: Geist (UI sans), Space Grotesk (display), JetBrains Mono
+   * (code). font-display is exposed as a Tailwind utility for headings. */
+  --font-sans: "Geist", system-ui, sans-serif;
+  --font-display: "Space Grotesk", "Geist", system-ui, sans-serif;
+  --font-mono: "JetBrains Mono", ui-monospace, SFMono-Regular, Menlo, monospace;
+  /* Onyx color + radius + motion utilities (from onyx preset.json), available as
+   * bg-onyx-bg / text-onyx-accent / rounded-onyx-md / ease-onyx for new work. */
+  --color-onyx-bg: #06070c;
+  --color-onyx-bg-1: #0a0b12;
+  --color-onyx-bg-2: #11131c;
+  --color-onyx-bg-vis: #08091a;
+  --color-onyx-fg: #f4f5fa;
+  --color-onyx-fg-1: #b7bbc8;
+  --color-onyx-fg-2: #6b7080;
+  --color-onyx-fg-3: #3b3f4e;
+  --color-onyx-line: #1f2230;
+  --color-onyx-line-1: #2a2d3d;
+  --color-onyx-line-active: #3b3f5a;
+  --color-onyx-line-dash: #2a2d3d;
+  --color-onyx-accent: #7b7fff;
+  --color-onyx-accent-1: #9498ff;
+  --color-onyx-accent-2: #5c61e6;
+  --color-onyx-accent-fade: rgba(123, 127, 255, 0.18);
+  --color-onyx-accent-grid: rgba(123, 127, 255, 0.45);
+  --color-onyx-warn: #f2b144;
+  --color-onyx-warn-fade: rgba(242, 177, 68, 0.16);
+  --color-onyx-danger: #f2545b;
+  --color-onyx-danger-fade: rgba(242, 84, 91, 0.16);
+  --color-onyx-ok: #4ade9a;
+  --color-onyx-ok-fade: rgba(74, 222, 154, 0.16);
+  --radius-onyx-sm: 2px;
+  --radius-onyx-md: 4px;
+  --radius-onyx-lg: 6px;
+  --ease-onyx: cubic-bezier(0.2, 0.7, 0.1, 1);
   --color-sidebar-ring: var(--sidebar-ring);
   --color-sidebar-border: var(--sidebar-border);
   --color-sidebar-accent-foreground: var(--sidebar-accent-foreground);
@@ -33,7 +81,7 @@
   --color-card: var(--card);
   --color-foreground: var(--foreground);
   --color-background: var(--background);
-  /* herdr semantic colors, exposed as Tailwind utilities (text-good etc.) */
+  /* semantic colors, exposed as Tailwind utilities (text-good etc.) */
   --color-good: var(--h-good);
   --color-warn: var(--h-warn);
   --color-bad: var(--h-bad);
@@ -43,7 +91,7 @@
   --radius-lg: var(--radius);
   --radius-xl: calc(var(--radius) * 1.4);
 
-  /* Elevation. The herdr palette is deliberately flat; these give surfaces
+  /* Elevation. The palette is deliberately flat; these give surfaces
    * physical depth without fighting it — drop shadows in plain black (read on
    * any theme), a faint top "edge" highlight (white, low alpha) faking a light
    * source from above, and an inset "well" that sinks inputs/recessed controls.
@@ -64,35 +112,38 @@
 }
 
 /*
- * The herdr palette. These --h-* variables are the single source of truth for
- * lasso's colors: the server's /api/theme endpoint pushes the resolved herdr
- * theme onto :root at runtime (see lib/theme.ts), and these values are just the
- * Rosé Pine fallback used before that fetch lands (no flash of wrong colors).
- * shadcn's design tokens below are mapped onto them, so every shadcn primitive
- * tracks the live herdr theme automatically.
+ * The Onyx palette. These --h-* variables are the single source of truth for
+ * lasso's colors: every bespoke view below, the CodeMirror theme, highlight.js,
+ * and shadcn's design tokens (mapped onto them) all cascade from here. :root holds
+ * the canonical Onyx *dark* tokens (onyx preset.json); the `:root.light` block
+ * below overrides only the --h-* values for light mode, so every shadcn token and
+ * bespoke view flips automatically. The active mode is set as a dark/light class
+ * on <html> (see lib/mode.ts + the inline script in index.html). The --h-* names
+ * are kept as a stable seam so consumers didn't need rewriting when the theme
+ * moved onto Onyx.
  */
 :root {
-  --h-bg: #191724; /* base — matches terminal bg */
-  --h-panel: #1f1d2e; /* surface */
-  --h-border: #26233a; /* overlay */
-  --h-hover: #26233a; /* hover/elevated surface */
-  --h-fg: #e0def4; /* text */
-  --h-muted: #6e6a86; /* muted */
-  --h-accent: #9ccfd8; /* foam */
-  --h-accent-dim: #9ccfd826;
-  --h-dir: #c4a7e7; /* iris */
-  --h-good: #9ccfd8; /* foam */
-  --h-warn: #f6c177; /* gold */
-  --h-bad: #eb6f92; /* love */
+  --h-bg: #06070c; /* onyx --bg (base, matches terminal bg) */
+  --h-panel: #0a0b12; /* onyx --bg-1 (cards/panels) */
+  --h-border: #1f2230; /* onyx --line */
+  --h-hover: #11131c; /* onyx --bg-2 (hover/elevated surface) */
+  --h-fg: #f4f5fa; /* onyx --fg */
+  --h-muted: #6b7080; /* onyx --fg-2 */
+  --h-accent: #7b7fff; /* onyx --accent (indigo) */
+  --h-accent-dim: rgba(123, 127, 255, 0.18); /* onyx --accent-fade */
+  --h-dir: #9498ff; /* onyx --accent-1 */
+  --h-good: #4ade9a; /* onyx --ok */
+  --h-warn: #f2b144; /* onyx --warn */
+  --h-bad: #f2545b; /* onyx --danger */
 
-  --radius: 0.375rem;
+  --radius: 0.25rem; /* onyx — near-flat */
 
-  /* shadcn tokens → herdr palette */
+  /* shadcn tokens → --h-* palette */
   --background: var(--h-bg);
   --foreground: var(--h-fg);
   --card: var(--h-panel);
   --card-foreground: var(--h-fg);
-  --popover: var(--h-panel);
+  --popover: var(--h-hover); /* onyx dark popover = --bg-2 */
   --popover-foreground: var(--h-fg);
   --primary: var(--h-accent);
   --primary-foreground: var(--h-bg);
@@ -116,6 +167,25 @@
   --sidebar-ring: var(--h-accent);
 }
 
+/* Light mode — override only the --h-* seam with Onyx's light tokens (onyx
+ * preset.json light block); the shadcn-token mapping in :root re-resolves to
+ * these automatically. Semantic colors (good/warn/bad) are darkened from Onyx's
+ * bright pastels so they stay legible as text on the light canvas. */
+:root.light {
+  --h-bg: #f4f5fa; /* onyx light background */
+  --h-panel: #ffffff; /* onyx light card */
+  --h-border: #d6d9e6; /* onyx light border */
+  --h-hover: #e5e7f0; /* onyx light secondary/muted */
+  --h-fg: #06070c; /* onyx light foreground */
+  --h-muted: #6b7080; /* onyx --fg-2 */
+  --h-accent: #5c61e6; /* onyx light primary (deeper indigo) */
+  --h-accent-dim: rgba(92, 97, 230, 0.14);
+  --h-dir: #5c61e6;
+  --h-good: #15935f; /* darkened ok for light-bg legibility */
+  --h-warn: #a8780f; /* darkened warn */
+  --h-bad: #d63d44; /* darkened danger */
+}
+
 @layer base {
   * {
     @apply border-border outline-ring/50;
@@ -129,12 +199,18 @@
   }
   body {
     @apply bg-background text-foreground;
-    font:
-      13px / 1.5 ui-monospace,
-      SFMono-Regular,
-      Menlo,
-      Consolas,
-      monospace;
+    font: 13px / 1.5 var(--font-sans);
+  }
+  /* Onyx selection + focus treatment (onyx preset.json css block): accent-tinted
+   * selection, a 1px accent focus ring at 2px offset. Uses the --h-* vars so it
+   * adapts to light/dark. */
+  ::selection {
+    background: var(--h-accent-dim);
+    color: var(--h-fg);
+  }
+  :focus-visible {
+    outline: 1px solid var(--h-accent);
+    outline-offset: 2px;
   }
 }
 
@@ -152,97 +228,10 @@
 /* ===========================================================================
  * Bespoke lasso views, ported from the original index.html. shadcn primitives
  * (Tabs, Button, Badge, Dialog, ContextMenu, Resizable, …) provide the chrome;
- * these rules style the data-dense content panes (pane grid, file list, diff,
- * file viewer, markdown, syntax highlighting) that have no shadcn equivalent.
- * All colors come from the --h-* palette so they track the live herdr theme.
+ * these rules style the data-dense content panes (file list, diff, file viewer,
+ * markdown, syntax highlighting) that have no shadcn equivalent.
+ * All colors come from the --h-* palette so they track the live theme.
  * ======================================================================== */
-
-/* pane grid */
-.panegrid {
-  flex: 1 1 auto;
-  overflow: auto;
-  padding: 10px;
-  display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(240px, 1fr));
-  gap: 8px;
-  align-content: start;
-  align-items: start;
-}
-.pcard {
-  position: relative;
-  border: 1px solid var(--h-border);
-  border-radius: 6px;
-  padding: 8px 9px;
-  cursor: pointer;
-  background: var(--h-bg);
-  transition:
-    border-color 0.12s,
-    background 0.12s;
-}
-.pcard:hover {
-  border-color: var(--h-accent);
-  background: var(--h-hover);
-}
-.pcard.focused {
-  border-color: var(--h-accent);
-  background: var(--h-accent-dim);
-}
-.pcard.selected {
-  outline: 2px solid var(--h-accent);
-  outline-offset: -2px;
-  background: var(--h-accent-dim);
-}
-.pcard.selected::after {
-  content: "✓";
-  position: absolute;
-  top: 3px;
-  right: 5px;
-  color: var(--h-accent);
-  font-size: 11px;
-  line-height: 1;
-}
-.pcard.selected .ptitle {
-  padding-right: 12px;
-}
-.pcard .pws {
-  color: var(--h-accent);
-  font-size: 10px;
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  margin-bottom: 3px;
-}
-.pcard .ptitle {
-  color: var(--h-fg);
-  font-size: 12px;
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-}
-.pcard .pmeta {
-  color: var(--h-muted);
-  font-size: 10px;
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  margin-top: 2px;
-}
-.pcard .pagent {
-  font-size: 10px;
-  color: var(--h-muted);
-  white-space: nowrap;
-  margin-top: 2px;
-}
-.pcard .pagent.working {
-  color: var(--h-warn);
-}
-.pcard .pagent.blocked {
-  color: var(--h-bad);
-}
-.pcard .pagent.idle,
-.pcard .pagent.done {
-  color: var(--h-good);
-}
 
 .hint {
   flex: 0 0 auto;
@@ -256,148 +245,6 @@
 .empty {
   color: var(--h-muted);
   padding: 16px 12px;
-}
-
-/* grid tab: a wall of live per-pane terminals across hosts. Each cell is a
-   clickable header (focus the pane in Herdr) over an embedded ttyd iframe. */
-.termgrid {
-  flex: 1 1 auto;
-  overflow: auto;
-  padding: 14px;
-  /* Flex wrap (not CSS grid) so the cells in each row grow to fill the row's
-     full width — a CSS grid leaves empty tracks, stranding a lone last-row cell
-     at its min width. align-content: start packs rows to the top. */
-  display: flex;
-  flex-wrap: wrap;
-  gap: 14px;
-  align-content: start;
-}
-/* A zero-height, full-width flex item that forces a row break, so the top row
-   can hold just the remainder cells (which then grow to fill the width). The
-   negative margins cancel the extra row-gap the break would otherwise add. */
-.termbreak {
-  flex-basis: 100%;
-  width: 100%;
-  height: 0;
-  margin: -7px 0;
-}
-.termcell {
-  /* grow to share the row's width, wrapping when a cell can't keep ~360px */
-  flex: 1 1 360px;
-  display: flex;
-  flex-direction: column;
-  height: 260px;
-  /* Blend the (subtle) border toward muted so each cell reads as a distinct
-     tile rather than dissolving into the background. */
-  border: 1px solid color-mix(in srgb, var(--h-border) 45%, var(--h-muted));
-  border-radius: 6px;
-  overflow: hidden;
-  background: var(--h-bg);
-}
-.termcell.focused {
-  border-color: var(--h-accent);
-}
-.termcell.selected {
-  outline: 2px solid var(--h-accent);
-  outline-offset: -2px;
-  border-color: var(--h-accent);
-}
-.termcell-head {
-  flex: 0 0 auto;
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  width: 100%;
-  padding: 4px 8px;
-  border: 0;
-  border-bottom: 1px solid var(--h-border);
-  background: var(--h-bg);
-  color: var(--h-fg);
-  font: inherit;
-  font-size: 11px;
-  text-align: left;
-  cursor: pointer;
-  transition: background 0.12s;
-}
-.termcell-head:hover {
-  background: var(--h-hover);
-}
-/* Keep a single, steady cursor across the whole header rather than flipping
-   between pointer / text / default over its spans — the hover highlight already
-   signals it's clickable. */
-.termcell-head,
-.termcell-head * {
-  cursor: default;
-}
-.termcell-host {
-  flex: 0 0 auto;
-  color: var(--h-accent);
-  font-weight: 600;
-  white-space: nowrap;
-}
-.termcell-title {
-  flex: 1 1 auto;
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-}
-.termcell-agent {
-  flex: 0 0 auto;
-  color: var(--h-muted);
-  white-space: nowrap;
-}
-.termcell-agent.working {
-  color: var(--h-warn);
-}
-.termcell-agent.blocked {
-  color: var(--h-bad);
-}
-.termcell-agent.idle,
-.termcell-agent.done {
-  color: var(--h-good);
-}
-.termcell-body {
-  position: relative;
-  flex: 1 1 auto;
-  min-height: 0;
-}
-.termcell-body iframe {
-  width: 100%;
-  height: 100%;
-  border: 0;
-  display: block;
-  background: var(--h-bg);
-  /* Fade the terminal in once it's live (the loading overlay sits on top until
-     then), so the reveal is smooth rather than a hard cut over ttyd's churn. */
-  opacity: 1;
-  transition: opacity 0.2s ease;
-}
-.termcell-body iframe.is-loading {
-  opacity: 0;
-}
-.termcell-placeholder {
-  position: absolute;
-  inset: 0;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  /* Opaque so it fully hides the connecting iframe underneath. */
-  background: var(--h-bg);
-  color: var(--h-muted);
-  font-size: 11px;
-}
-.termcell-spinner {
-  width: 16px;
-  height: 16px;
-  border-radius: 50%;
-  border: 2px solid var(--h-border);
-  border-top-color: var(--h-accent);
-  animation: termcell-spin 0.7s linear infinite;
-}
-@keyframes termcell-spin {
-  to {
-    transform: rotate(360deg);
-  }
 }
 
 /* file list */

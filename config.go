@@ -12,10 +12,8 @@ import (
 // created agents live under ~/.lasso/worktrees (git agents) and ~/.lasso/scratch
 // (non-git agents); staged attachment uploads land in ~/.lasso/uploads.
 //
-// The store is host-local: it belongs to the machine lasso runs on, while the
-// creation itself routes through curBackend() so it targets whichever herdr host
-// is active. Selections that name a repo/branch on that host are therefore keyed
-// by the active host name (curBackend().Name()).
+// The store is host-local: it belongs to the machine lasso runs on. Selections
+// that name a repo/branch are keyed by host "local".
 
 // LassoConfig is the shape of the /api/agent-config response, assembled for a
 // given host from the database.
@@ -56,25 +54,34 @@ type RepoConfig struct {
 	CopyFiles string `yaml:"copy_files,omitempty" json:"copy_files,omitempty"`
 	// Setup is the setup script run in the worktree's shell before the agent.
 	Setup string `yaml:"setup,omitempty" json:"setup,omitempty"`
+	// Pinned floats this repo to the top of the sidebar's "spaces" tree,
+	// overriding the latest-commit ordering.
+	Pinned bool `yaml:"-" json:"pinned,omitempty"`
+	// DisplayName overrides the repo's name in the sidebar (right-click rename).
+	DisplayName string `yaml:"-" json:"display_name,omitempty"`
 }
 
 // AgentRecord is one agent lasso spawned, kept so the UI can list/relink them.
 // The yaml tags are retained only so a legacy config.yaml can be unmarshaled
 // during the one-time DB migration (see migrateFromYAML).
 type AgentRecord struct {
-	ID          string    `yaml:"id" json:"id"`
-	Title       string    `yaml:"title" json:"title"`
-	Type        string    `yaml:"type" json:"type"` // "git" | "scratch"
-	Repo        string    `yaml:"repo,omitempty" json:"repo,omitempty"`
-	BaseBranch  string    `yaml:"base_branch,omitempty" json:"base_branch,omitempty"`
-	Branch      string    `yaml:"branch,omitempty" json:"branch,omitempty"`
-	Agent       string    `yaml:"agent" json:"agent"`
-	Description string    `yaml:"description,omitempty" json:"description,omitempty"`
-	Notes       string    `yaml:"notes,omitempty" json:"notes,omitempty"`
-	Attachments []string  `yaml:"attachments,omitempty" json:"attachments,omitempty"`
-	PlanMode    bool      `yaml:"plan_mode" json:"plan_mode"`
-	WorkDir     string    `yaml:"work_dir" json:"work_dir"`
+	ID          string   `yaml:"id" json:"id"`
+	Title       string   `yaml:"title" json:"title"`
+	Type        string   `yaml:"type" json:"type"` // "git" | "scratch"
+	Repo        string   `yaml:"repo,omitempty" json:"repo,omitempty"`
+	BaseBranch  string   `yaml:"base_branch,omitempty" json:"base_branch,omitempty"`
+	Branch      string   `yaml:"branch,omitempty" json:"branch,omitempty"`
+	Agent       string   `yaml:"agent" json:"agent"`
+	Description string   `yaml:"description,omitempty" json:"description,omitempty"`
+	Notes       string   `yaml:"notes,omitempty" json:"notes,omitempty"`
+	Attachments []string `yaml:"attachments,omitempty" json:"attachments,omitempty"`
+	PlanMode    bool     `yaml:"plan_mode" json:"plan_mode"`
+	WorkDir     string   `yaml:"work_dir" json:"work_dir"`
+	// WorkspaceID is the lasso workspaces.id this agent belongs to. TabID is the
+	// agent's tab — its tmux session is tabSession(TabID). RootPane is dead and is
+	// retained only so a legacy config.yaml still unmarshals.
 	WorkspaceID string    `yaml:"workspace_id,omitempty" json:"workspace_id,omitempty"`
+	TabID       string    `yaml:"-" json:"tab_id,omitempty"`
 	RootPane    string    `yaml:"root_pane,omitempty" json:"root_pane,omitempty"`
 	CreatedAt   time.Time `yaml:"created_at" json:"created_at"`
 }
@@ -105,6 +112,11 @@ func lassoDir() string {
 	}
 	return dir
 }
+
+// lassoTmuxSock is the dedicated tmux server socket (~/.lasso/tmux.sock) lasso's
+// terminals run on — separate from the user's default tmux server so they're
+// isolated and survive lasso restarts. See tmuxio.go.
+func lassoTmuxSock() string { return filepath.Join(lassoDir(), "tmux.sock") }
 
 func lassoWorktreesDir() string { return filepath.Join(lassoDir(), "worktrees") }
 func lassoScratchDir() string   { return filepath.Join(lassoDir(), "scratch") }

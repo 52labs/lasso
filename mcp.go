@@ -9,20 +9,18 @@ import (
 
 // MCP server: an unauthenticated Model Context Protocol endpoint mounted at /mcp
 // (see main.go's route table + withAuthExcept). Its purpose is to let an agent
-// session — typically a Claude Code session running inside herdr via lasso, or
+// session — typically a Claude Code session running in a lasso terminal, or
 // Claude desktop/mobile reaching the HTTP endpoint — orchestrate OTHER lasso
 // agents: spawn them (in their own worktree/workspace, off a chosen base
-// branch), then converse with them statefully through their herdr pane.
+// branch), then converse with them statefully through their tmux session.
 //
 // Every tool reuses the same machinery the React UI drives (createAgent,
-// gridHostBackend, listAgents, paneRun, pane.read, …). Tools take an optional
-// `host` and resolve it through gridHostBackend, so a session can drive agents
-// on any reachable host without disturbing the UI's active host.
+// listAgents, tmux capture/send, …).
 
 // newMCPHandler builds the MCP server, registers the tools, and returns the
 // Streamable-HTTP handler to mount at /mcp. The getServer closure hands every
-// request the one shared server (lasso has a single global herdr/state surface,
-// so there's nothing per-connection to scope).
+// request the one shared server (lasso has a single global state surface, so
+// there's nothing per-connection to scope).
 func newMCPHandler() *mcp.StreamableHTTPHandler {
 	srv := mcp.NewServer(&mcp.Implementation{
 		Name:    "lasso",
@@ -43,20 +41,15 @@ func newMCPHandler() *mcp.StreamableHTTPHandler {
 	})
 }
 
-// resolveBackend maps a tool's optional `host` argument to a Backend. An empty
-// host means "the box lasso runs on" (local) — the default the user asked for.
-// gridHostBackend returns a backend for any reachable+compatible host without
-// mutating the UI's active host.
+// resolveBackend maps a tool's optional `host` argument to a Backend. lasso is
+// local-only, so this always returns the local backend (the `host` argument is
+// accepted for forward/backward compatibility and ignored).
 func resolveBackend(host string) (Backend, error) {
-	if host == "" {
-		host = "local"
-	}
-	return gridHostBackend(host)
+	return curBackend(), nil
 }
 
 // findAgentRecord looks up an agent created on host by its lasso id, so the
-// interaction tools can recover its root pane (the herdr pane the agent runs in)
-// from the persisted record.
+// interaction tools can recover its tmux session from the persisted record.
 func findAgentRecord(host, id string) (AgentRecord, error) {
 	if host == "" {
 		host = "local"

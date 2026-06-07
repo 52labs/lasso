@@ -1,5 +1,5 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
-import { Keyboard, RotateCw } from "lucide-react"
+import { Keyboard, Monitor, Moon, RotateCw, Sun } from "lucide-react"
 import * as React from "react"
 import { Pill } from "@/components/Pill"
 import { Button } from "@/components/ui/button"
@@ -10,7 +10,7 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog"
 import { api } from "@/lib/api"
-import { useApp } from "@/lib/app-store"
+import { getMode, type Mode, setMode } from "@/lib/mode"
 import { qk } from "@/lib/query"
 import { SHORTCUTS } from "@/lib/shortcuts"
 import { cn } from "@/lib/utils"
@@ -42,13 +42,11 @@ function Field({
   )
 }
 
-// The Settings tab: lasso↔herdr socket-protocol compatibility (top) plus the
-// "New Agent" creator configuration. Lasso targets a fixed protocol (baked in
-// at build time); the daemon reports its own over the socket, and when they
-// drift terminals and RPC silently break, so we surface it here. The creator
-// defaults (where to scan for repos, the default agent, the scratch setup
-// script) are global; each repo's files-to-copy + setup commands are scoped to
-// the active host. All of it persists in ~/.lasso/lasso.db.
+// The Settings tab: the lasso build version + update status (top) plus the
+// "New Agent" creator configuration. The creator defaults (where to scan for
+// repos, the default agent, the scratch setup script) are global; each repo's
+// files-to-copy + setup commands are per-repo. All of it persists in
+// ~/.lasso/lasso.db.
 export function SettingsTab({ active }: { active: boolean }) {
   const [shortcutsOpen, setShortcutsOpen] = React.useState(false)
   const versionQuery = useQuery({
@@ -57,55 +55,6 @@ export function SettingsTab({ active }: { active: boolean }) {
     enabled: active,
   })
   const info = versionQuery.data ?? null
-  const loading = versionQuery.isLoading
-  const errored = versionQuery.isError
-
-  // Which host's settings to edit — each host stores them in its own lasso.db.
-  // The picker lists the local machine plus every reachable, compatible remote
-  // (those can answer `lasso cli` over SSH). Defaults to the active host.
-  const { host: activeHost } = useApp()
-  const hostsQuery = useQuery({
-    queryKey: ["hosts"],
-    queryFn: () => api.hosts(),
-    enabled: active,
-  })
-  const hostOptions = React.useMemo(() => {
-    const d = hostsQuery.data
-    const opts = [{ value: "local", label: d?.local?.hostname || "local" }]
-    for (const h of d?.hosts ?? []) {
-      if (h.reachable && h.running && h.compatible)
-        opts.push({ value: h.alias, label: h.alias })
-    }
-    return opts
-  }, [hostsQuery.data])
-  const [selectedHost, setSelectedHost] = React.useState<string | null>(null)
-  // Default to the active host once it's known; keep the user's choice after.
-  React.useEffect(() => {
-    if (selectedHost == null && activeHost) setSelectedHost(activeHost)
-  }, [activeHost, selectedHost])
-  const host = selectedHost ?? activeHost ?? "local"
-
-  // The herdr-side pill: the daemon's protocol and how it compares to lasso's.
-  let herdr: React.ReactNode
-  if (loading) {
-    herdr = <Pill>herdr …</Pill>
-  } else if (errored || !info) {
-    herdr = <Pill tone="warn">herdr unavailable</Pill>
-  } else if (info.err) {
-    herdr = (
-      <Pill tone="warn" title={info.err}>
-        herdr unreachable
-      </Pill>
-    )
-  } else {
-    const ver = info.herdr_version ? ` (${info.herdr_version})` : ""
-    herdr = (
-      <Pill tone={info.compatible ? "good" : "bad"} multiline>
-        herdr protocol {info.herdr_protocol}
-        {ver} · {info.compatible ? "compatible" : "incompatible"}
-      </Pill>
-    )
-  }
 
   return (
     <div className="flex min-h-0 flex-1 flex-col">
@@ -114,10 +63,6 @@ export function SettingsTab({ active }: { active: boolean }) {
           <span className="mr-0.5 text-[13px] text-muted-foreground tracking-wide">
             lasso
           </span>
-          <Pill multiline>
-            targets protocol{" "}
-            {loading ? "…" : errored || !info ? "unknown" : info.lasso_protocol}
-          </Pill>
           {info?.lasso_version && (
             <Pill title="this lasso build's version" multiline>
               lasso {info.lasso_version}
@@ -132,12 +77,6 @@ export function SettingsTab({ active }: { active: boolean }) {
               update available → {info.latest_version}
             </Pill>
           )}
-          {herdr}
-          {!loading && !errored && info && !info.err && !info.compatible && (
-            <span className="text-[13px] text-warn">
-              rebuild lasso (or update herdr) so both speak the same protocol
-            </span>
-          )}
           <Button
             variant="outline"
             size="icon"
@@ -151,7 +90,7 @@ export function SettingsTab({ active }: { active: boolean }) {
             variant="outline"
             size="icon"
             className="size-7"
-            title="re-check protocol compatibility"
+            title="re-check for lasso updates"
             onClick={() => versionQuery.refetch()}
           >
             <RotateCw />
@@ -160,36 +99,56 @@ export function SettingsTab({ active }: { active: boolean }) {
       </header>
 
       <div className="@container min-h-0 flex-1 overflow-y-auto px-3 py-4">
-        <div className="mb-4 flex flex-col gap-1">
-          <label className={labelClass} htmlFor="settings-host">
-            Configuring host
-          </label>
-          <select
-            id="settings-host"
-            className={cn(fieldClass, "max-w-xs")}
-            value={host}
-            onChange={(e) => setSelectedHost(e.target.value)}
-          >
-            {/* Ensure the current value is always selectable even before the
-                host probe returns (e.g. an active remote not yet in the list). */}
-            {!hostOptions.some((o) => o.value === host) && (
-              <option value={host}>{host}</option>
-            )}
-            {hostOptions.map((o) => (
-              <option key={o.value} value={o.value}>
-                {o.label}
-                {o.value === activeHost ? " (active)" : ""}
-              </option>
-            ))}
-          </select>
-          <p className="text-[11px] text-muted-foreground">
-            These settings live in {host}'s own ~/.lasso/lasso.db.
-          </p>
-        </div>
-        <AgentCreatorSettings active={active} host={host} />
+        <AppearanceToggle />
+        <p className="mb-4 text-[11px] text-muted-foreground">
+          These settings live in ~/.lasso/lasso.db.
+        </p>
+        <AgentCreatorSettings active={active} />
       </div>
 
       <ShortcutsDialog open={shortcutsOpen} onOpenChange={setShortcutsOpen} />
+    </div>
+  )
+}
+
+// AppearanceToggle picks the UI + terminal color mode: System (follow the OS),
+// Light, or Dark. The choice persists in localStorage and applies live (sets the
+// html dark/light class + re-pins the terminal palette) via lib/mode.
+function AppearanceToggle() {
+  const [mode, setModeState] = React.useState<Mode>(() => getMode())
+  const choose = (m: Mode) => {
+    setModeState(m)
+    setMode(m)
+  }
+  const opts: { m: Mode; label: string; Icon: typeof Monitor }[] = [
+    { m: "system", label: "System", Icon: Monitor },
+    { m: "light", label: "Light", Icon: Sun },
+    { m: "dark", label: "Dark", Icon: Moon },
+  ]
+  return (
+    <div className="mb-4 flex flex-col gap-1">
+      <span className={labelClass}>Appearance</span>
+      <div className="inline-flex w-fit gap-0.5 rounded-lg border border-border p-0.5">
+        {opts.map(({ m, label, Icon }) => (
+          <button
+            key={m}
+            type="button"
+            onClick={() => choose(m)}
+            className={cn(
+              "inline-flex items-center gap-1.5 rounded-md px-2.5 py-1 text-[13px] transition-colors",
+              mode === m
+                ? "bg-primary text-primary-foreground"
+                : "text-muted-foreground hover:text-foreground"
+            )}
+          >
+            <Icon className="size-3.5" />
+            {label}
+          </button>
+        ))}
+      </div>
+      <p className="text-[11px] text-muted-foreground">
+        Applies to the UI and terminals. System follows your OS setting.
+      </p>
     </div>
   )
 }
@@ -224,17 +183,11 @@ function ShortcutsDialog({
   )
 }
 
-// AgentCreatorSettings edits a host's creator defaults and each repo's
-// copy-files + setup, persisted via /api/agent-config and /api/repo-config for
-// the given host (its own lasso.db).
-function AgentCreatorSettings({
-  active,
-  host,
-}: {
-  active: boolean
-  host: string
-}) {
+// AgentCreatorSettings edits the creator defaults and each repo's copy-files +
+// setup, persisted via /api/agent-config and /api/repo-config (~/.lasso/lasso.db).
+function AgentCreatorSettings({ active }: { active: boolean }) {
   const queryClient = useQueryClient()
+  const host = "local"
 
   const configQuery = useQuery({
     queryKey: qk.agentConfig(host),
@@ -248,21 +201,20 @@ function AgentCreatorSettings({
   })
   const repos = reposQuery.data?.repos ?? []
 
-  // Defaults (editable copies, re-seeded whenever the selected host's config
-  // arrives — tracked per host so switching hosts reloads, but a refetch of the
-  // same host doesn't clobber in-progress edits).
+  // Defaults (editable copies, seeded once the config arrives; a refetch doesn't
+  // clobber in-progress edits).
   const [reposRoot, setReposRoot] = React.useState("")
   const [defaultAgent, setDefaultAgent] = React.useState("")
   const [scratchSetup, setScratchSetup] = React.useState("")
-  const seededHostRef = React.useRef<string | null>(null)
+  const seededRef = React.useRef(false)
   React.useEffect(() => {
-    if (seededHostRef.current === host || !configQuery.data) return
-    seededHostRef.current = host
+    if (seededRef.current || !configQuery.data) return
+    seededRef.current = true
     setReposRoot(configQuery.data.repos_root || "")
     // Empty string is meaningful: "Auto (use last used)". Don't coerce to claude.
     setDefaultAgent(configQuery.data.default_agent ?? "")
     setScratchSetup(configQuery.data.scratch_setup || "")
-  }, [configQuery.data, host])
+  }, [configQuery.data])
 
   // Per-repo settings.
   const [repoPath, setRepoPath] = React.useState("")
@@ -270,8 +222,7 @@ function AgentCreatorSettings({
   const [setup, setSetup] = React.useState("")
   const [savedRepo, setSavedRepo] = React.useState<string | null>(null)
 
-  // Keep the selected repo valid against the (host-scoped) repo list, which
-  // changes when the active host switches.
+  // Keep the selected repo valid against the repo list.
   React.useEffect(() => {
     if (repos.length === 0) return
     setRepoPath((prev) =>
