@@ -54,6 +54,12 @@ func tabTermSock(token string) string {
 
 // tmuxAttachArgv is the argv that attaches a ttyd to a tmux session, carrying our
 // private socket + no-user-config flags (see tmuxio.go).
+//
+// We deliberately do NOT pass `-d` (detach-others): two legitimate viewers of the
+// same session (a second browser tab/device) would then fight — each attach kicks
+// the other, which reconnects and kicks back, flapping forever. Stale/orphaned
+// clients that linger after a hard backend restart are handled by `window-size
+// largest` instead (see tmuxEnsureServer): a small orphan is simply ignored.
 func tmuxAttachArgv(session string) []string {
 	return append([]string{"tmux"}, append(tmuxPrefix(), "attach", "-t", session)...)
 }
