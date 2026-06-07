@@ -129,18 +129,21 @@ func ensureTabTerm(tabID string) (string, error) {
 		return "", err
 	}
 	waitSocket(sock, true, 3*time.Second)
-	// Once the browser attaches, force a repaint: the attach resizes the session
-	// mid-startup and the SIGWINCH eats the shell's first prompt / agent's first
-	// frame, leaving the pane blank until the user types (see nudgeRedraw).
-	go nudgeRedrawWhenAttached(session)
-	// A bare shell's prompt (starship) won't paint until the shell processes an
-	// input event with a client attached to answer its terminal queries — a resize
-	// isn't enough. Prime SHELL tabs with an Enter after attach. Never agent tabs:
-	// the Enter could submit a half-typed agent command. (Uses the stored kind, so
-	// a reconciled agent-turned-shell after a reboot isn't primed — rare; the user
-	// can press a key. We deliberately don't probe the live process, which races a
-	// freshly-launched agent.)
-	if t, err := getTab(tabID); err == nil && t.Kind != "agent" {
+	// Once the browser attaches, the pane is blank until the running program is
+	// nudged to paint (the attach SIGWINCH eats the first frame). The right nudge
+	// DIFFERS by program and the two MUST NOT both run on one session — they fight
+	// and the prompt either stalls for seconds or paints only its last line:
+	//   - SHELL (starship): a resize never paints a not-yet-displayed prompt, and
+	//     only paints its last line if it does. A real line-accept (Enter, an empty
+	//     command) paints the FULL multi-line prompt. So prime shell tabs with Enter.
+	//   - AGENT (claude/codex TUI): an Enter would submit a half-typed turn; these
+	//     repaint on SIGWINCH, so use the resize nudge.
+	// Pick by the stored tab kind (deterministic — no race with a just-launched
+	// agent). A reboot-recreated agent-tab is actually a bare shell but keeps
+	// kind=="agent"; it gets the resize nudge instead — rare, and still usable.
+	if t, err := getTab(tabID); err == nil && t.Kind == "agent" {
+		go nudgeRedrawWhenAttached(session)
+	} else {
 		go primeShellPromptWhenAttached(session)
 	}
 

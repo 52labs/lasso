@@ -254,16 +254,32 @@ func primeShellPromptWhenAttached(session string) {
 	if !waitAttached(session) {
 		return
 	}
-	for _, d := range []int{150, 300, 500, 800} { // ~0.15, 0.45, 0.95, 1.75s post-attach
-		time.Sleep(time.Duration(d) * time.Millisecond)
+	deadline := time.Now().Add(12 * time.Second)
+	// Step 1: resize-nudge until the shell paints anything. A bash+starship shell
+	// stalls its first prompt for seconds on the terminal handshake after attach; a
+	// resize (SIGWINCH) interrupts that wait and forces a redraw far sooner than an
+	// Enter alone, which otherwise sits behind the same stall. This repaints only
+	// starship's last line, though.
+	painted := false
+	for time.Now().Before(deadline) {
 		if !tmuxHasSession(session) {
 			return
 		}
 		if out, _ := tmuxCapture(session); strings.TrimSpace(out) != "" {
-			return // prompt (or any output) is up — done
+			painted = true
+			break
 		}
-		_ = tmuxSendEnter(session)
+		nudgeRedraw(session)
+		time.Sleep(250 * time.Millisecond)
 	}
+	if !painted || !tmuxHasSession(session) {
+		return
+	}
+	// Step 2: one Enter (an empty command) so starship redraws its FULL multi-line
+	// prompt — the path/git line plus the prompt char — not just the last line the
+	// resize repainted. Harmless on a shell that's only just appeared and which the
+	// user can't have started typing in yet (it was blank a moment ago).
+	_ = tmuxSendEnter(session)
 }
 
 // tmuxSendLine types one command line into a cooked-mode shell (text, then a
