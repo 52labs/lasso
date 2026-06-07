@@ -182,6 +182,12 @@ func viewportWatcher() {
 			return
 		case <-t.C:
 		}
+		// Keep the park session alive. The viewport ttyd runs `tmux attach -t
+		// park`; if park ever dies the attach exits and the browser is stuck in a
+		// "Reconnecting…" loop with nothing to attach to. Recreating it here lets
+		// ttyd's next reconnect succeed (and gives a switched-away client a home to
+		// fall back to, so killing a tab can't strand the viewport).
+		_ = tmuxEnsurePark()
 		viewport.mu.Lock()
 		want := viewport.want
 		viewport.mu.Unlock()
@@ -225,6 +231,7 @@ func forceViewportRedraw(session string) {
 	if park == session {
 		return
 	}
+	_ = tmuxEnsurePark() // bounce target must exist
 	for tty, sess := range tmuxClientSessions() {
 		if sess == session {
 			_ = tmuxSwitchClient(tty, park)
