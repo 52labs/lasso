@@ -264,9 +264,10 @@ function Shell() {
     else p.collapse()
   }, [])
 
-  // ⌘[ toggles the left sidebar, ⌘] the right panel, ⌘K the switcher. Cmd-only so
-  // terminal control keys (Ctrl-*) are never clobbered; the terminal iframes
-  // re-dispatch Cmd shortcuts to this document so they work with focus inside.
+  // ⌘[ toggles the left sidebar, ⌘] the right panel, ⌘K the switcher, ⌘I opens
+  // the new-workspace modal. Cmd-only so terminal control keys (Ctrl-*) are never
+  // clobbered; the terminal iframes re-dispatch Cmd shortcuts to this document so
+  // they work with focus inside.
   React.useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       if (!e.metaKey || e.ctrlKey || e.altKey || e.shiftKey) return
@@ -280,6 +281,9 @@ function Shell() {
       } else if (k === "k") {
         e.preventDefault()
         setPaletteOpen(true)
+      } else if (k === "i") {
+        e.preventDefault()
+        window.dispatchEvent(new CustomEvent("lasso:new-workspace"))
       }
     }
     document.addEventListener("keydown", onKey)

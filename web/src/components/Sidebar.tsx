@@ -79,10 +79,15 @@ export function Sidebar({
     if (panesRev >= 0) refreshTree()
   }, [panesRev])
 
-  // The new-workspace name modal (opened by the footer "+" and the empty-area
-  // right-click). Submitting creates a bare scratch workspace (a shell, no agent)
-  // and focuses it.
+  // The new-workspace name modal (opened by the footer "+", the empty-area
+  // right-click, and ⌘I). Submitting creates a bare scratch workspace (a shell,
+  // no agent) and focuses it. PromptDialog autofocuses its input on open.
   const [newWsOpen, setNewWsOpen] = React.useState(false)
+  React.useEffect(() => {
+    const open = () => setNewWsOpen(true)
+    window.addEventListener("lasso:new-workspace", open)
+    return () => window.removeEventListener("lasso:new-workspace", open)
+  }, [])
   const submitNewWorkspace = async (title: string) => {
     try {
       const { workspace_id, tab_id, work_dir } =
