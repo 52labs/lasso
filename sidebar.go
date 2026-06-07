@@ -608,6 +608,62 @@ func serveCreateWorktreeOnly(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, map[string]any{"workspace_id": wsID, "work_dir": workDir, "branch": branch})
 }
 
+// serveCreateWorkspace makes a bare SCRATCH workspace — a shell in a fresh
+// ~/.lasso/scratch dir, with NO agent. This is the "New workspace" affordance in
+// the spaces sidebar (distinct from /api/create-agent, which launches an agent).
+// The configured scratch setup script (if any) runs in the shell so the env
+// matches a scratch agent's, but nothing else is started.
+func serveCreateWorkspace(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		Title string `json:"title"`
+	}
+	if !decodeJSON(w, r, &req) {
+		return
+	}
+	be := curBackend()
+	title := strings.TrimSpace(req.Title)
+	if title == "" {
+		title = "scratch"
+	}
+	slug := slugify(title)
+	if slug == "" {
+		slug = "scratch"
+	}
+	workDir := uniqueChildDir(lassoScratchDirFor(be), slug+"-"+randSuffix())
+	if err := be.MkdirAll(workDir, 0o755); err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	wsID := "w" + newID()
+	tabID := newID()
+	session := tabSession(tabID)
+	if err := tmuxNewSession(session, workDir, []string{"LASSO_TAB_ID=" + tabID}); err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	now := time.Now()
+	if err := insertWorkspace(Workspace{ID: wsID, Host: sidebarHost, Title: title, WorkDir: workDir, Kind: "scratch", CreatedAt: now}); err != nil {
+		_ = tmuxKillSession(session)
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	if err := insertTab(Tab{ID: tabID, WorkspaceID: wsID, Title: "shell", Cwd: workDir, Kind: "shell", CreatedAt: now}); err != nil {
+		_ = tmuxKillSession(session)
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	// Run the configured scratch setup in the shell (no agent). Best-effort and
+	// backgrounded so create returns immediately; waits for the rc to settle so
+	// the leading characters aren't eaten.
+	if defaults, derr := hostDefaults(be.Name()); derr == nil {
+		if s := strings.TrimSpace(defaults.ScratchSetup); s != "" {
+			go func(sess, setup string) { tmuxWaitReady(sess); _ = tmuxSendLine(sess, setup) }(session, s)
+		}
+	}
+	kickHub()
+	writeJSON(w, map[string]any{"workspace_id": wsID, "tab_id": tabID, "work_dir": workDir})
+}
+
 // kickHub nudges the SSE hub so a tree mutation is pushed immediately.
 func kickHub() {
 	if srvHub != nil {

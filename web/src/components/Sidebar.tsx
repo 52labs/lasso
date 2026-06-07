@@ -17,7 +17,13 @@ import {
   type TreeWorkspace,
 } from "@/lib/api"
 import { useApp } from "@/lib/app-store"
-import { qk, queryClient, treeAddTab, treeSetRepoMain } from "@/lib/query"
+import {
+  qk,
+  queryClient,
+  treeAddScratchWorkspace,
+  treeAddTab,
+  treeSetRepoMain,
+} from "@/lib/query"
 import { cn } from "@/lib/utils"
 
 // The left sidebar: a "spaces" tree (git repos with their worktrees nested,
@@ -45,13 +51,6 @@ function openNewAgent(repo: string, base: string) {
   )
 }
 
-// openCreateWorkspace opens the same creator with no prefill — a blank canvas to
-// spin up a new workspace (git worktree or scratch). The "spaces" footer button
-// and the empty-area right-click both route here.
-function openCreateWorkspace() {
-  window.dispatchEvent(new CustomEvent("lasso:new-agent"))
-}
-
 export function Sidebar({
   selectedTabId,
   onSelectTab,
@@ -68,6 +67,30 @@ export function Sidebar({
   React.useEffect(() => {
     if (panesRev >= 0) refreshTree()
   }, [panesRev])
+
+  // Create a bare scratch workspace (a shell, no agent) and focus it. Routed to
+  // from the footer "+" and the empty-area right-click.
+  const createWorkspace = React.useCallback(async () => {
+    const name = window.prompt("New workspace name:", "scratch")
+    if (name == null) return
+    const title = name.trim() || "scratch"
+    try {
+      const { workspace_id, tab_id, work_dir } =
+        await api.createWorkspace(title)
+      treeAddScratchWorkspace({
+        id: workspace_id,
+        title,
+        work_dir,
+        kind: "scratch",
+        pinned: false,
+        tabs: [{ id: tab_id, title: "shell", kind: "shell" }],
+      })
+      onSelectTab(tab_id)
+      refreshTree()
+    } catch (e) {
+      toast.error(String(e))
+    }
+  }, [onSelectTab])
 
   return (
     <div className="flex h-full min-h-0 flex-col bg-card text-[13px]">
@@ -100,7 +123,7 @@ export function Sidebar({
             </div>
           </ContextMenuTrigger>
           <ContextMenuContent>
-            <ContextMenuItem onSelect={openCreateWorkspace}>
+            <ContextMenuItem onSelect={createWorkspace}>
               New workspace…
             </ContextMenuItem>
           </ContextMenuContent>
@@ -108,11 +131,11 @@ export function Sidebar({
         <button
           type="button"
           title="New workspace"
-          onClick={openCreateWorkspace}
-          className="absolute right-2 bottom-2 flex items-center gap-1 rounded-md border border-border bg-background px-2 py-1 text-[12px] text-muted-foreground shadow-sm hover:bg-accent hover:text-foreground"
+          aria-label="New workspace"
+          onClick={createWorkspace}
+          className="absolute right-1.5 bottom-1.5 flex size-5 items-center justify-center rounded text-muted-foreground/60 hover:bg-accent hover:text-foreground"
         >
           <Plus className="size-3.5" />
-          Workspace
         </button>
       </div>
 

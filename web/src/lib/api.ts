@@ -490,6 +490,12 @@ export const api = {
     postJSON<{ ok: boolean }>("/api/tab/rename", { tab_id, title }),
   closeTab: (tab_id: string) =>
     postJSON<{ ok: boolean }>("/api/tab/close", { tab_id }),
+  // Create a bare scratch workspace (a shell, no agent).
+  createWorkspace: (title?: string) =>
+    postJSON<{ workspace_id: string; tab_id: string; work_dir: string }>(
+      "/api/workspace/create",
+      { title }
+    ),
   renameWorkspace: (workspace_id: string, title: string) =>
     postJSON<{ ok: boolean }>("/api/workspace/rename", { workspace_id, title }),
   closeWorkspace: (workspace_id: string) =>
