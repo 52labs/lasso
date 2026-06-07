@@ -398,6 +398,17 @@ export function typeIntoHerdr(text: string) {
   pasteIntoTerminal("term", text)
 }
 
+// VIEWPORT_TERM_ID is the iframe id of the single persistent viewport terminal
+// (the active tab's terminal — see TabTerminal).
+export const VIEWPORT_TERM_ID = "tabterm-viewport"
+
+// typeIntoTerminal pastes into the active tab's terminal (the viewport) without
+// submitting, so the user reviews and presses Enter. The viewport-model
+// replacement for typeIntoHerdr — used by the scratch pad's "Send to Terminal".
+export function typeIntoTerminal(text: string) {
+  pasteIntoTerminal(VIEWPORT_TERM_ID, text)
+}
+
 // Hand keyboard focus to the herdr terminal (/terminal/) so the user can type
 // into the focused pane without clicking it first. Focuses both the iframe
 // window and xterm's input, and retries while xterm is still (re)connecting —

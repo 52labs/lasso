@@ -8,9 +8,9 @@ import { Input } from "@/components/ui/input"
 import { api } from "@/lib/api"
 import { lsGet, lsSet, useApp } from "@/lib/app-store"
 import { editorTheme } from "@/lib/codemirror"
-import { typeIntoHerdr } from "@/lib/terminal"
+import { typeIntoTerminal } from "@/lib/terminal"
 
-// A persistent scratch pad in the sidebar: jot text, send it to the herdr
+// A persistent scratch pad in the sidebar: jot text, send it to the active tab's
 // terminal without submitting (so the user reviews and presses Enter), save it
 // to a file, or clear it. Content lives in localStorage so it survives reloads.
 // Mirrors fulcrum's scratch editor, adapted to lasso's CodeMirror + API.
@@ -39,7 +39,7 @@ export function ScratchTab() {
 
   const handleSend = React.useCallback(() => {
     if (!content) return
-    typeIntoHerdr(content)
+    typeIntoTerminal(content)
   }, [content])
 
   const handleClear = React.useCallback(() => {
@@ -98,7 +98,7 @@ export function ScratchTab() {
           size="sm"
           className="h-7"
           disabled={!content}
-          title="send to the herdr terminal (⌘/Ctrl+Enter)"
+          title="send to the active terminal (⌘/Ctrl+Enter)"
           onClick={handleSend}
         >
           <ArrowRight />

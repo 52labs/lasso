@@ -1,5 +1,6 @@
 import { useQuery } from "@tanstack/react-query"
 import {
+  ChevronLeft,
   ChevronRight,
   Files,
   Globe,
@@ -335,7 +336,29 @@ function Shell() {
                   onSelectTab={selectTab}
                 />
               </div>
-              <CreateAgentDialog variant="header" />
+              {/* New Agent at the far right; when the file viewer is collapsed the
+                  git status + an expand control follow it (mirrors main, so git
+                  state is visible and the panel reachable without ⌘]). */}
+              <div className="ml-2 flex shrink-0 items-center gap-1.5">
+                <CreateAgentDialog variant="header" />
+                {rightCollapsed && (
+                  <>
+                    <GitStatusBadge
+                      dirty={diffDirty}
+                      ready={gitReady}
+                      textClassName="self-center text-[13px]"
+                    />
+                    <button
+                      type="button"
+                      className="my-1 mr-1.5 flex size-6 shrink-0 items-center justify-center self-center rounded border border-border text-muted-foreground hover:border-primary hover:text-primary"
+                      title="show file viewer (⌘])"
+                      onClick={toggleRight}
+                    >
+                      <ChevronLeft className="size-4" />
+                    </button>
+                  </>
+                )}
+              </div>
             </div>
             <div className="relative flex min-h-0 flex-1 flex-col">
               {/* One persistent viewport, mounted once and pointed at the
