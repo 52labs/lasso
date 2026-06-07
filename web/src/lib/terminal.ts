@@ -415,3 +415,21 @@ export function focusHerdrTerminal(tries = 0) {
   }
   if (tries < 20) setTimeout(() => focusHerdrTerminal(tries + 1), 100)
 }
+
+// focusTerminal hands keyboard focus to a terminal iframe (by element id) so the
+// user can type immediately — after creating/selecting a tab, workspace, or
+// agent. Focuses both the iframe window and xterm's input, retrying while xterm
+// is still (re)connecting. The viewport-model counterpart of focusHerdrTerminal.
+export function focusTerminal(id: string, tries = 0) {
+  try {
+    const w = frameWindow(id)
+    if (w?.term && typeof w.term.focus === "function") {
+      w.focus()
+      w.term.focus()
+      return
+    }
+  } catch {
+    /* same-origin; ignore */
+  }
+  if (tries < 20) setTimeout(() => focusTerminal(id, tries + 1), 100)
+}

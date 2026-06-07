@@ -1,7 +1,7 @@
 import * as React from "react"
 
 import { api } from "@/lib/api"
-import { bootTermFrame, refitTerminal } from "@/lib/terminal"
+import { bootTermFrame, focusTerminal, refitTerminal } from "@/lib/terminal"
 
 // The viewport: a SINGLE persistent terminal iframe (one ttyd) that we point at
 // whichever tab is selected by re-POSTing /api/tab/term — the backend uses tmux
@@ -58,6 +58,7 @@ export function TabTerminal({ tabId }: { tabId: string | null }) {
           if (r.ready || Date.now() > deadline) {
             setReady(true)
             refitTerminal(id) // the switch-client redraw landed; size it to the pane
+            focusTerminal(id) // type immediately after creating/selecting a tab
           } else {
             timer = setTimeout(poll, 200)
           }
