@@ -6,10 +6,10 @@ import {
   startTermThemeReconciler,
 } from "@/lib/theme"
 
-// Behavior attached to the same-origin ttyd terminal iframes (/terminal/ and
-// /shell/). All of this is ported faithfully from the original index.html —
-// xterm.js can only paste text, sends a bare CR for both Enter and Shift+Enter,
-// and starts from ttyd's theme on every reconnect, so we patch around each.
+// Behavior attached to the same-origin ttyd terminal iframes. All of this is
+// ported faithfully from the original index.html — xterm.js can only paste text,
+// sends a bare CR for both Enter and Shift+Enter, and starts from ttyd's theme
+// on every reconnect, so we patch around each.
 
 interface XTermBufferLine {
   translateToString: (trimRight?: boolean) => string
@@ -31,7 +31,7 @@ interface XTerm {
   options?: Record<string, unknown>
   attachCustomKeyEventHandler?: (h: (e: KeyboardEvent) => boolean) => void
   // xterm.js public IParser. ttyd 1.7.4 never registers an OSC 52 handler, so
-  // we add our own (wireOsc52) to honour herdr's clipboard copies.
+  // we add our own (wireOsc52) to honour the terminal's clipboard copies.
   parser?: {
     registerOscHandler?: (
       ident: number,
@@ -41,14 +41,14 @@ interface XTerm {
   _core?: {
     coreService?: { triggerDataEvent?: (data: string, sync?: boolean) => void }
   }
-  __herdrShiftEnter?: boolean
-  __herdrOsc52?: boolean
+  __shiftEnterWired?: boolean
+  __osc52Wired?: boolean
 }
 interface TermWindow extends Window {
   term?: XTerm
 }
 interface WiredDoc extends Document {
-  __herdrWired?: boolean
+  __terminalWired?: boolean
 }
 
 function frameWindow(id: string): TermWindow | null {
@@ -82,8 +82,8 @@ function wireShiftEnter(id: string, tries: number) {
     return
   }
   if (term && typeof term.attachCustomKeyEventHandler === "function") {
-    if (!term.__herdrShiftEnter) {
-      term.__herdrShiftEnter = true
+    if (!term.__shiftEnterWired) {
+      term.__shiftEnterWired = true
       const t = term
       term.attachCustomKeyEventHandler((e) => {
         const enterish =
@@ -113,12 +113,12 @@ function wireShiftEnter(id: string, tries: number) {
   if (tries < 20) setTimeout(() => wireShiftEnter(id, tries + 1), 150)
 }
 
-// herdr copies (copy-mode, double-click token, mouse selection in a pane) by
+// The terminal copies (copy-mode, double-click token, mouse selection) by
 // emitting OSC 52 — `ESC ] 52 ; c ; <base64> BEL` — and immediately shows
 // "copied to clipboard". But ttyd 1.7.4's bundled xterm.js registers no OSC 52
 // handler, so the sequence is silently dropped and the browser clipboard is
-// never written: herdr says it copied, but nothing actually did. We register
-// the missing handler on the same-origin xterm to close that gap.
+// never written: it says it copied, but nothing actually did. We register the
+// missing handler on the same-origin xterm to close that gap.
 //
 // `data` is the OSC payload after "52;" — "<Pc>;<base64>", where Pc is the
 // target selection ("c" for clipboard, may be empty or multi-char). A read
@@ -185,8 +185,8 @@ function wireOsc52(id: string, tries: number) {
   }
   const term = win?.term
   if (term?.parser && typeof term.parser.registerOscHandler === "function") {
-    if (!term.__herdrOsc52) {
-      term.__herdrOsc52 = true
+    if (!term.__osc52Wired) {
+      term.__osc52Wired = true
       const w = win as TermWindow
       term.parser.registerOscHandler(52, (data) => {
         const text = osc52Text(data)
@@ -199,10 +199,10 @@ function wireOsc52(id: string, tries: number) {
   if (tries < 20) setTimeout(() => wireOsc52(id, tries + 1), 150)
 }
 
-// wireTerminalIframe: (1) for the herdr terminal, suppress the native context
-// menu so right-click only triggers herdr's handling; (2) intercept image paste
+// wireTerminalIframe: (1) optionally suppress the native context menu so
+// right-click only triggers the terminal's handling; (2) intercept image paste
 // — save it server-side and insert its path at the cursor (xterm only pastes
-// text). Re-run on each iframe (re)load; __herdrWired guards double-attaching.
+// text). Re-run on each iframe (re)load; __terminalWired guards double-attaching.
 export function wireTerminalIframe(id: string, suppressContext: boolean) {
   let win: TermWindow | null
   let doc: WiredDoc | null
@@ -212,8 +212,8 @@ export function wireTerminalIframe(id: string, suppressContext: boolean) {
   } catch {
     return
   }
-  if (!doc || doc.__herdrWired) return
-  doc.__herdrWired = true
+  if (!doc || doc.__terminalWired) return
+  doc.__terminalWired = true
 
   if (suppressContext)
     doc.addEventListener("contextmenu", (e) => e.preventDefault(), true)
@@ -296,8 +296,8 @@ export function bootTermFrame(id: string, suppressContext: boolean) {
 
 // termHasRendered reports whether the same-origin xterm has painted real pane
 // content yet. A fresh ttyd starts blank and flashes its own connect/reconnect
-// chrome before herdr repaints the pane; we treat the terminal as "live" only
-// once the cursor has advanced or a visible row carries text, so a loading
+// chrome before the terminal repaints the pane; we treat the terminal as "live"
+// only once the cursor has advanced or a visible row carries text, so a loading
 // overlay can mask that churn until then.
 function termHasRendered(term: XTerm): boolean {
   const buf = term.buffer?.active
@@ -372,7 +372,7 @@ export function refitTerminal(id: string) {
 
 // pasteIntoTerminal pastes text into a same-origin terminal iframe without
 // submitting, so the user can review and press Enter. Retries while xterm is
-// still loading. typeIntoShell / typeIntoHerdr are the per-frame shorthands.
+// still loading. typeIntoShell / typeIntoTerminal are the per-frame shorthands.
 export function pasteIntoTerminal(id: string, text: string, tries = 0) {
   try {
     const w = frameWindow(id)
@@ -388,14 +388,9 @@ export function pasteIntoTerminal(id: string, text: string, tries = 0) {
   if (tries < 20) setTimeout(() => pasteIntoTerminal(id, text, tries + 1), 150)
 }
 
-// typeIntoShell pastes into the out-of-herdr shell (/shell/).
+// typeIntoShell pastes into the standalone shell (/shell/).
 export function typeIntoShell(text: string) {
   pasteIntoTerminal("shellframe", text)
-}
-
-// typeIntoHerdr pastes into the herdr terminal (/terminal/), where agents run.
-export function typeIntoHerdr(text: string) {
-  pasteIntoTerminal("term", text)
 }
 
 // VIEWPORT_TERM_ID is the iframe id of the single persistent viewport terminal
@@ -403,17 +398,17 @@ export function typeIntoHerdr(text: string) {
 export const VIEWPORT_TERM_ID = "tabterm-viewport"
 
 // typeIntoTerminal pastes into the active tab's terminal (the viewport) without
-// submitting, so the user reviews and presses Enter. The viewport-model
-// replacement for typeIntoHerdr — used by the scratch pad's "Send to Terminal".
+// submitting, so the user reviews and presses Enter — used by the scratch pad's
+// "Send to Terminal".
 export function typeIntoTerminal(text: string) {
   pasteIntoTerminal(VIEWPORT_TERM_ID, text)
 }
 
-// Hand keyboard focus to the herdr terminal (/terminal/) so the user can type
+// Hand keyboard focus to the viewport terminal (/terminal/) so the user can type
 // into the focused pane without clicking it first. Focuses both the iframe
 // window and xterm's input, and retries while xterm is still (re)connecting —
 // mirrors pasteIntoTerminal. Used after creating/focusing an agent.
-export function focusHerdrTerminal(tries = 0) {
+export function focusViewportTerminal(tries = 0) {
   try {
     const w = frameWindow("term")
     if (w?.term && typeof w.term.focus === "function") {
@@ -424,13 +419,13 @@ export function focusHerdrTerminal(tries = 0) {
   } catch {
     /* same-origin; ignore */
   }
-  if (tries < 20) setTimeout(() => focusHerdrTerminal(tries + 1), 100)
+  if (tries < 20) setTimeout(() => focusViewportTerminal(tries + 1), 100)
 }
 
 // focusTerminal hands keyboard focus to a terminal iframe (by element id) so the
 // user can type immediately — after creating/selecting a tab, workspace, or
 // agent. Focuses both the iframe window and xterm's input, retrying while xterm
-// is still (re)connecting. The viewport-model counterpart of focusHerdrTerminal.
+// is still (re)connecting. The viewport-model counterpart of focusViewportTerminal.
 export function focusTerminal(id: string, tries = 0) {
   try {
     const w = frameWindow(id)

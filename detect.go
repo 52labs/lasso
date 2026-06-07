@@ -6,11 +6,11 @@ import (
 	"unicode"
 )
 
-// Agent status detection. Without herdr we determine whether an agent is idle,
-// working, or blocked (waiting on the user) by SCREEN-SCRAPING the tmux pane —
-// the same approach herdr uses. These heuristics are ported verbatim from herdr
-// src/detect/agents/{claude_code,codex}.rs (only claude + codex are supported).
-// The status poller (statusPoller) feeds tmuxCapture() output here on a tick.
+// Agent status detection. We determine whether an agent is idle, working, or
+// blocked (waiting on the user) by SCREEN-SCRAPING the tmux pane. These are
+// per-agent screen-scraping heuristics for claude + codex (the only agents
+// supported). The status poller (statusPoller) feeds tmuxCapture() output here
+// on a tick.
 
 type AgentStatus string
 
@@ -23,7 +23,7 @@ const (
 
 // claudeWorkingHold is how long a Claude agent's status is held at "working"
 // after the screen flips to an idle prompt, to deglitch the rapid Working→Idle→
-// Working flicker between tool calls (herdr's CLAUDE_WORKING_HOLD).
+// Working flicker between tool calls.
 const claudeWorkingHold = 1200 * time.Millisecond
 
 // detectAgentStatus is the entry point the poller calls. It returns the agent's
@@ -59,7 +59,7 @@ func stabilizeClaude(prev, raw AgentStatus, now, lastWorking time.Time) AgentSta
 }
 
 // ---------------------------------------------------------------------------
-// shared helpers (herdr src/detect/mod.rs)
+// shared helpers
 // ---------------------------------------------------------------------------
 
 // hasConfirmationPrompt reports a "do you want…/would you like…" prompt that's
@@ -97,7 +97,7 @@ func hasInterruptPattern(lower string) bool {
 }
 
 // ---------------------------------------------------------------------------
-// Claude Code (herdr src/detect/agents/claude_code.rs)
+// Claude Code
 // ---------------------------------------------------------------------------
 
 func detectClaudeRaw(content string) AgentStatus {
@@ -206,7 +206,7 @@ func isHorizontalRule(line string) bool {
 }
 
 // ---------------------------------------------------------------------------
-// Codex (herdr src/detect/agents/codex.rs)
+// Codex
 // ---------------------------------------------------------------------------
 
 func detectCodex(content string) AgentStatus {

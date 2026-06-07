@@ -55,14 +55,9 @@ export const ONYX_XTERM_LIGHT: Record<string, unknown> = {
   brightWhite: "#1a1c23",
 }
 
-// Legacy fixed terminal iframes (the herdr terminal + right shell), kept for
-// any still-mounted herdr-era frames. The per-tab terminals are matched by
-// class instead — see termFrames.
+// Fixed terminal iframes (the standalone terminal + shell). The per-tab
+// terminals are matched by class instead — see termFrames.
 const TERM_FRAME_IDS = ["term", "shellframe"]
-
-// GRID_FRAME_CLASS marks each Grid cell's terminal iframe so it's re-themed
-// alongside the fixed terminals (its id is dynamic, one per host+pane).
-export const GRID_FRAME_CLASS = "gridterm"
 
 // TERM_FRAME_CLASS marks the per-tab terminal iframes (TabTerminal renders the
 // ttyd iframe with this class; its id is `tabterm-<tabId>`). Matching by class
@@ -70,21 +65,19 @@ export const GRID_FRAME_CLASS = "gridterm"
 // terminal stays on ttyd's default palette while the UI repaints.
 const TERM_FRAME_CLASS = "frame"
 
-// termFrames collects every terminal iframe the theme should track: legacy
-// fixed ones by id, plus every live Grid cell and per-tab terminal by class.
-// Deduped, since a frame could in principle match more than one selector.
+// termFrames collects every terminal iframe the theme should track: the fixed
+// ones by id, plus every per-tab terminal by class. Deduped, since a frame could
+// in principle match more than one selector.
 function termFrames(): HTMLIFrameElement[] {
   const seen = new Set<HTMLIFrameElement>()
   for (const id of TERM_FRAME_IDS) {
     const el = document.getElementById(id) as HTMLIFrameElement | null
     if (el) seen.add(el)
   }
-  for (const cls of [GRID_FRAME_CLASS, TERM_FRAME_CLASS]) {
-    for (const el of document.querySelectorAll<HTMLIFrameElement>(
-      `iframe.${cls}`
-    ))
-      seen.add(el)
-  }
+  for (const el of document.querySelectorAll<HTMLIFrameElement>(
+    `iframe.${TERM_FRAME_CLASS}`
+  ))
+    seen.add(el)
   return Array.from(seen)
 }
 
@@ -93,7 +86,7 @@ function termFrames(): HTMLIFrameElement[] {
 // The face is vendored as woff2 under web/public/fonts and served at /fonts/*.
 const TERM_FONT_FAMILY = "JetBrainsMono Nerd Font"
 const TERM_FONT_STACK = `"${TERM_FONT_FAMILY}", ui-monospace, monospace`
-const TERM_FONT_STYLE_ID = "herdr-term-font"
+const TERM_FONT_STYLE_ID = "lasso-term-font"
 
 // The @font-face must live in the *terminal iframe's* document — a parent
 // stylesheet doesn't cross the iframe boundary. We mirror index.css here so the
@@ -110,7 +103,7 @@ const TERM_FONT_FACE_CSS = (
   .join("")
 
 interface FontDoc extends Document {
-  __herdrFontWired?: boolean
+  __fontWired?: boolean
 }
 
 // Once the webfont is actually loaded inside the iframe, set xterm's fontFamily.
@@ -141,8 +134,8 @@ function setTermFontWhenReady(
 }
 
 // applyTermFont injects the Nerd Font @font-face into every terminal iframe and
-// points xterm at it. Mirrors applyTermTheme: iterates the same frames (fixed +
-// Grid cells), and retries while an iframe is still (re)connecting. Each fresh
+// points xterm at it. Mirrors applyTermTheme: iterates the same frames, and
+// retries while an iframe is still (re)connecting. Each fresh
 // xterm lives in a fresh iframe document, so the per-document guard re-arms on
 // ttyd reconnects.
 export function applyTermFont(tries = 0) {
@@ -169,8 +162,8 @@ export function applyTermFont(tries = 0) {
         pending = true
         continue
       }
-      if (doc.__herdrFontWired) continue
-      doc.__herdrFontWired = true
+      if (doc.__fontWired) continue
+      doc.__fontWired = true
       setTermFontWhenReady(doc, w.term)
     } catch {
       /* same-origin: shouldn't throw, but never let it break the caller */
@@ -219,7 +212,7 @@ export function lastTerminalTheme() {
 // sleep/wake, a network blip — and that reconnect happens *inside the existing
 // iframe document*, so it fires no iframe `load` event for bootTermFrame to
 // hook. Without this, a reconnected terminal keeps ttyd's default theme until
-// the next herdr theme change or a full page reload, while the React/CSS side
+// the next theme change or a full page reload, while the React/CSS side
 // (whose --h-* vars live on the parent document and persist) stays correctly
 // themed — the half-light/half-dark desync. We compare the live background
 // against the cached one and only write when they differ, so xterm rebuilds its

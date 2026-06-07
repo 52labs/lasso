@@ -16,7 +16,7 @@ func requireTmux(t *testing.T) {
 		t.Skip("tmux not installed")
 	}
 	t.Setenv("LASSO_DIR", t.TempDir())
-	t.Setenv("HOME", t.TempDir()) // isolate from the real herdr session.json (migrateV2)
+	t.Setenv("HOME", t.TempDir()) // isolate from the developer's real HOME
 	t.Cleanup(func() { _ = tmux("kill-server") })
 }
 

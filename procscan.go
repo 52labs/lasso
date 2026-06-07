@@ -7,21 +7,21 @@ import (
 	"strings"
 )
 
-// Agent presence is determined the way herdr does it: by inspecting the live
-// foreground process of each tmux pane, NOT by a stored flag. A pane counts as
-// "an agent" only while an agent binary (claude/codex) is actually running under
-// its shell. Two reasons this can't lean on tmux's #{pane_current_command}:
+// Agent presence is determined by inspecting the live foreground process of each
+// tmux pane, NOT by a stored flag. A pane counts as "an agent" only while an
+// agent binary (claude/codex) is actually running under its shell. Two reasons
+// this can't lean on tmux's #{pane_current_command}:
 //   - the native claude/codex binaries have unhelpful comm names (claude's exe
 //     is a version-numbered file like "2.1.167"; codex's is "codex-x86_64-…"),
 //     so the foreground comm doesn't identify them — we match argv0 from
-//     /proc/<pid>/cmdline instead, mirroring herdr's argv-based identify_agent;
+//     /proc/<pid>/cmdline instead;
 //   - after the agent exits (or a fresh post-reboot shell), the pane is just a
 //     shell and must stop counting as an agent.
 //
-// Linux-only (/proc); lasso is local-only for now (multi-host is deferred).
+// Linux-only (/proc); lasso is local-only.
 
 // agentKindFromToken maps a single command/path token to "claude"|"codex"|"",
-// by its basename — the same rule herdr uses for argv0/path tokens.
+// by its basename.
 func agentKindFromToken(token string) string {
 	token = strings.Trim(token, "\"'")
 	if token == "" || strings.HasPrefix(token, "-") {

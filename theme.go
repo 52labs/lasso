@@ -1,6 +1,6 @@
 package main
 
-// Onyx is lasso's single, fixed design system (dark-only). The old herdr-derived
+// Onyx is lasso's single, fixed design system (dark-only). The old derived
 // 18-palette theme switcher — the themes map, settings-backed selection, the
 // /api/theme(s) endpoints and the SSE live-repaint — is gone; UI colors are now
 // static Onyx tokens baked into web/src/index.css.

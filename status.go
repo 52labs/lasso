@@ -8,7 +8,7 @@ import (
 	"time"
 )
 
-// Agent status tracking. Without herdr there's no event stream reporting agent
+// Agent status tracking. There's no event stream reporting agent
 // state, so a single goroutine (statusPoller) scrapes each live agent tab's tmux
 // pane on a tick and runs the detect.go heuristics. The result is cached here and
 // read by the SSE hub, the sidebar API (/api/tree, /api/agents), and MCP tools.
@@ -56,7 +56,7 @@ func (s *statusStore) forget(tabID string) {
 }
 
 // pollOnce scrapes every tab that currently has a live agent process (per
-// tabAgentKinds — herdr-style foreground-process detection, not a stored flag)
+// tabAgentKinds — foreground-process detection, not a stored flag)
 // and updates the cache. It returns whether anything changed — a status moved,
 // an agent appeared, or an agent exited — so the caller can push an SSE frame.
 // A tab whose agent has exited is dropped from the cache (it's a plain shell

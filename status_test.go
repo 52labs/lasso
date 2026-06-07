@@ -7,7 +7,7 @@ import (
 
 // TestPollOnceIgnoresDeadAgents verifies the new process-based model: a tab
 // marked kind=agent in the DB but with no running agent process is NOT tracked
-// (agent-ness is live now, like herdr — see procscan.go). pollOnce keys off
+// (agent-ness is live now — see procscan.go). pollOnce keys off
 // tabAgentKinds(), which finds no agent here, so the cache stays empty.
 func TestPollOnceIgnoresDeadAgents(t *testing.T) {
 	openTestDB(t)

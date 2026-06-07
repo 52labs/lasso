@@ -10,7 +10,7 @@ import (
 	"time"
 )
 
-// tmux is lasso's terminal/persistence layer (it replaced the herdr daemon).
+// tmux is lasso's terminal/persistence layer.
 // Every terminal — an agent's shell, a plain shell tab — is a tmux *session* on
 // a DEDICATED tmux server so lasso's sessions are isolated from the user's own
 // tmux and survive lasso restarts/version updates (the tmux server is a separate
@@ -100,7 +100,7 @@ func tmuxEnsureServer() error {
 // tmuxNewSession creates a detached session named session, rooted at cwd, with
 // each "KEY=VAL" in env exported into the session (tmux >=3.2 `new-session -e`).
 // We always tag the session with LASSO_TAB_ID so an agent running inside can
-// identify which tab/agent it is (MCP whoami) — there is no $HERDR_PANE_ID now.
+// identify which tab/agent it is (MCP whoami).
 // Initial geometry is generous; ttyd resizes the pane to the real viewport on
 // attach (aggressive-resize sizes per attached client).
 func tmuxNewSession(session, cwd string, env []string) error {
@@ -157,7 +157,7 @@ func tmuxCaptureScroll(session string, n int) (string, error) {
 }
 
 // tmuxCurrentPath returns the live cwd of a session's foreground process — the
-// foreground_cwd herdr used to surface (drives the file viewer + the cwd we save
+// the live foreground-process cwd (drives the file viewer + the cwd we save
 // to recreate a shell after a reboot).
 func tmuxCurrentPath(session string) (string, error) {
 	out, err := tmuxOut("display-message", "-p", "-t", session, "#{pane_current_path}")
@@ -379,7 +379,7 @@ func tmuxSwitchClient(tty, session string) error {
 }
 
 // tmuxSendLine types one command line into a cooked-mode shell (text, then a
-// SEPARATE Enter keypress) — the equivalent of herdr's `pane run`. The literal
+// SEPARATE Enter keypress) — runs a command line in a pane's shell. The literal
 // flag (-l) and "--" stop tmux from interpreting text that looks like a key name
 // ("Enter", "C-c") or starts with "-".
 func tmuxSendLine(session, line string) error {
@@ -411,7 +411,7 @@ func tmuxSendCtrlL(session string) error {
 // Enter). Going through load-buffer + `paste-buffer -p` makes the TUI treat it as
 // a paste, so an embedded newline stays literal instead of submitting and
 // per-character autocomplete doesn't fire — the tmux-native form of the lesson
-// baked into the old herdr paneSubmit. The buffer is named per-call and deleted
+// (the hard-won composer-submit lesson). The buffer is named per-call and deleted
 // after paste (-d) so concurrent sends don't clobber each other.
 func tmuxSendText(session, text string) error {
 	buf := "lasso_" + randSuffix()
@@ -449,7 +449,7 @@ func tmuxWaitReady(session string) {
 }
 
 // tmuxSubmit types text into an interactive agent TUI (claude/codex) and submits
-// it as a turn. Two hazards, both handled (the hard-won herdr paneSubmit lesson,
+// it as a turn. Two hazards, both handled (the hard-won composer-submit lesson,
 // re-expressed on tmux):
 //
 //  1. Bracketed paste vs Enter. The TUIs run in raw mode with bracketed paste, so

@@ -12,7 +12,7 @@ import (
 func openTestDB(t *testing.T) {
 	t.Helper()
 	t.Setenv("LASSO_DIR", t.TempDir())
-	// Isolate HOME so migrateV2 can't read the developer's real herdr
+	// Isolate HOME from the developer's real
 	// session.json and prune test fixtures.
 	t.Setenv("HOME", t.TempDir())
 	if err := openDB(); err != nil {

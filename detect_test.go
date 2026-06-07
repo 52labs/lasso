@@ -6,7 +6,7 @@ import (
 )
 
 // Fixtures approximate what `tmux capture-pane -p` yields for each agent in each
-// state. They key off the same structural chrome herdr's heuristics match
+// state. They key off the structural chrome the heuristics match
 // (prompt box rules, spinner glyph + ellipsis, "esc to interrupt", codex's "›"
 // prompt and "• Working (" markers, permission phrases).
 

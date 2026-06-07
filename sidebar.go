@@ -10,11 +10,11 @@ import (
 	"time"
 )
 
-// The sidebar's data + mutations. The React sidebar (replacing herdr's TUI) shows
-// git repos from repos_root with their lasso worktrees nested as a tree, ordered
-// by latest commit to the primary branch (pinned repos first), plus scratch
-// workspaces, plus a flat agent list with live status. All local-only (multi-host
-// is deferred): everything routes through curBackend() against host "local".
+// The sidebar's data + mutations. The React sidebar shows git repos from
+// repos_root with their lasso worktrees nested as a tree, ordered by latest
+// commit to the primary branch (pinned repos first), plus scratch workspaces,
+// plus a flat agent list with live status. Local-only: everything routes through
+// curBackend() against host "local".
 
 const sidebarHost = "local"
 
@@ -57,7 +57,7 @@ type treeRepo struct {
 	Pinned        bool            `json:"pinned"`
 	LastCommit    int64           `json:"last_commit"` // unix secs (ordering + display)
 	Workspaces    []treeWorkspace `json:"workspaces"`  // linked worktrees only
-	// The repo row is itself the main checkout (like herdr): clicking it opens a
+	// The repo row is itself the main checkout: clicking it opens a
 	// terminal on the primary branch. MainTabID is its tab if one already exists,
 	// else "" — the frontend then asks /api/repo/open to create one on click.
 	// MainWorkspace carries the full main-checkout workspace (with its tabs) so
@@ -99,8 +99,8 @@ func serveTree(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Repos shown = only those with a live workspace (a linked worktree or a
-	// main checkout) — like herdr, which lists workspaces grouped by repo, not
-	// every repo under repos_root. (New repos are reached via New Agent / ⌘K; a
+	// main checkout) — workspaces are listed grouped by repo, not every repo under
+	// repos_root. (New repos are reached via New Agent / ⌘K; a
 	// settings allowlist to pin extra repos can layer on later.) reposList only
 	// supplies display names + a stable order seed.
 	nameOf := map[string]string{}
@@ -340,8 +340,7 @@ func serveTabRename(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, map[string]any{"ok": true})
 }
 
-// serveWorkspaceRenameDB renames a workspace in the DB (the new tmux-era handler;
-// the old herdr serveWorkspaceRename is removed in cleanup).
+// serveWorkspaceRenameDB renames a workspace in the DB.
 func serveWorkspaceRenameDB(w http.ResponseWriter, r *http.Request) {
 	var req struct {
 		WorkspaceID string `json:"workspace_id"`
@@ -433,7 +432,7 @@ func serveNewTab(w http.ResponseWriter, r *http.Request) {
 	ord := nextTabOrdinal(ws.ID)
 	title := strings.TrimSpace(req.Title)
 	if title == "" {
-		// Default to herdr-style numeric naming (ordinal + 1, monotonic).
+		// Default to numeric naming (ordinal + 1, monotonic).
 		title = strconv.Itoa(ord + 1)
 	}
 	tabID := newID()
@@ -455,8 +454,8 @@ func serveNewTab(w http.ResponseWriter, r *http.Request) {
 }
 
 // serveOpenRepo opens a terminal on a repo's primary branch — the repo's main
-// checkout (work_dir == repo root). Like herdr, a repo row isn't just a grouping
-// of worktrees: it's itself a workspace. Returns the tab to select, creating the
+// checkout (work_dir == repo root). A repo row isn't just a grouping of
+// worktrees: it's itself a workspace. Returns the tab to select, creating the
 // main-checkout workspace + a shell tab on first open.
 func serveOpenRepo(w http.ResponseWriter, r *http.Request) {
 	var req struct {
@@ -690,5 +689,40 @@ func serveCreateWorkspace(w http.ResponseWriter, r *http.Request) {
 func kickHub() {
 	if srvHub != nil {
 		srvHub.kick()
+	}
+}
+
+// ---------------------------------------------------------------------------
+// GET/POST /api/ui-state — persisted browser UI prefs (sidebar layout)
+// ---------------------------------------------------------------------------
+
+func serveUIState(w http.ResponseWriter, r *http.Request) {
+	switch r.Method {
+	case http.MethodGet:
+		us, err := getUIState()
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		writeJSON(w, us)
+	case http.MethodPost:
+		var us uiState
+		if err := json.NewDecoder(r.Body).Decode(&us); err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+		if us.GridHiddenHosts == nil {
+			us.GridHiddenHosts = []string{}
+		}
+		if us.GridSelected == nil {
+			us.GridSelected = []string{}
+		}
+		if err := saveUIState(us); err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		writeJSON(w, us)
+	default:
+		http.Error(w, "GET or POST", http.StatusMethodNotAllowed)
 	}
 }

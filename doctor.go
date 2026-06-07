@@ -10,10 +10,10 @@ import (
 	"time"
 )
 
-// `lasso doctor` — a quick health check of the local install: is herdr present
-// and speaking a compatible protocol, is the state dir writable, is the binary on
-// PATH, and is a newer release available. Prints a line per check and exits
-// non-zero if any hard requirement fails.
+// `lasso doctor` — a quick health check of the local install: is tmux/ttyd
+// present, is the state dir writable, is the binary on PATH, and is a newer
+// release available. Prints a line per check and exits non-zero if any hard
+// requirement fails.
 
 type checkResult int
 
@@ -42,21 +42,13 @@ func cliDoctor() {
 	var d doctorReport
 	fmt.Printf("lasso %s\n", lassoVersion())
 
-	// herdr binary — lasso is a UI over herdr, so it's required.
-	if path, err := exec.LookPath("herdr"); err == nil {
-		d.line(checkPass, "herdr binary", path)
-	} else {
-		d.line(checkFail, "herdr binary", "not found on PATH — install: curl -fsSL https://herdr.dev/install.sh | sh")
-	}
-
-	// herdr socket + protocol compatibility.
-	sock := defaultSock()
-	if v, p, err := herdrPing(sock); err != nil {
-		d.line(checkWarn, "herdr daemon", fmt.Sprintf("socket %s unreachable (%v) — start herdr", sock, err))
-	} else if p != lassoHerdrProtocol {
-		d.line(checkWarn, "herdr protocol", fmt.Sprintf("herdr %s speaks protocol %d, lasso targets %d — update one to match", v, p, lassoHerdrProtocol))
-	} else {
-		d.line(checkPass, "herdr daemon", fmt.Sprintf("%s, protocol %d", v, p))
+	// Terminal backend binaries — lasso drives tmux sessions through ttyd.
+	for _, bin := range []string{"tmux", "ttyd"} {
+		if path, err := exec.LookPath(bin); err == nil {
+			d.line(checkPass, bin+" binary", path)
+		} else {
+			d.line(checkFail, bin+" binary", "not found on PATH")
+		}
 	}
 
 	// State dir writable (pid/log/db live here).

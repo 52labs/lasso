@@ -52,7 +52,7 @@ func TestServeTreeOrderingAndPin(t *testing.T) {
 		}
 	})
 	prev := curBackend()
-	setBackend(&localBackend{sock: filepath.Join(t.TempDir(), "x.sock")})
+	setBackend(&localBackend{})
 	t.Cleanup(func() { setBackend(prev) })
 
 	root := t.TempDir()
@@ -63,7 +63,7 @@ func TestServeTreeOrderingAndPin(t *testing.T) {
 	if err := setSetting("repos_root", root); err != nil {
 		t.Fatal(err)
 	}
-	// Repos appear in the tree only when they have a workspace (like herdr); give
+	// Repos appear in the tree only when they have a workspace; give
 	// each a main-checkout workspace (work_dir == repo root) so ordering + pinning
 	// are exercised.
 	_ = insertWorkspace(Workspace{ID: "wold", Host: "local", Title: "old", Repo: oldPath, WorkDir: oldPath, Kind: "git"})

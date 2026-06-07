@@ -3,10 +3,9 @@ package main
 import "runtime/debug"
 
 // lassoSemver is lasso's own version — the single source of truth, bumped by
-// hand in a commit (the `mise run bump` task edits this line). It's independent
-// of lassoHerdrProtocol (which tracks the herdr socket wire format, not lasso's
-// release). Bump it when shipping a notable change; the build commit is appended
-// automatically (see lassoVersion).
+// hand in a commit (the `mise run bump` task edits this line). Bump it when
+// shipping a notable change; the build commit is appended automatically (see
+// lassoVersion).
 //
 // A var (not const) so release builds can stamp the exact tag via
 // `-ldflags "-X main.lassoSemver=<version>"` (see .github/workflows/release.yml);

@@ -12,10 +12,8 @@ import (
 // created agents live under ~/.lasso/worktrees (git agents) and ~/.lasso/scratch
 // (non-git agents); staged attachment uploads land in ~/.lasso/uploads.
 //
-// The store is host-local: it belongs to the machine lasso runs on, while the
-// creation itself routes through curBackend() so it targets whichever herdr host
-// is active. Selections that name a repo/branch on that host are therefore keyed
-// by the active host name (curBackend().Name()).
+// The store is host-local: it belongs to the machine lasso runs on. Selections
+// that name a repo/branch are keyed by host "local".
 
 // LassoConfig is the shape of the /api/agent-config response, assembled for a
 // given host from the database.
@@ -79,10 +77,9 @@ type AgentRecord struct {
 	Attachments []string `yaml:"attachments,omitempty" json:"attachments,omitempty"`
 	PlanMode    bool     `yaml:"plan_mode" json:"plan_mode"`
 	WorkDir     string   `yaml:"work_dir" json:"work_dir"`
-	// WorkspaceID is the lasso workspaces.id this agent belongs to (it held a
-	// herdr workspace_id before the tmux migration). TabID is the agent's tab —
-	// its tmux session is tabSession(TabID). RootPane is dead (it held a herdr
-	// pane id) and is retained only so a legacy config.yaml still unmarshals.
+	// WorkspaceID is the lasso workspaces.id this agent belongs to. TabID is the
+	// agent's tab — its tmux session is tabSession(TabID). RootPane is dead and is
+	// retained only so a legacy config.yaml still unmarshals.
 	WorkspaceID string    `yaml:"workspace_id,omitempty" json:"workspace_id,omitempty"`
 	TabID       string    `yaml:"-" json:"tab_id,omitempty"`
 	RootPane    string    `yaml:"root_pane,omitempty" json:"root_pane,omitempty"`

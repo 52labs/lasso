@@ -3,7 +3,7 @@ package main
 import "testing"
 
 // TestAgentKindFromToken locks the argv0→agent mapping (basename match, ignoring
-// quotes/flags) that identifies a live agent the way herdr does.
+// quotes/flags) that identifies a live agent.
 func TestAgentKindFromToken(t *testing.T) {
 	cases := []struct {
 		token string

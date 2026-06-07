@@ -70,8 +70,8 @@ const hasChangesUnder = (changes: Map<string, FileChange>, dir: string) => {
   return false
 }
 
-// The Files tab: an inline, lazily-loaded directory tree rooted at herdr's
-// active pane (by default). Clicking a directory expands/collapses it in place;
+// The Files tab: an inline, lazily-loaded directory tree rooted at the active
+// pane (by default). Clicking a directory expands/collapses it in place;
 // clicking a file opens it in the full-column viewer (owned by the parent so
 // its highlight clears on close). Right-clicking an entry offers rename/delete.
 export function FilesTab({
@@ -447,7 +447,7 @@ export function FilesTab({
         }}
       >
         {!curPath ? (
-          <div className="empty">waiting for herdr…</div>
+          <div className="empty">waiting for terminal…</div>
         ) : !rootPath ? (
           <div className="empty">loading…</div>
         ) : (

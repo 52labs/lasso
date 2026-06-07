@@ -1,7 +1,6 @@
 package main
 
 import (
-	"encoding/json"
 	"path/filepath"
 	"testing"
 )
@@ -9,12 +8,6 @@ import (
 type createAgentBackend struct {
 	*memBackend
 	worktreePath string
-}
-
-// HerdrCall is retained only so createAgentBackend still satisfies the (local-
-// only) Backend interface during the migration; createWorktree never calls it.
-func (b *createAgentBackend) HerdrCall(method string, params any) (json.RawMessage, error) {
-	return json.RawMessage(`{}`), nil
 }
 
 // GitOut captures the worktree path from `git worktree add -b <branch> <path> <base>`.
@@ -68,7 +61,7 @@ func TestCreateScratchAgentPersists(t *testing.T) {
 		}
 	})
 	prev := curBackend()
-	setBackend(&localBackend{sock: filepath.Join(t.TempDir(), "nope.sock")})
+	setBackend(&localBackend{})
 	t.Cleanup(func() { setBackend(prev) })
 
 	rec, err := createAgent(curBackend(), createAgentReq{

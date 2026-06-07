@@ -14,8 +14,7 @@ import {
   DialogTrigger,
 } from "@/components/ui/dialog"
 import { Input } from "@/components/ui/input"
-import { api, type CreateAgentPayload, type HostInfo } from "@/lib/api"
-import { useApp } from "@/lib/app-store"
+import { api, type CreateAgentPayload } from "@/lib/api"
 import { qk, treeAddScratchWorkspace, treeAddWorktree } from "@/lib/query"
 import { cn } from "@/lib/utils"
 
@@ -98,20 +97,13 @@ function extractImagePaths(text: string): string[] {
   return [...new Set(text.match(imagePathRE) || [])]
 }
 
-// A host is selectable when it's reachable, running herdr, and protocol-
-// compatible (mirror of HostSwitcher's helper). Unusable hosts are listed
-// disabled — the footer switcher stays the place to provision/update them.
-function hostUsable(h: HostInfo): boolean {
-  return h.reachable && h.running && h.compatible
-}
-
 export function CreateAgentDialog({
   onCreated,
   variant = "button",
 }: {
   onCreated?: () => void
   // "button" — the inline outline button on the Agents tab header.
-  // "floating" — a pill matching the host switcher, for the bottom-left footer.
+  // "floating" — a pill for the bottom-left footer.
   // "header" — a compact button for the left column's tab-strip trailing slot.
   variant?: "button" | "floating" | "header"
 }) {
@@ -120,7 +112,7 @@ export function CreateAgentDialog({
   const [placeholderIdx, setPlaceholderIdx] = React.useState(0)
   const queryClient = useQueryClient()
   // Set when the dialog closes because an agent was just created, so the close
-  // handler hands keyboard focus to the herdr terminal instead of letting Radix
+  // handler hands keyboard focus to the terminal instead of letting Radix
   // restore it to the trigger (which would force the user to click the pane).
   const createdRef = React.useRef(false)
 
@@ -161,33 +153,18 @@ export function CreateAgentDialog({
     setPlaceholderIdx(Math.floor(Math.random() * PROMPT_PLACEHOLDERS.length))
   }, [open])
 
-  // The form targets a host the user picks (defaults to the active host). Each
-  // host's config/repos live in its own lasso.db, so the queries are keyed and
-  // fetched by selectedHost — picking another host previews that host's repos
-  // (read from its db over SSH) WITHOUT switching the active backend. The switch
-  // is deferred to create time so the Herdr tab isn't yanked while still editing.
-  const { host: activeHost } = useApp()
-  const [selectedHost, setSelectedHost] = React.useState("local")
+  // Everything targets the local backend (~/.lasso/lasso.db / filesystem).
+  const host = "local"
 
-  // Host list for the dropdown (local + ssh-config hosts), fetched while open.
-  const hostsQuery = useQuery({
-    queryKey: ["hosts"],
-    queryFn: () => api.hosts(),
-    enabled: open,
-  })
-  const localLabel = hostsQuery.data?.local?.hostname || "local"
-  const remoteHosts = hostsQuery.data?.hosts ?? []
-
-  // Server state via TanStack Query, fetched while the dialog is open, scoped to
-  // selectedHost (each host's data comes from its own lasso.db / filesystem).
+  // Server state via TanStack Query, fetched while the dialog is open.
   const configQuery = useQuery({
-    queryKey: qk.agentConfig(selectedHost),
-    queryFn: () => api.agentConfig(selectedHost),
+    queryKey: qk.agentConfig(host),
+    queryFn: () => api.agentConfig(host),
     enabled: open,
   })
   const reposQuery = useQuery({
-    queryKey: qk.repos(selectedHost),
-    queryFn: () => api.repos(selectedHost),
+    queryKey: qk.repos(host),
+    queryFn: () => api.repos(host),
     enabled: open,
   })
   const config = configQuery.data ?? null
@@ -208,41 +185,31 @@ export function CreateAgentDialog({
   const promptRef = React.useRef<HTMLTextAreaElement>(null)
 
   const branchesQuery = useQuery({
-    queryKey: qk.repoBranches(selectedHost, repo),
-    queryFn: () => api.repoBranches(repo, selectedHost),
+    queryKey: qk.repoBranches(host, repo),
+    queryFn: () => api.repoBranches(repo, host),
     enabled: open && type === "git" && !!repo,
   })
   const branches = React.useMemo(() => {
     const b = branchesQuery.data
     // branches/remoteBranches can be null (Go nil slice → JSON null) when the
-    // repo path doesn't resolve on the host — e.g. transiently after switching
-    // the host dropdown while `repo` is still the previous host's path.
+    // repo path doesn't resolve.
     return b ? [...(b.branches ?? []), ...(b.remoteBranches ?? [])] : []
   }, [branchesQuery.data])
 
-  // Default the form's host to the active host each time the dialog opens (the
-  // dropdown is otherwise a free local selection that previews repos per host).
-  // biome-ignore lint/correctness/useExhaustiveDependencies: seed from activeHost only on open, not when it later changes
-  React.useEffect(() => {
-    if (open && activeHost) setSelectedHost(activeHost)
-  }, [open])
-
-  // Seed the form from the remembered selections once per host per open (not on
-  // every data change, so it never clobbers in-progress edits): the last agent
-  // type, branch prefix, AI agent (default_agent, else last_agent, else claude),
-  // and the last repo if it still exists on that host. Re-keyed on selectedHost
-  // so switching the dropdown re-seeds from that host's state — gated on the
-  // repos query having settled so it doesn't seed from the previous host's stale
-  // list while the refetch is still in flight.
-  const seededForHost = React.useRef<string | null>(null)
+  // Seed the form from the remembered selections once per open (not on every
+  // data change, so it never clobbers in-progress edits): the last agent type,
+  // branch prefix, AI agent (default_agent, else last_agent, else claude), and
+  // the last repo if it still exists — gated on the repos query having settled so
+  // it doesn't seed from a stale list while the refetch is still in flight.
+  const seeded = React.useRef(false)
   React.useEffect(() => {
     if (!open) {
-      seededForHost.current = null
+      seeded.current = false
       return
     }
     if (!config || !reposQuery.isSuccess || reposQuery.isFetching) return
-    if (seededForHost.current === selectedHost) return
-    seededForHost.current = selectedHost
+    if (seeded.current) return
+    seeded.current = true
     const pf = pendingPrefill.current
     pendingPrefill.current = null
     setType(pf?.repo ? "git" : config.last_agent_type || "git")
@@ -258,14 +225,7 @@ export function CreateAgentDialog({
           : (repos[0]?.path ?? "")
       )
     }
-  }, [
-    open,
-    selectedHost,
-    config,
-    reposQuery.isSuccess,
-    reposQuery.isFetching,
-    repos,
-  ])
+  }, [open, config, reposQuery.isSuccess, reposQuery.isFetching, repos])
 
   // When the selected repo's branches load, pick its remembered base branch (if
   // still present) else the repo's default. Keyed on the branches data so it
@@ -315,7 +275,7 @@ export function CreateAgentDialog({
     e.preventDefault()
     setPastingImage(true)
     try {
-      const { path } = await api.pasteImage(file, selectedHost)
+      const { path } = await api.pasteImage(file, host)
       const textarea = promptRef.current
       if (!textarea) {
         onPromptChange(prompt + (prompt ? "\n" : "") + path)
@@ -357,17 +317,10 @@ export function CreateAgentDialog({
 
   const createMutation = useMutation({
     mutationFn: async () => {
-      // Commit the host choice now: switch the active backend so the agent is
-      // created on it, attachments land there, and the terminal points at it for
-      // focus. Deferred to here (not on dropdown change) so previewing a host's
-      // repos while editing doesn't yank the Herdr tab onto another host.
-      if (selectedHost !== (activeHost ?? "local")) {
-        await api.switchHost(selectedHost)
-      }
       let uploadDir: string | undefined
       let attachments: string[] | undefined
       if (files.length > 0) {
-        const up = await api.uploadAgentFiles(files, selectedHost)
+        const up = await api.uploadAgentFiles(files, host)
         uploadDir = up.upload_dir
         attachments = up.files
       }
@@ -432,8 +385,8 @@ export function CreateAgentDialog({
       createdRef.current = true
       setOpen(false)
       reset()
-      // The creator just updated this host's remembered selections + agent log,
-      // so refetch them (prefix-match clears every host's cached config).
+      // The creator just updated the remembered selections + agent log, so
+      // refetch them.
       queryClient.invalidateQueries({ queryKey: ["agent-config"] })
       queryClient.invalidateQueries({ queryKey: ["repos"] })
       onCreated?.()
@@ -479,8 +432,7 @@ export function CreateAgentDialog({
             <span>New Agent</span>
           </button>
         ) : variant === "floating" ? (
-          // Mirrors the HostSwitcher pill so the two footer controls read as a
-          // pair (see App.tsx, where this sits to the host button's right).
+          // Footer pill (see App.tsx, bottom-left).
           <button
             type="button"
             className="flex items-center gap-1 rounded-full border border-border bg-card/90 px-2 py-0.5 text-[11px] text-muted-foreground shadow-md backdrop-blur transition-colors hover:bg-accent hover:text-foreground"
@@ -619,28 +571,6 @@ export function CreateAgentDialog({
               >
                 Start in plan mode
               </label>
-              <div className="ml-auto flex items-center gap-1.5">
-                <label htmlFor="agent-host" className={labelClass}>
-                  Host
-                </label>
-                <select
-                  id="agent-host"
-                  className={cn(fieldClass, "w-auto py-1")}
-                  value={selectedHost}
-                  onChange={(e) => setSelectedHost(e.target.value)}
-                >
-                  <option value="local">{localLabel}</option>
-                  {remoteHosts.map((h) => (
-                    <option
-                      key={h.alias}
-                      value={h.alias}
-                      disabled={!hostUsable(h)}
-                    >
-                      {hostUsable(h) ? h.alias : `${h.alias} (unavailable)`}
-                    </option>
-                  ))}
-                </select>
-              </div>
             </div>
 
             {type === "git" && (

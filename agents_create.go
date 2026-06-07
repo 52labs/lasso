@@ -16,21 +16,17 @@ import (
 	"time"
 )
 
-// Agent creation: a streamlined "New Agent" flow that replaces hand-typing the
-// `herdr workspace/worktree create` + `herdr pane run "claude …"` recipe in the
-// embedded terminal. Two flavors, mirroring fulcrum's git/scratch tasks:
+// Agent creation: a streamlined "New Agent" flow. Two flavors, mirroring
+// fulcrum's git/scratch tasks:
 //
-//   - git agent     → a git worktree off a chosen repo/base branch. We call
-//                     herdr's worktree.create, which also creates the repo's
-//                     parent workspace if absent and returns the worktree's
-//                     root pane. We then copy any configured files in, run the
-//                     repo's setup script, and launch the agent — all in that
-//                     pane's shell.
+//   - git agent     → a git worktree off a chosen repo/base branch. We create the
+//                     worktree, copy any configured files in, run the repo's setup
+//                     script, and launch the agent in its tmux session.
 //   - scratch agent → a plain workspace rooted at a fresh ~/.lasso/scratch dir,
 //                     then the scratch setup script + agent.
 //
-// Everything routes through curBackend() so it targets the active herdr host;
-// settings + records persist locally via config.go.
+// Everything routes through curBackend(); settings + records persist locally via
+// config.go.
 
 // ---------------------------------------------------------------------------
 // helpers
@@ -42,6 +38,14 @@ var slugRe = regexp.MustCompile(`[^a-z0-9]+`)
 func slugify(s string) string {
 	s = slugRe.ReplaceAllString(strings.ToLower(s), "-")
 	return strings.Trim(s, "-")
+}
+
+// firstLine returns s up to its first newline, trimmed.
+func firstLine(s string) string {
+	if i := strings.IndexByte(s, '\n'); i >= 0 {
+		return strings.TrimSpace(s[:i])
+	}
+	return strings.TrimSpace(s)
 }
 
 // uniqueChildDir returns an absolute path under parent based on slug, suffixing
@@ -110,15 +114,9 @@ func splitGlobs(spec string) []string {
 // ---------------------------------------------------------------------------
 
 func serveAgentConfig(w http.ResponseWriter, r *http.Request) {
-	// ?host= picks which host's settings to read/write — its OWN lasso.db, via
-	// the provider (in-process for local, sqlite3 over SSH for a remote).
-	// Defaults to the active host. Settings (defaults) come from that host's db;
-	// last-used selections + the agent log are this lasso's local memory.
-	host, ok := hostParam(r)
-	if !ok {
-		http.Error(w, "host not available", http.StatusBadRequest)
-		return
-	}
+	// Settings (defaults) plus last-used selections + the agent log all live in
+	// the local lasso.db.
+	host := "local"
 	switch r.Method {
 	case http.MethodGet:
 		c, err := hostAgentConfig(host)
@@ -160,11 +158,7 @@ func serveRepoConfig(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "POST required", http.StatusMethodNotAllowed)
 		return
 	}
-	host, ok := hostParam(r)
-	if !ok {
-		http.Error(w, "host not available", http.StatusBadRequest)
-		return
-	}
+	host := "local"
 	var req repoConfigPatch
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		http.Error(w, err.Error(), http.StatusBadRequest)
@@ -198,11 +192,7 @@ type repoEntry struct {
 }
 
 func serveRepos(w http.ResponseWriter, r *http.Request) {
-	host, ok := hostParam(r)
-	if !ok {
-		http.Error(w, "host not available", http.StatusBadRequest)
-		return
-	}
+	host := "local"
 	root, repos, err := hostReposList(host)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusBadGateway)
@@ -216,24 +206,12 @@ func serveRepos(w http.ResponseWriter, r *http.Request) {
 // ---------------------------------------------------------------------------
 
 func serveRepoBranches(w http.ResponseWriter, r *http.Request) {
-	host, ok := hostParam(r)
-	if !ok {
-		http.Error(w, "host not available", http.StatusBadRequest)
-		return
-	}
 	path := r.URL.Query().Get("path")
 	if path == "" {
 		http.Error(w, "path required", http.StatusBadRequest)
 		return
 	}
-	// Branches need only git on the host's filesystem (no db), so run them on the
-	// host's backend directly — no lasso CLI required on the remote.
-	be, err := gridHostBackend(host)
-	if err != nil {
-		http.Error(w, err.Error(), http.StatusBadGateway)
-		return
-	}
-	local, remote, def := branchList(be, path)
+	local, remote, def := branchList(curBackend(), path)
 	writeJSON(w, map[string]any{"branches": local, "remoteBranches": remote, "default": def})
 }
 
@@ -284,10 +262,10 @@ type createAgentReq struct {
 	PlanMode     bool     `json:"plan_mode"`
 	Attachments  []string `json:"attachments"` // filenames staged under UploadDir
 	UploadDir    string   `json:"upload_dir"`  // staging dir returned by /api/agent-upload
-	// NoFocus suppresses focusing the new agent's herdr pane. The web "New Agent"
-	// flow leaves this false (an explicit "take me there"); the MCP create_agent
-	// tool sets it so spawning an agent doesn't yank a watching user away from
-	// their current pane.
+	// NoFocus suppresses switching the viewport to the new agent's terminal. The
+	// web "New Agent" flow leaves this false (an explicit "take me there"); the MCP
+	// create_agent tool sets it so spawning an agent doesn't yank a watching user
+	// away from their current terminal.
 	NoFocus bool `json:"no_focus"`
 }
 
@@ -324,12 +302,10 @@ type createErr struct {
 
 func (e *createErr) Error() string { return e.err.Error() }
 
-// createAgent runs the full New-Agent flow on backend b (host = b.Name()):
-// composes the branch, creates the worktree/workspace, copies repo files, moves
-// attachments, launches the agent in its root pane (async), and persists the
-// record. Shared by serveCreateAgent (active host) and the MCP create_agent tool
-// (any host, via gridHostBackend) — so every herdr/file call goes through b
-// rather than the package-level helpers that always hit the active host.
+// createAgent runs the full New-Agent flow on backend b: composes the branch,
+// creates the worktree/workspace, copies repo files, moves attachments, launches
+// the agent in its tmux session (async), and persists the record. Shared by
+// serveCreateAgent and the MCP create_agent tool.
 func createAgent(b Backend, req createAgentReq) (AgentRecord, error) {
 	req.Prompt = strings.TrimSpace(req.Prompt)
 	req.Title = strings.TrimSpace(req.Title)
@@ -388,7 +364,7 @@ func createAgent(b Backend, req createAgentReq) (AgentRecord, error) {
 		if base == "" {
 			base = "HEAD"
 		}
-		// Create the git worktree directly (was herdr's worktree.create).
+		// Create the git worktree.
 		workDir, err := createWorktree(b, repo, base, branch, slug)
 		if err != nil {
 			return AgentRecord{}, &createErr{http.StatusBadGateway, err}
@@ -419,7 +395,7 @@ func createAgent(b Backend, req createAgentReq) (AgentRecord, error) {
 	}
 
 	// Create the workspace + its initial agent tab, and the tmux session backing
-	// that tab (was herdr's workspace/pane). The agent id doubles as the tab id, so
+	// that tab. The agent id doubles as the tab id, so
 	// the session is tabSession(rec.ID); the workspace id is "w"+rec.ID.
 	rec.TabID = rec.ID
 	rec.WorkspaceID = "w" + rec.ID
@@ -453,7 +429,7 @@ func createAgent(b Backend, req createAgentReq) (AgentRecord, error) {
 	}
 
 	// Launch: run the setup script (if any), then the agent command, in the root
-	// pane's shell — the equivalent of the `herdr pane run` recipe. Done in a
+	// agent shell. Done in a
 	// goroutine (so create returns immediately) that first waits for the shell to
 	// settle: a freshly-spawned pane is still sourcing its rc (mise/fnox, etc.,
 	// slow over SSH on a remote host) and types sent into it before it's ready get
@@ -585,27 +561,7 @@ func backendGlobDir(cur Backend, dir, pattern string, matches []string) []string
 func globHasMeta(path string) bool { return strings.ContainsAny(path, "*?[") }
 
 // moveAttachments copies the named files from the staging upload dir into the
-// work dir, then clears the staging dir (best effort). serveAgentUpload always
-// stages on the lasso-local disk (os.*), so the source is read locally while the
-// destination is written through the active backend — which streams each file
-// onto the remote host over SFTP when one is selected. A plain Rename can't do
-// this: on a remote backend it would look for the local staging path on the
-// remote box and silently drop every attachment.
-// reqHostBackend resolves the backend a request targets via its ?host= param,
-// defaulting to the active host. Used by the upload + paste handlers so an
-// attachment or pasted image lands on the SELECTED host (the one the agent will
-// run on), not wherever the active backend happens to point during form editing.
-func reqHostBackend(r *http.Request) (Backend, error) {
-	host, ok := hostParam(r)
-	if !ok {
-		return nil, fmt.Errorf("host %q not available", host)
-	}
-	return gridHostBackend(host)
-}
-
-// moveAttachments moves staged attachments into the agent's work dir. Staging
-// and the work dir live on the SAME host (cur), so this is a host-local copy
-// (local disk, or SFTP within the remote host) — never a cross-host transfer.
+// agent's work dir, then clears the staging dir (best effort).
 func moveAttachments(cur Backend, uploadDir string, names []string, dest string) {
 	if uploadDir == "" || len(names) == 0 {
 		return
@@ -672,7 +628,7 @@ func agentCommand(agent string, planMode bool, prompt string) string {
 		// documented plan-mode flag, so plan agents launch in the default mode.
 		cmd := "codex --dangerously-bypass-approvals-and-sandbox"
 		if prompt != "" {
-			cmd += " " + shellQuote(prompt)
+			cmd += " " + shellSingleQuote(prompt)
 		}
 		return cmd
 	default: // claude
@@ -685,7 +641,7 @@ func agentCommand(agent string, planMode bool, prompt string) string {
 			cmd = "claude --allow-dangerously-skip-permissions --permission-mode plan"
 		}
 		if prompt != "" {
-			cmd += " " + shellQuote(prompt)
+			cmd += " " + shellSingleQuote(prompt)
 		}
 		return cmd
 	}
@@ -696,7 +652,7 @@ func agentCommand(agent string, planMode bool, prompt string) string {
 // agent-less core of a git workspace, shared by the New Agent flow and the
 // sidebar's right-click "create worktree" (which makes a workspace without
 // launching an agent). titleSlug is a fallback dir name when the branch leaf
-// doesn't slugify. Replaces herdr's worktree.create.
+// doesn't slugify.
 func createWorktree(b Backend, repo, base, branch, titleSlug string) (string, error) {
 	// Nest the worktree under the repo's name so worktrees from different repos
 	// don't share one flat namespace (and don't collide on slug).
@@ -753,228 +709,19 @@ func launchAgentInSession(session, workDir, tabID, setup, agentCmd string) {
 	tmuxConfirmTrust(session)
 }
 
-// launchAgentInPane runs the optional setup script then the agent command in a
-// freshly-created pane, then auto-accepts the agent's trust dialog. It first
-// waits for the pane's shell to settle (waitPaneReady): a new pane is still
-// sourcing its rc, and characters typed before it's ready get their leading
-// bytes eaten (e.g. "bun i" arriving as "i"). Runs on b — the backend the agent
-// was created on — so it never targets the wrong host if the active one changes.
-func launchAgentInPane(b Backend, paneID, setup, agentCmd string) {
-	waitPaneReady(b, paneID)
-	if s := strings.TrimSpace(setup); s != "" {
-		paneRun(b, paneID, s)
-	}
-	paneRun(b, paneID, agentCmd)
-	// Both claude and codex show a per-directory trust dialog at boot that their
-	// --dangerously-* flags do NOT bypass, leaving the agent blocked. Auto-accept
-	// it so the agent boots straight into the task (the prompt rode along as a CLI
-	// arg, so it proceeds once trust is granted).
-	confirmAgentTrust(b, paneID)
-}
-
-// waitPaneReady blocks until the pane's visible output stops changing (the shell
-// finished sourcing its rc and settled at a prompt) or a timeout elapses, so the
-// command we type next isn't raced by shell startup. Prompt-agnostic: it watches
-// for the screen to stabilize rather than matching any particular prompt string.
-func waitPaneReady(b Backend, paneID string) {
-	deadline := time.Now().Add(10 * time.Second)
-	var prev string
-	stable := 0
-	for time.Now().Before(deadline) {
-		time.Sleep(300 * time.Millisecond)
-		res, err := b.HerdrCall("pane.read", map[string]any{
-			"pane_id": paneID,
-			"source":  "visible",
-		})
-		if err != nil {
-			continue
-		}
-		var r struct {
-			Read struct {
-				Text string `json:"text"`
-			} `json:"read"`
-		}
-		if json.Unmarshal(res, &r) != nil {
-			continue
-		}
-		t := strings.TrimRight(r.Read.Text, " \t\n")
-		if t != "" && t == prev {
-			if stable++; stable >= 2 { // ~600ms unchanged → settled
-				return
-			}
-		} else {
-			stable = 0
-		}
-		prev = t
-	}
-}
-
-// paneRun sends a command line into a pane's shell (text + Enter) — the
-// pane.send_text behind `herdr pane run`. Targets a cooked-mode shell, where a
-// trailing "\n" ends the line. For submitting to an interactive agent TUI use
-// paneSubmit instead — see why there.
-func paneRun(b Backend, paneID, command string) {
-	_, _ = b.HerdrCall("pane.send_text", map[string]any{
-		"pane_id": paneID,
-		"text":    command + "\n",
-	})
-}
-
-// paneSubmit types text into an interactive agent's pane (claude/codex TUI) and
-// submits it as a turn. Two things make this fragile, both handled here:
-//
-//  1. Bracketed paste vs Enter. The TUIs run in raw mode with bracketed paste, so
-//     a "\r"/"\n" appended to the message is pasted as a literal newline and the
-//     turn never submits — the message just stacks in the input box. The Enter
-//     must be its own send_text so it lands as a real keypress (the same
-//     mechanism confirmAgentTrust uses to accept the trust dialog).
-//
-//  2. A race between the paste committing and the Enter. herdr delivers the paste
-//     and the Enter as separate PTY writes; when the TUI is busy (mid-turn,
-//     streaming tool output) it applies the bracketed paste a beat late, so an
-//     Enter sent immediately after hits a still-empty composer and is a no-op —
-//     the message then sits there unsubmitted, even after the agent goes idle.
-//     This is why sending to an idle agent appeared to work while sending to a
-//     busy one silently failed.
-//
-// So: send the paste, wait until the composer actually shows it (the paste
-// committed), then send Enter — re-sending until the composer is observed empty,
-// i.e. the turn really went through. A repeat Enter is harmless: it's a no-op on
-// an empty composer and on one whose draft was already submitted.
-func paneSubmit(b Backend, paneID, text string) {
-	_, _ = b.HerdrCall("pane.send_text", map[string]any{
-		"pane_id": paneID,
-		"text":    text,
-	})
-	// Wait for the paste to land in the composer before pressing Enter, so we
-	// don't submit an empty box. If we never see it (read failures, an unfamiliar
-	// composer), fall through and try Enter anyway rather than dropping the turn.
-	commit := time.Now().Add(3 * time.Second)
-	for time.Now().Before(commit) {
-		time.Sleep(150 * time.Millisecond)
-		if !paneInputEmpty(b, paneID) {
-			break
-		}
-	}
-	deadline := time.Now().Add(5 * time.Second)
-	for {
-		_, _ = b.HerdrCall("pane.send_text", map[string]any{
-			"pane_id": paneID,
-			"text":    "\r",
-		})
-		time.Sleep(300 * time.Millisecond)
-		if paneInputEmpty(b, paneID) || time.Now().After(deadline) {
-			return
-		}
-	}
-}
-
-// paneInputEmpty reports whether the agent TUI's composer currently holds no
-// pending draft — paneSubmit uses it to confirm a turn submitted rather than
-// leaving the message parked in the input box. The composer sits between the last
-// pair of horizontal-rule lines the TUI draws above its status footer; an empty
-// box is just the prompt marker ("❯"/"›"/">") with nothing after it. When the
-// composer can't be located it returns false (don't claim empty), so paneSubmit
-// errs toward an extra harmless Enter rather than a dropped message.
-func paneInputEmpty(b Backend, paneID string) bool {
-	res, err := b.HerdrCall("pane.read", map[string]any{
-		"pane_id": paneID,
-		"source":  "visible",
-	})
-	if err != nil {
-		return false
-	}
-	var r struct {
-		Read struct {
-			Text string `json:"text"`
-		} `json:"read"`
-	}
-	if json.Unmarshal(res, &r) != nil {
-		return false
-	}
-	lines := strings.Split(r.Read.Text, "\n")
-	isRule := func(s string) bool {
-		t := strings.TrimSpace(s)
-		return len([]rune(t)) >= 10 && strings.Trim(t, "─") == ""
-	}
-	last, prev := -1, -1
-	for i, ln := range lines {
-		if isRule(ln) {
-			prev, last = last, i
-		}
-	}
-	if prev < 0 || last <= prev {
-		return false // composer geometry not found
-	}
-	box := strings.TrimSpace(strings.Join(lines[prev+1:last], ""))
-	box = strings.TrimSpace(strings.TrimLeft(box, "❯›> "))
-	return box == ""
-}
-
-// confirmAgentTrust watches a freshly-launched agent pane for its per-directory
-// trust dialog (claude's "trust this folder" / codex's "trust the contents of
-// this directory") and accepts it — both default to "Yes" and confirm on Enter.
-// Neither agent's --dangerously-* flag bypasses this gate, so without it the
-// agent sits blocked. Polls rather than sleeping a fixed time so it survives a
-// slow setup script running before the agent; if the dir is already trusted the
-// dialog never appears and this simply times out without sending anything.
-func confirmAgentTrust(b Backend, paneID string) {
-	deadline := time.Now().Add(30 * time.Second)
-	for time.Now().Before(deadline) {
-		time.Sleep(500 * time.Millisecond)
-		if paneShowsTrustPrompt(b, paneID) {
-			// Enter confirms the highlighted default ("Yes").
-			_, _ = b.HerdrCall("pane.send_text", map[string]any{
-				"pane_id": paneID,
-				"text":    "\r",
-			})
-			return
-		}
-	}
-}
-
-// paneShowsTrustPrompt reports whether the pane's visible screen currently shows
-// claude's or codex's directory-trust dialog.
-func paneShowsTrustPrompt(b Backend, paneID string) bool {
-	res, err := b.HerdrCall("pane.read", map[string]any{
-		"pane_id": paneID,
-		"source":  "visible",
-	})
-	if err != nil {
-		return false
-	}
-	var r struct {
-		Read struct {
-			Text string `json:"text"`
-		} `json:"read"`
-	}
-	if json.Unmarshal(res, &r) != nil {
-		return false
-	}
-	t := r.Read.Text
-	return strings.Contains(t, "trust this folder") || // claude
-		strings.Contains(t, "trust the contents of this directory") // codex
-}
-
 // ---------------------------------------------------------------------------
 // POST /api/agent-upload — stage attachments before the agent is created
 // ---------------------------------------------------------------------------
 
 // serveAgentUpload accepts multipart files into a fresh staging directory under
-// the SELECTED host's ~/.lasso/uploads (?host=, default active) and returns its
-// id + the stored filenames. create-agent later moves these into the new agent's
-// work dir on that same host, so the file never makes a cross-host hop and the
-// flow is identical regardless of which host the agent runs on.
+// ~/.lasso/uploads and returns its id + the stored filenames. create-agent later
+// moves these into the new agent's work dir.
 func serveAgentUpload(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		http.Error(w, "POST required", http.StatusMethodNotAllowed)
 		return
 	}
-	be, err := reqHostBackend(r)
-	if err != nil {
-		http.Error(w, err.Error(), http.StatusBadGateway)
-		return
-	}
+	be := curBackend()
 	r.Body = http.MaxBytesReader(w, r.Body, 200<<20)
 	if err := r.ParseMultipartForm(32 << 20); err != nil {
 		http.Error(w, "parse multipart: "+err.Error(), http.StatusBadRequest)

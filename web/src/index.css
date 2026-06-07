@@ -81,7 +81,7 @@
   --color-card: var(--card);
   --color-foreground: var(--foreground);
   --color-background: var(--background);
-  /* herdr semantic colors, exposed as Tailwind utilities (text-good etc.) */
+  /* semantic colors, exposed as Tailwind utilities (text-good etc.) */
   --color-good: var(--h-good);
   --color-warn: var(--h-warn);
   --color-bad: var(--h-bad);
@@ -91,7 +91,7 @@
   --radius-lg: var(--radius);
   --radius-xl: calc(var(--radius) * 1.4);
 
-  /* Elevation. The herdr palette is deliberately flat; these give surfaces
+  /* Elevation. The palette is deliberately flat; these give surfaces
    * physical depth without fighting it — drop shadows in plain black (read on
    * any theme), a faint top "edge" highlight (white, low alpha) faking a light
    * source from above, and an inset "well" that sinks inputs/recessed controls.
@@ -119,8 +119,8 @@
  * below overrides only the --h-* values for light mode, so every shadcn token and
  * bespoke view flips automatically. The active mode is set as a dark/light class
  * on <html> (see lib/mode.ts + the inline script in index.html). The --h-* names
- * are kept as a stable seam so consumers didn't need rewriting when we migrated
- * off herdr's 18-palette switcher onto Onyx.
+ * are kept as a stable seam so consumers didn't need rewriting when the theme
+ * moved onto Onyx.
  */
 :root {
   --h-bg: #06070c; /* onyx --bg (base, matches terminal bg) */
@@ -138,7 +138,7 @@
 
   --radius: 0.25rem; /* onyx — near-flat */
 
-  /* shadcn tokens → herdr palette */
+  /* shadcn tokens → --h-* palette */
   --background: var(--h-bg);
   --foreground: var(--h-fg);
   --card: var(--h-panel);
@@ -228,97 +228,10 @@
 /* ===========================================================================
  * Bespoke lasso views, ported from the original index.html. shadcn primitives
  * (Tabs, Button, Badge, Dialog, ContextMenu, Resizable, …) provide the chrome;
- * these rules style the data-dense content panes (pane grid, file list, diff,
- * file viewer, markdown, syntax highlighting) that have no shadcn equivalent.
- * All colors come from the --h-* palette so they track the live herdr theme.
+ * these rules style the data-dense content panes (file list, diff, file viewer,
+ * markdown, syntax highlighting) that have no shadcn equivalent.
+ * All colors come from the --h-* palette so they track the live theme.
  * ======================================================================== */
-
-/* pane grid */
-.panegrid {
-  flex: 1 1 auto;
-  overflow: auto;
-  padding: 10px;
-  display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(240px, 1fr));
-  gap: 8px;
-  align-content: start;
-  align-items: start;
-}
-.pcard {
-  position: relative;
-  border: 1px solid var(--h-border);
-  border-radius: 6px;
-  padding: 8px 9px;
-  cursor: pointer;
-  background: var(--h-bg);
-  transition:
-    border-color 0.12s,
-    background 0.12s;
-}
-.pcard:hover {
-  border-color: var(--h-accent);
-  background: var(--h-hover);
-}
-.pcard.focused {
-  border-color: var(--h-accent);
-  background: var(--h-accent-dim);
-}
-.pcard.selected {
-  outline: 2px solid var(--h-accent);
-  outline-offset: -2px;
-  background: var(--h-accent-dim);
-}
-.pcard.selected::after {
-  content: "✓";
-  position: absolute;
-  top: 3px;
-  right: 5px;
-  color: var(--h-accent);
-  font-size: 11px;
-  line-height: 1;
-}
-.pcard.selected .ptitle {
-  padding-right: 12px;
-}
-.pcard .pws {
-  color: var(--h-accent);
-  font-size: 10px;
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  margin-bottom: 3px;
-}
-.pcard .ptitle {
-  color: var(--h-fg);
-  font-size: 12px;
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-}
-.pcard .pmeta {
-  color: var(--h-muted);
-  font-size: 10px;
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  margin-top: 2px;
-}
-.pcard .pagent {
-  font-size: 10px;
-  color: var(--h-muted);
-  white-space: nowrap;
-  margin-top: 2px;
-}
-.pcard .pagent.working {
-  color: var(--h-warn);
-}
-.pcard .pagent.blocked {
-  color: var(--h-bad);
-}
-.pcard .pagent.idle,
-.pcard .pagent.done {
-  color: var(--h-good);
-}
 
 .hint {
   flex: 0 0 auto;
@@ -332,148 +245,6 @@
 .empty {
   color: var(--h-muted);
   padding: 16px 12px;
-}
-
-/* grid tab: a wall of live per-pane terminals across hosts. Each cell is a
-   clickable header (focus the pane in Herdr) over an embedded ttyd iframe. */
-.termgrid {
-  flex: 1 1 auto;
-  overflow: auto;
-  padding: 14px;
-  /* Flex wrap (not CSS grid) so the cells in each row grow to fill the row's
-     full width — a CSS grid leaves empty tracks, stranding a lone last-row cell
-     at its min width. align-content: start packs rows to the top. */
-  display: flex;
-  flex-wrap: wrap;
-  gap: 14px;
-  align-content: start;
-}
-/* A zero-height, full-width flex item that forces a row break, so the top row
-   can hold just the remainder cells (which then grow to fill the width). The
-   negative margins cancel the extra row-gap the break would otherwise add. */
-.termbreak {
-  flex-basis: 100%;
-  width: 100%;
-  height: 0;
-  margin: -7px 0;
-}
-.termcell {
-  /* grow to share the row's width, wrapping when a cell can't keep ~360px */
-  flex: 1 1 360px;
-  display: flex;
-  flex-direction: column;
-  height: 260px;
-  /* Blend the (subtle) border toward muted so each cell reads as a distinct
-     tile rather than dissolving into the background. */
-  border: 1px solid color-mix(in srgb, var(--h-border) 45%, var(--h-muted));
-  border-radius: 6px;
-  overflow: hidden;
-  background: var(--h-bg);
-}
-.termcell.focused {
-  border-color: var(--h-accent);
-}
-.termcell.selected {
-  outline: 2px solid var(--h-accent);
-  outline-offset: -2px;
-  border-color: var(--h-accent);
-}
-.termcell-head {
-  flex: 0 0 auto;
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  width: 100%;
-  padding: 4px 8px;
-  border: 0;
-  border-bottom: 1px solid var(--h-border);
-  background: var(--h-bg);
-  color: var(--h-fg);
-  font: inherit;
-  font-size: 11px;
-  text-align: left;
-  cursor: pointer;
-  transition: background 0.12s;
-}
-.termcell-head:hover {
-  background: var(--h-hover);
-}
-/* Keep a single, steady cursor across the whole header rather than flipping
-   between pointer / text / default over its spans — the hover highlight already
-   signals it's clickable. */
-.termcell-head,
-.termcell-head * {
-  cursor: default;
-}
-.termcell-host {
-  flex: 0 0 auto;
-  color: var(--h-accent);
-  font-weight: 600;
-  white-space: nowrap;
-}
-.termcell-title {
-  flex: 1 1 auto;
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-}
-.termcell-agent {
-  flex: 0 0 auto;
-  color: var(--h-muted);
-  white-space: nowrap;
-}
-.termcell-agent.working {
-  color: var(--h-warn);
-}
-.termcell-agent.blocked {
-  color: var(--h-bad);
-}
-.termcell-agent.idle,
-.termcell-agent.done {
-  color: var(--h-good);
-}
-.termcell-body {
-  position: relative;
-  flex: 1 1 auto;
-  min-height: 0;
-}
-.termcell-body iframe {
-  width: 100%;
-  height: 100%;
-  border: 0;
-  display: block;
-  background: var(--h-bg);
-  /* Fade the terminal in once it's live (the loading overlay sits on top until
-     then), so the reveal is smooth rather than a hard cut over ttyd's churn. */
-  opacity: 1;
-  transition: opacity 0.2s ease;
-}
-.termcell-body iframe.is-loading {
-  opacity: 0;
-}
-.termcell-placeholder {
-  position: absolute;
-  inset: 0;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  /* Opaque so it fully hides the connecting iframe underneath. */
-  background: var(--h-bg);
-  color: var(--h-muted);
-  font-size: 11px;
-}
-.termcell-spinner {
-  width: 16px;
-  height: 16px;
-  border-radius: 50%;
-  border: 2px solid var(--h-border);
-  border-top-color: var(--h-accent);
-  animation: termcell-spin 0.7s linear infinite;
-}
-@keyframes termcell-spin {
-  to {
-    transform: rotate(360deg);
-  }
 }
 
 /* file list */

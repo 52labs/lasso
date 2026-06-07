@@ -39,8 +39,8 @@ import { cn } from "@/lib/utils"
 
 // The left sidebar: a "spaces" tree (git repos with their worktrees nested,
 // ordered by latest commit, pinned first; plus scratch workspaces) over an
-// "agents" pane that shows every agent's live status. Replaces herdr's TUI
-// sidebar. Selecting a tab/agent shows its terminal in the center.
+// "agents" pane that shows every agent's live status. Selecting a tab/agent
+// shows its terminal in the center.
 
 const STATUS_DOT: Record<string, string> = {
   working: "bg-[var(--h-warn)] animate-pulse",
@@ -342,7 +342,7 @@ function RepoNode({
   const selected = !!repo.main_tab_id && repo.main_tab_id === selectedTabId
 
   // Clicking the repo row opens a terminal on its primary branch (the main
-  // checkout) — like herdr, a repo is a workspace, not just a worktree grouping.
+  // checkout) — a repo is a workspace, not just a worktree grouping.
   const openRepo = async () => {
     if (repo.main_tab_id) {
       onSelectTab(repo.main_tab_id)
@@ -482,7 +482,7 @@ function RepoNode({
   )
 }
 
-// A workspace is a single clickable leaf in the spaces tree (herdr shows
+// A workspace is a single clickable leaf in the spaces tree (the tree shows
 // workspaces/worktrees here, never individual tabs — tabs live in the TabStrip
 // above the terminal). Its dot shows the workspace's aggregate live-agent status
 // (computed client-side off the SSE status map so it updates without a refetch),

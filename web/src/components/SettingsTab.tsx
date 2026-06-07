@@ -10,7 +10,6 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog"
 import { api } from "@/lib/api"
-import { useApp } from "@/lib/app-store"
 import { getMode, type Mode, setMode } from "@/lib/mode"
 import { qk } from "@/lib/query"
 import { SHORTCUTS } from "@/lib/shortcuts"
@@ -46,8 +45,8 @@ function Field({
 // The Settings tab: the lasso build version + update status (top) plus the
 // "New Agent" creator configuration. The creator defaults (where to scan for
 // repos, the default agent, the scratch setup script) are global; each repo's
-// files-to-copy + setup commands are scoped to the active host. All of it
-// persists in ~/.lasso/lasso.db.
+// files-to-copy + setup commands are per-repo. All of it persists in
+// ~/.lasso/lasso.db.
 export function SettingsTab({ active }: { active: boolean }) {
   const [shortcutsOpen, setShortcutsOpen] = React.useState(false)
   const versionQuery = useQuery({
@@ -56,31 +55,6 @@ export function SettingsTab({ active }: { active: boolean }) {
     enabled: active,
   })
   const info = versionQuery.data ?? null
-
-  // Which host's settings to edit — each host stores them in its own lasso.db.
-  // The picker lists the local machine plus every reachable, compatible remote
-  // (those can answer `lasso cli` over SSH). Defaults to the active host.
-  const { host: activeHost } = useApp()
-  const hostsQuery = useQuery({
-    queryKey: ["hosts"],
-    queryFn: () => api.hosts(),
-    enabled: active,
-  })
-  const hostOptions = React.useMemo(() => {
-    const d = hostsQuery.data
-    const opts = [{ value: "local", label: d?.local?.hostname || "local" }]
-    for (const h of d?.hosts ?? []) {
-      if (h.reachable && h.running && h.compatible)
-        opts.push({ value: h.alias, label: h.alias })
-    }
-    return opts
-  }, [hostsQuery.data])
-  const [selectedHost, setSelectedHost] = React.useState<string | null>(null)
-  // Default to the active host once it's known; keep the user's choice after.
-  React.useEffect(() => {
-    if (selectedHost == null && activeHost) setSelectedHost(activeHost)
-  }, [activeHost, selectedHost])
-  const host = selectedHost ?? activeHost ?? "local"
 
   return (
     <div className="flex min-h-0 flex-1 flex-col">
@@ -126,33 +100,10 @@ export function SettingsTab({ active }: { active: boolean }) {
 
       <div className="@container min-h-0 flex-1 overflow-y-auto px-3 py-4">
         <AppearanceToggle />
-        <div className="mb-4 flex flex-col gap-1">
-          <label className={labelClass} htmlFor="settings-host">
-            Configuring host
-          </label>
-          <select
-            id="settings-host"
-            className={cn(fieldClass, "max-w-xs")}
-            value={host}
-            onChange={(e) => setSelectedHost(e.target.value)}
-          >
-            {/* Ensure the current value is always selectable even before the
-                host probe returns (e.g. an active remote not yet in the list). */}
-            {!hostOptions.some((o) => o.value === host) && (
-              <option value={host}>{host}</option>
-            )}
-            {hostOptions.map((o) => (
-              <option key={o.value} value={o.value}>
-                {o.label}
-                {o.value === activeHost ? " (active)" : ""}
-              </option>
-            ))}
-          </select>
-          <p className="text-[11px] text-muted-foreground">
-            These settings live in {host}'s own ~/.lasso/lasso.db.
-          </p>
-        </div>
-        <AgentCreatorSettings active={active} host={host} />
+        <p className="mb-4 text-[11px] text-muted-foreground">
+          These settings live in ~/.lasso/lasso.db.
+        </p>
+        <AgentCreatorSettings active={active} />
       </div>
 
       <ShortcutsDialog open={shortcutsOpen} onOpenChange={setShortcutsOpen} />
@@ -232,17 +183,11 @@ function ShortcutsDialog({
   )
 }
 
-// AgentCreatorSettings edits a host's creator defaults and each repo's
-// copy-files + setup, persisted via /api/agent-config and /api/repo-config for
-// the given host (its own lasso.db).
-function AgentCreatorSettings({
-  active,
-  host,
-}: {
-  active: boolean
-  host: string
-}) {
+// AgentCreatorSettings edits the creator defaults and each repo's copy-files +
+// setup, persisted via /api/agent-config and /api/repo-config (~/.lasso/lasso.db).
+function AgentCreatorSettings({ active }: { active: boolean }) {
   const queryClient = useQueryClient()
+  const host = "local"
 
   const configQuery = useQuery({
     queryKey: qk.agentConfig(host),
@@ -256,21 +201,20 @@ function AgentCreatorSettings({
   })
   const repos = reposQuery.data?.repos ?? []
 
-  // Defaults (editable copies, re-seeded whenever the selected host's config
-  // arrives — tracked per host so switching hosts reloads, but a refetch of the
-  // same host doesn't clobber in-progress edits).
+  // Defaults (editable copies, seeded once the config arrives; a refetch doesn't
+  // clobber in-progress edits).
   const [reposRoot, setReposRoot] = React.useState("")
   const [defaultAgent, setDefaultAgent] = React.useState("")
   const [scratchSetup, setScratchSetup] = React.useState("")
-  const seededHostRef = React.useRef<string | null>(null)
+  const seededRef = React.useRef(false)
   React.useEffect(() => {
-    if (seededHostRef.current === host || !configQuery.data) return
-    seededHostRef.current = host
+    if (seededRef.current || !configQuery.data) return
+    seededRef.current = true
     setReposRoot(configQuery.data.repos_root || "")
     // Empty string is meaningful: "Auto (use last used)". Don't coerce to claude.
     setDefaultAgent(configQuery.data.default_agent ?? "")
     setScratchSetup(configQuery.data.scratch_setup || "")
-  }, [configQuery.data, host])
+  }, [configQuery.data])
 
   // Per-repo settings.
   const [repoPath, setRepoPath] = React.useState("")
@@ -278,8 +222,7 @@ function AgentCreatorSettings({
   const [setup, setSetup] = React.useState("")
   const [savedRepo, setSavedRepo] = React.useState<string | null>(null)
 
-  // Keep the selected repo valid against the (host-scoped) repo list, which
-  // changes when the active host switches.
+  // Keep the selected repo valid against the repo list.
   React.useEffect(() => {
     if (repos.length === 0) return
     setRepoPath((prev) =>

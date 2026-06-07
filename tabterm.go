@@ -23,7 +23,7 @@ import (
 // a tab was first viewed. Here the browser connects ONCE (warming that handshake
 // a single time, ideally during app load), and every tab switch is just tmux
 // repointing the already-warm client with `switch-client` — instant, no
-// reconnect. This is how herdr's terminal felt fast: one terminal, switched.
+// reconnect: one terminal, switched between sessions, feels fast.
 //
 // The client is kept glued to the selected tab by viewportWatcher (which also
 // re-adopts a client that reconnected onto the park session). Each tab is still

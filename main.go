@@ -1,18 +1,14 @@
-// Command lasso serves a two-column web UI:
+// Command lasso serves a web UI over a local, tmux-backed terminal workspace:
+// a React SPA with a sidebar of repos/worktrees/agents, an embedded terminal
+// (ttyd attached to tmux sessions), a file viewer, and a git diff view. State
+// (workspaces, tabs, agents, settings) lives in a local sqlite db; agent panes
+// run in tmux sessions on this machine.
 //
-//	left  = herdr running inside a ttyd terminal (embedded in an iframe)
-//	right = a file viewer that follows herdr's *focused pane* cwd, live
-//
-// It talks to the herdr server over its newline-delimited JSON unix socket
-// (subscribe to focus events + poll pane.list for cwd changes) and pushes
-// active-pane updates to the browser over SSE.
-//
-// Everything binds to loopback by default: the left pane is a writable shell,
+// Everything binds to loopback by default: the terminal is a writable shell,
 // so this is NOT meant to be exposed to a network without deliberate thought.
 package main
 
 import (
-	"bufio"
 	"context"
 	"crypto/subtle"
 	"embed"
@@ -52,26 +48,11 @@ var distFS embed.FS
 
 var (
 	listenAddr  = flag.String("listen", defaultListenAddr, "address for the web server (loopback by default — the terminal is a writable shell)")
-	ttydPort    = flag.Int("ttyd-port", 7682, "loopback port ttyd listens on")
-	herdrSock   = flag.String("herdr-sock", defaultSock(), "path to the herdr unix socket")
-	termCmd     = flag.String("term-cmd", "herdr", "command ttyd runs in the terminal")
-	termNice    = flag.Int("term-nice", 0, "if non-zero, launch the herdr terminal at this nice level (reset-on-fork + nice, needs RLIMIT_NICE); 0 disables")
-	termNoSwap  = flag.Bool("term-no-swap", false, "launch the herdr terminal in a transient systemd scope with MemorySwapMax=0 so its pages are never swapped out (mirrors the ccp alias)")
-	shellCmd    = flag.String("shell-cmd", "", "command for the out-of-herdr Terminal tab (right column); empty = $SHELL, then bash, then sh")
-	spawnTtyd   = flag.Bool("spawn-ttyd", true, "spawn and supervise ttyd as a child process")
 	pollEvery   = flag.Duration("poll", 2*time.Second, "fallback poll interval for the SSE refresh")
 	statusEvery = flag.Duration("status-poll", 750*time.Millisecond, "interval the agent-status poller scrapes tmux panes (paused when no browser is connected)")
 	allowNoAuth = flag.Bool("insecure-no-auth", false, "permit a non-loopback bind without auth (tailnet-only use; never on a public interface)")
 	devMode     = flag.Bool("dev", false, "dev mode: fall forward to the next free web port if the requested one is busy (so multiple instances coexist). The frontend itself is served by the Vite dev server with hot reload — see `mise run dev`.")
 )
-
-func defaultSock() string {
-	if p := os.Getenv("HERDR_SOCKET_PATH"); p != "" {
-		return p
-	}
-	home, _ := os.UserHomeDir()
-	return filepath.Join(home, ".config", "herdr", "herdr.sock")
-}
 
 // runServer is the foreground HTTP server — the historical `./lasso` behavior.
 // main() (cli.go) dispatches here for a bare invocation or the `serve`
@@ -80,9 +61,8 @@ func defaultSock() string {
 func runServer() {
 	flag.Parse()
 
-	// Start out driving the local herdr daemon. The footer's host switcher swaps
-	// this for a remoteBackend (and back) at runtime via /api/host.
-	setBackend(&localBackend{sock: *herdrSock})
+	// All filesystem/git operations route through the local backend.
+	setBackend(&localBackend{})
 
 	// Open the host-local state DB (~/.lasso/lasso.db), migrating a legacy
 	// config.yaml on first run. Fatal if it can't open — the creator depends on it.
@@ -139,17 +119,8 @@ func runServer() {
 	mux.HandleFunc("/api/file-rename", serveFileRename)
 	mux.HandleFunc("/api/file-write", serveFileWrite)
 	mux.HandleFunc("/api/file-upload", serveFileUpload)
-	mux.HandleFunc("/api/panes", servePanes)
-	mux.HandleFunc("/api/grid", serveGrid)
-	mux.HandleFunc("/api/grid/term", serveGridTerm)
-	mux.HandleFunc("/api/grid/term-touch", serveGridTermTouch)
-	mux.HandleFunc("/api/grid/term-release", serveGridTermRelease)
-	mux.HandleFunc("/api/grid/term-release-all", serveGridTermReleaseAll)
-	mux.HandleFunc("/api/grid/rename", serveGridRename)
-	mux.HandleFunc("/api/grid/close", serveGridClose)
-	mux.HandleFunc("/grid-term/", serveGridTermProxy)
 	// the viewport: one persistent ttyd (tmux attach) switched between tab
-	// sessions, replacing both the herdr grid terminals and the old per-tab pool.
+	// sessions, replacing the old per-tab ttyd pool.
 	mux.HandleFunc("/api/tab/term", serveTabTerm)
 	mux.HandleFunc("/api/tab/term-touch", serveTabTermTouch)
 	mux.HandleFunc("/api/tab/term-ready", serveTabReady)
@@ -168,24 +139,16 @@ func runServer() {
 	mux.HandleFunc("/api/repo/open", serveOpenRepo)
 	mux.HandleFunc("/api/create-worktree", serveCreateWorktreeOnly)
 	mux.HandleFunc("/api/ui-state", serveUIState)
-	mux.HandleFunc("/api/focus", serveFocus)
-	mux.HandleFunc("/api/rename", serveRename)
-	mux.HandleFunc("/api/workspace-rename", serveWorkspaceRename)
-	mux.HandleFunc("/api/close", serveClose)
 	mux.HandleFunc("/api/paste-image", servePasteImage)
 	mux.HandleFunc("/api/diff", serveDiff)
 	mux.HandleFunc("/api/diff-file", serveDiffFile)
 	mux.HandleFunc("/api/version", serveVersion)
-	mux.HandleFunc("/api/hosts", serveHosts)
-	mux.HandleFunc("/api/host", serveHostSwitch)
 	mux.HandleFunc("/api/agent-config", serveAgentConfig)
 	mux.HandleFunc("/api/repo-config", serveRepoConfig)
 	mux.HandleFunc("/api/repos", serveRepos)
 	mux.HandleFunc("/api/repo-branches", serveRepoBranches)
 	mux.HandleFunc("/api/create-agent", serveCreateAgent)
 	mux.HandleFunc("/api/agent-upload", serveAgentUpload)
-	mux.HandleFunc("/api/host-update", serveHostUpdate)
-	mux.HandleFunc("/api/host-provision", serveHostProvision)
 	mux.HandleFunc("/api/self-update", serveSelfUpdate)
 	// MCP server: lets an agent session orchestrate other lasso agents over the
 	// Model Context Protocol. Mounted here (before the SPA catch-all) and exempt
@@ -224,9 +187,8 @@ func runServer() {
 		*listenAddr = boundAddr // so the URL log + isLoopback reflect reality
 	}
 
-	// Terminals are now per-tab ttyds attached to tmux sessions (see tabterm.go),
-	// spawned on demand when the browser opens a tab — there are no fixed herdr/
-	// shell ttyds to spawn at boot anymore.
+	// Terminals are per-tab ttyds attached to tmux sessions (see tabterm.go),
+	// spawned on demand when the browser opens a tab — nothing to spawn at boot.
 
 	srv := &http.Server{Handler: handler}
 	go func() {
@@ -296,33 +258,9 @@ func unixSocketProxy(sock string) *httputil.ReverseProxy {
 	return p
 }
 
-// shellCommand resolves the command for the out-of-herdr Terminal tab:
-// -shell-cmd if set, else $SHELL, else bash, else sh.
-func shellCommand() string {
-	if c := strings.TrimSpace(*shellCmd); c != "" {
-		return c
-	}
-	if sh := os.Getenv("SHELL"); sh != "" {
-		return sh
-	}
-	if _, err := exec.LookPath("bash"); err == nil {
-		return "bash"
-	}
-	return "sh"
-}
-
-// startTtyd spawns one ttyd serving command under basePath on its own private
-// unix socket. command is split on whitespace into the child argv. env, if
-// non-nil, overrides the child environment (the shell terminal passes
-// outsideHerdrEnv); nil inherits the viewer's env.
-func startTtyd(ctx context.Context, sock, basePath, command string, env []string) error {
-	return startTtydArgv(ctx, sock, basePath, strings.Fields(command), env)
-}
-
-// startTtydArgv is startTtyd with the child command given as an explicit argv,
-// for commands that can't survive whitespace-splitting — notably the grid's
-// remote attach (`ssh -tt <host> "$SHELL -lc 'herdr terminal attach …'"`), whose
-// final argument must reach ssh as one token.
+// startTtydArgv spawns one ttyd serving the given argv under basePath on its own
+// private unix socket. env, if non-nil, overrides the child environment; nil
+// inherits the server's env.
 func startTtydArgv(ctx context.Context, sock, basePath string, cmdArgv []string, env []string) error {
 	// Bind a private unix socket (one per instance) rather than a shared TCP
 	// port, so concurrent prod/dev instances can't collide or cross-connect.
@@ -370,678 +308,64 @@ func startTtydArgv(ctx context.Context, sock, basePath string, cmdArgv []string,
 	return nil
 }
 
-// ---------------------------------------------------------------------------
-// herdr socket client
-// ---------------------------------------------------------------------------
+// srvHub and srvCtx are set in runServer so background subsystems (the viewport
+// watcher, the status poller, the sidebar handlers, prewarm) can reach the SSE
+// hub and the server's root context (the lifetime of spawned ttyds).
+var (
+	srvHub *hub
+	srvCtx context.Context
+)
 
-// herdrError is a structured error returned by herdr's socket API
-// (e.g. {"code":"pane_not_found","message":"pane X not found"}). Callers can
-// inspect Code (via errors.As) to react to specific conditions — notably to
-// treat an already-gone pane as a no-op rather than a hard failure.
-type herdrError struct {
-	Code    string `json:"code"`
-	Message string `json:"message"`
-}
-
-func (e *herdrError) Error() string {
-	if e.Message != "" {
-		return fmt.Sprintf("herdr error %s: %s", e.Code, e.Message)
-	}
-	return "herdr error: " + e.Code
-}
-
-// herdrCall does one request/response round-trip against the active host's herdr
-// socket. The dial/encode/decode logic lives in herdrCallSock (backend.go), which
-// both backends share; this routes to whichever host is active.
-func herdrCall(method string, params any) (json.RawMessage, error) {
-	return curBackend().HerdrCall(method, params)
-}
-
-type pane struct {
-	PaneID        string `json:"pane_id"`
-	TerminalID    string `json:"terminal_id"` // herdr terminal handle, for direct `terminal attach`
-	WorkspaceID   string `json:"workspace_id"`
-	TabID         string `json:"tab_id"`
-	Label         string `json:"label"`          // herdr's per-pane title; "" when the pane is unnamed
-	Cwd           string `json:"cwd"`            // the shell's launch dir — stale once an agent owns the pane
-	ForegroundCwd string `json:"foreground_cwd"` // herdr-resolved cwd of the pane's foreground process; "" when unresolvable
-	Focused       bool   `json:"focused"`
-	Agent         string `json:"agent"`
-	AgentStatus   string `json:"agent_status"`
-}
-
-// paneCwd is the best cwd for a pane. For a plain shell, herdr's foreground_cwd
-// (the live cwd of whatever process owns the terminal) tracks the user's cd's
-// and wins. For an AGENT pane, the shell launch dir is the agent's project root
-// and is what the file viewer should follow: the agent's foreground process is
-// often a transient subprocess (e.g. a plugin under ~/.claude/plugins/cache)
-// whose cwd would otherwise drag the viewer away from the worktree. So agents
-// prefer the launch cwd, using foreground_cwd only when herdr reports none.
-// (herdr added foreground_cwd in 0.6.5, superseding the viewer's old
-// /proc-scraping workaround.)
-func paneCwd(p pane) string {
-	if p.Agent != "" {
-		if p.Cwd != "" {
-			return p.Cwd
+// waitSocket polls until the socket file exists (want=true) or is gone
+// (want=false), or the timeout elapses. Used after spawning a ttyd so the first
+// proxied request doesn't 502 before the socket is bound.
+func waitSocket(sock string, want bool, timeout time.Duration) {
+	deadline := time.Now().Add(timeout)
+	for time.Now().Before(deadline) {
+		_, err := os.Stat(sock)
+		if (err == nil) == want {
+			return
 		}
-		return p.ForegroundCwd
+		time.Sleep(20 * time.Millisecond)
 	}
-	if p.ForegroundCwd != "" {
-		return p.ForegroundCwd
-	}
-	return p.Cwd
 }
 
-// paneCwdUsesForeground reports whether paneCwd returned the foreground cwd
-// rather than the shell launch cwd (drives Active.CwdSource).
-func paneCwdUsesForeground(p pane) bool {
-	if p.Agent != "" {
-		return p.Cwd == "" && p.ForegroundCwd != ""
-	}
-	return p.ForegroundCwd != ""
-}
-
-// pane.list is by far herdr's most expensive method: as of 0.6.5 it resolves
-// every pane's foreground_cwd via the TTY + /proc on each call (~0.5–1.5s for a
-// busy session), versus <10ms for workspace.list/tab.list. The viewer hits it
-// from both the active-pane refresh loop and the grid endpoint, so a short
-// single-flight cache keeps a focus event, the periodic poll, and a grid fetch
-// that land close together from each paying the full cost. Event-driven
-// refreshes invalidate the cache first (see invalidatePaneList) so focus
-// changes never serve a stale snapshot.
-var paneListCache struct {
-	mu   sync.Mutex
-	at   time.Time
-	data json.RawMessage
-	err  error
-}
-
-const paneListTTL = 400 * time.Millisecond
-
-func herdrPaneList() (json.RawMessage, error) {
-	paneListCache.mu.Lock()
-	defer paneListCache.mu.Unlock()
-	if !paneListCache.at.IsZero() && time.Since(paneListCache.at) < paneListTTL {
-		return paneListCache.data, paneListCache.err
-	}
-	// The call is made under the lock on purpose: concurrent callers coalesce
-	// onto this one in-flight request rather than firing parallel slow calls.
-	data, err := herdrCall("pane.list", map[string]any{})
-	paneListCache.at = time.Now()
-	paneListCache.data, paneListCache.err = data, err
-	return data, err
-}
-
-// invalidatePaneList drops the cached pane.list so the next call refetches. The
-// hub calls this on every herdr event: an event means pane state changed, so a
-// cached snapshot would be stale.
-func invalidatePaneList() {
-	paneListCache.mu.Lock()
-	paneListCache.at = time.Time{}
-	paneListCache.mu.Unlock()
-}
-
-type workspace struct {
-	WorkspaceID string `json:"workspace_id"`
-	Label       string `json:"label"`
-	Number      int    `json:"number"` // display order; changes when workspaces are reordered
-	Focused     bool   `json:"focused"`
-}
+// ---------------------------------------------------------------------------
+// version + update check (Settings tab)
+// ---------------------------------------------------------------------------
 
 // Active is the state pushed to the browser.
 type Active struct {
-	PaneID         string `json:"pane_id"`
-	Cwd            string `json:"cwd"`
-	CwdSource      string `json:"cwd_source"` // "foreground" (herdr's resolved foreground-process cwd) | "shell" (herdr's shell launch cwd, used when foreground is unresolvable)
-	WorkspaceID    string `json:"workspace_id"`
-	WorkspaceLabel string `json:"workspace_label"`
-	TabID          string `json:"tab_id"`
-	TabLabel       string `json:"tab_label"`
-	Agent          string `json:"agent"`
-	AgentStatus    string `json:"agent_status"`
-	PanesRev       int    `json:"panes_rev"` // bumps when the workspace/tab tree changes
-	HerdrUp        bool   `json:"herdr_up"`  // retained for the frontend transition; always true under tmux
-	Host           string `json:"host"`      // active host: always "local" (multi-host deferred)
-	TermRev        int    `json:"term_rev"`  // bumps so the browser reloads terminal iframes
+	WorkspaceID string `json:"workspace_id"`
+	TabID       string `json:"tab_id"`
+	PanesRev    int    `json:"panes_rev"` // bumps when the workspace/tab tree changes
+	Host        string `json:"host"`      // active host: always "local"
+	TermRev     int    `json:"term_rev"`  // bumps so the browser reloads terminal iframes
 	// AgentStatuses maps each live agent tab id to its status (idle|working|
 	// blocked), produced by the status poller. The sidebar's agent pane reads it.
 	AgentStatuses map[string]string `json:"agent_statuses"`
 }
 
-// fetchActive returns the focused-pane state plus a layout signature. The
-// signature captures workspace order + pane membership (see layoutSignature), so
-// the caller can detect when the pane grid needs to re-render — e.g. after a
-// workspace is reordered in herdr — independently of focus changes.
-func fetchActive() (Active, string, error) {
-	res, err := herdrPaneList()
-	if err != nil {
-		return Active{}, "", err
-	}
-	var pl struct {
-		Panes []pane `json:"panes"`
-	}
-	if err := json.Unmarshal(res, &pl); err != nil {
-		return Active{}, "", err
-	}
-
-	// workspace.list does double duty: label the focused workspace and feed the
-	// layout signature (so a reorder/rename of a workspace is detected).
-	var wl struct {
-		Workspaces []workspace `json:"workspaces"`
-	}
-	if res, err := herdrCall("workspace.list", map[string]any{}); err == nil {
-		_ = json.Unmarshal(res, &wl)
-	}
-	sig := layoutSignature(pl.Panes, wl.Workspaces)
-
-	var fp *pane
-	for i := range pl.Panes {
-		if pl.Panes[i].Focused {
-			fp = &pl.Panes[i]
-			break
-		}
-	}
-	if fp == nil {
-		// herdr is reachable but has no focused pane — e.g. a freshly started
-		// server with no session/workspaces yet (common right after a host
-		// switch to a host whose herdr was just (re)started). That's "up but
-		// empty", NOT down: returning an error here would make the hub mark
-		// HerdrUp=false and never flip the active-host display. Return a valid
-		// empty Active (with the layout signature) so the success path runs,
-		// marks herdr up, and reflects the active host with an empty pane/cwd.
-		return Active{}, sig, nil
-	}
-	a := Active{
-		PaneID: fp.PaneID, Cwd: paneCwd(*fp), CwdSource: "shell", WorkspaceID: fp.WorkspaceID,
-		TabID: fp.TabID, Agent: fp.Agent, AgentStatus: fp.AgentStatus,
-	}
-	if paneCwdUsesForeground(*fp) {
-		a.CwdSource = "foreground"
-	}
-	a.TabLabel = tabLabel(fp.TabID)
-	for _, w := range wl.Workspaces {
-		if w.WorkspaceID == a.WorkspaceID {
-			a.WorkspaceLabel = w.Label
-		}
-	}
-	return a, sig, nil
-}
-
-// layoutSignature is a deterministic string of the workspace order (number +
-// id + label) and pane→workspace/tab membership. It deliberately omits focus and
-// cwd, so it changes when workspaces are reordered/renamed or panes are
-// added/removed/moved — but NOT on a mere focus change (the grid's focus
-// highlight is updated separately, without a full reload).
-func layoutSignature(panes []pane, wss []workspace) string {
-	ws := append([]workspace(nil), wss...)
-	sort.Slice(ws, func(i, j int) bool { return ws[i].Number < ws[j].Number })
-	var sb strings.Builder
-	for _, w := range ws {
-		fmt.Fprintf(&sb, "%d:%s:%s;", w.Number, w.WorkspaceID, w.Label)
-	}
-	sb.WriteByte('|')
-	keys := make([]string, 0, len(panes))
-	for _, p := range panes {
-		keys = append(keys, p.PaneID+":"+p.WorkspaceID+":"+p.TabID)
-	}
-	sort.Strings(keys)
-	sb.WriteString(strings.Join(keys, ";"))
-	return sb.String()
-}
-
-// tabLabel fetches a tab's display label (best effort, "" on failure).
-func tabLabel(tabID string) string {
-	res, err := herdrCall("tab.get", map[string]any{"tab_id": tabID})
-	if err != nil {
-		return ""
-	}
-	var r struct {
-		Tab struct {
-			Label string `json:"label"`
-		} `json:"tab"`
-	}
-	if json.Unmarshal(res, &r) != nil {
-		return ""
-	}
-	return r.Tab.Label
-}
-
-// ---------------------------------------------------------------------------
-// pane grid: list every pane + focus one
-// ---------------------------------------------------------------------------
-
-// paneView is a herdr pane enriched with its workspace/tab labels (and ordering
-// numbers, used server-side for sorting) for display in the right column's grid.
-type paneView struct {
-	PaneID         string `json:"pane_id"`
-	WorkspaceID    string `json:"workspace_id"`
-	WorkspaceLabel string `json:"workspace_label"`
-	TabID          string `json:"tab_id"`
-	TabLabel       string `json:"tab_label"`
-	Cwd            string `json:"cwd"`
-	Agent          string `json:"agent"`
-	AgentStatus    string `json:"agent_status"`
-	Focused        bool   `json:"focused"`
-}
-
-// fetchPanes lists every pane and joins in workspace/tab labels, returning them
-// grouped by workspace (then tab) order — the order herdr itself shows.
-func fetchPanes() ([]paneView, error) {
-	res, err := herdrPaneList()
-	if err != nil {
-		return nil, err
-	}
-	var pl struct {
-		Panes []pane `json:"panes"`
-	}
-	if err := json.Unmarshal(res, &pl); err != nil {
-		return nil, err
-	}
-
-	type meta struct {
-		label  string
-		number int
-	}
-	tabs := map[string]meta{}
-	if r, err := herdrCall("tab.list", map[string]any{}); err == nil {
-		var tl struct {
-			Tabs []struct {
-				TabID  string `json:"tab_id"`
-				Label  string `json:"label"`
-				Number int    `json:"number"`
-			} `json:"tabs"`
-		}
-		if json.Unmarshal(r, &tl) == nil {
-			for _, t := range tl.Tabs {
-				tabs[t.TabID] = meta{t.Label, t.Number}
-			}
-		}
-	}
-	wss := map[string]meta{}
-	if r, err := herdrCall("workspace.list", map[string]any{}); err == nil {
-		var wl struct {
-			Workspaces []struct {
-				WorkspaceID string `json:"workspace_id"`
-				Label       string `json:"label"`
-				Number      int    `json:"number"`
-			} `json:"workspaces"`
-		}
-		if json.Unmarshal(r, &wl) == nil {
-			for _, w := range wl.Workspaces {
-				wss[w.WorkspaceID] = meta{w.Label, w.Number}
-			}
-		}
-	}
-
-	out := make([]paneView, 0, len(pl.Panes))
-	for _, p := range pl.Panes {
-		out = append(out, paneView{
-			PaneID:         p.PaneID,
-			WorkspaceID:    p.WorkspaceID,
-			WorkspaceLabel: wss[p.WorkspaceID].label,
-			TabID:          p.TabID,
-			TabLabel:       tabs[p.TabID].label,
-			Cwd:            paneCwd(p),
-			Agent:          p.Agent,
-			AgentStatus:    p.AgentStatus,
-			Focused:        p.Focused,
-		})
-	}
-	sort.Slice(out, func(i, j int) bool {
-		if wi, wj := wss[out[i].WorkspaceID].number, wss[out[j].WorkspaceID].number; wi != wj {
-			return wi < wj
-		}
-		if ti, tj := tabs[out[i].TabID].number, tabs[out[j].TabID].number; ti != tj {
-			return ti < tj
-		}
-		return out[i].PaneID < out[j].PaneID
-	})
-	return out, nil
-}
-
-func servePanes(w http.ResponseWriter, r *http.Request) {
-	panes, err := fetchPanes()
-	if err != nil {
-		http.Error(w, err.Error(), http.StatusBadGateway)
-		return
-	}
-	writeJSON(w, map[string]any{"panes": panes})
-}
-
-// serveFocus focuses a pane. herdr exposes no pane.focus, so focusing a pane
-// means focusing its workspace and then its tab (panes live one-per-tab in the
-// common case; for split tabs this focuses the tab the pane belongs to).
-func serveFocus(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodPost {
-		http.Error(w, "POST only", http.StatusMethodNotAllowed)
-		return
-	}
-	var req struct {
-		WorkspaceID string `json:"workspace_id"`
-		TabID       string `json:"tab_id"`
-	}
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		http.Error(w, "bad json", http.StatusBadRequest)
-		return
-	}
-	if req.WorkspaceID == "" || req.TabID == "" {
-		http.Error(w, "workspace_id and tab_id required", http.StatusBadRequest)
-		return
-	}
-	if _, err := herdrCall("workspace.focus", map[string]any{"workspace_id": req.WorkspaceID}); err != nil {
-		http.Error(w, "workspace.focus: "+err.Error(), http.StatusBadGateway)
-		return
-	}
-	if _, err := herdrCall("tab.focus", map[string]any{"tab_id": req.TabID}); err != nil {
-		http.Error(w, "tab.focus: "+err.Error(), http.StatusBadGateway)
-		return
-	}
-	writeJSON(w, map[string]any{"ok": true})
-}
-
-// serveRename renames the tab a pane lives in. The grid labels each card with
-// its tab label, so renaming the *tab* is what visibly relabels the card
-// (pane.rename sets a pane name that herdr never surfaces in pane.list).
-func serveRename(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodPost {
-		http.Error(w, "POST only", http.StatusMethodNotAllowed)
-		return
-	}
-	var req struct {
-		TabID string `json:"tab_id"`
-		Label string `json:"label"`
-	}
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		http.Error(w, "bad json", http.StatusBadRequest)
-		return
-	}
-	if req.TabID == "" || strings.TrimSpace(req.Label) == "" {
-		http.Error(w, "tab_id and non-empty label required", http.StatusBadRequest)
-		return
-	}
-	if _, err := herdrCall("tab.rename", map[string]any{"tab_id": req.TabID, "label": req.Label}); err != nil {
-		http.Error(w, err.Error(), http.StatusBadGateway)
-		return
-	}
-	writeJSON(w, map[string]any{"ok": true})
-}
-
-// serveWorkspaceRename relabels a workspace (workspace.rename). The Agents grid
-// titles each card with its workspace label, so this is what visibly renames it.
-func serveWorkspaceRename(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodPost {
-		http.Error(w, "POST only", http.StatusMethodNotAllowed)
-		return
-	}
-	var req struct {
-		WorkspaceID string `json:"workspace_id"`
-		Label       string `json:"label"`
-	}
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		http.Error(w, "bad json", http.StatusBadRequest)
-		return
-	}
-	if req.WorkspaceID == "" || strings.TrimSpace(req.Label) == "" {
-		http.Error(w, "workspace_id and non-empty label required", http.StatusBadRequest)
-		return
-	}
-	if _, err := herdrCall("workspace.rename", map[string]any{"workspace_id": req.WorkspaceID, "label": req.Label}); err != nil {
-		http.Error(w, err.Error(), http.StatusBadGateway)
-		return
-	}
-	writeJSON(w, map[string]any{"ok": true})
-}
-
-// Bulk-close resilience knobs. Closing a pane makes herdr recompute layout /
-// shift focus / maybe close the tab, so a burst of pane.close calls can race
-// that reconfiguration and fail transiently — hence retries plus a little
-// pacing so herdr settles between calls. Tuned to stay snappy for a handful of
-// panes while clearing the flakiness that used to need a manual retry.
-const closeAttempts = 4 // total tries per pane
-
-// vars (not consts) so tests can shrink the waits.
-var (
-	closeBackoffBase = 40 * time.Millisecond  // 1st retry wait; doubles each time
-	closeBackoffMax  = 400 * time.Millisecond // cap per-retry wait
-	closePace        = 25 * time.Millisecond  // breather between distinct panes
-)
-
-// paneCloser performs a single pane.close round-trip. A package var so tests can
-// substitute a fake herdr without a live socket.
-var paneCloser = func(id string) error {
-	_, err := herdrCall("pane.close", map[string]any{"pane_id": id})
-	return err
-}
-
-// closePane closes one pane on the active backend (see closePaneWith).
-func closePane(ctx context.Context, id string) error {
-	return closePaneWith(ctx, paneCloser, id)
-}
-
-// closePaneWith closes one pane via closer, absorbing the two flaky cases: a
-// transient herdr error (retried with exponential backoff) and a pane that's
-// already gone — e.g. cascade-closed when its tab's last sibling was closed —
-// which is treated as success since the goal (pane gone) is met. invalid_request
-// is our own bug, so it fails fast without burning retries. Honors ctx so a
-// client that walks away (closed tab / navigation) doesn't keep us hammering
-// herdr. closer is host-specific (the active backend for serveClose, a grid-pool
-// backend for serveGridClose) so the same resilience applies on every host.
-func closePaneWith(ctx context.Context, closer func(string) error, id string) error {
-	var last error
-	for attempt := 0; attempt < closeAttempts; attempt++ {
-		if attempt > 0 {
-			wait := closeBackoffBase << (attempt - 1)
-			if wait > closeBackoffMax {
-				wait = closeBackoffMax
-			}
-			if !sleepCtx(ctx, wait) {
-				return ctx.Err()
-			}
-		}
-		err := closer(id)
-		if err == nil {
-			return nil
-		}
-		var he *herdrError
-		if errors.As(err, &he) {
-			switch he.Code {
-			case "pane_not_found":
-				return nil // already gone — idempotent success
-			case "invalid_request":
-				return err // malformed on our side; retrying won't help
-			}
-		}
-		last = err // transient (dial/timeout/herdr busy): back off and retry
-	}
-	return last
-}
-
-// sleepCtx waits for d, returning false if ctx is cancelled first.
-func sleepCtx(ctx context.Context, d time.Duration) bool {
-	t := time.NewTimer(d)
-	defer t.Stop()
-	select {
-	case <-t.C:
-		return true
-	case <-ctx.Done():
-		return false
-	}
-}
-
-// serveClose closes one or more panes (pane.close per id). Closing the last
-// pane in a tab closes the tab too. Calls are serialized with retries + pacing
-// (see closePane) so a bulk close is resilient to herdr's reconfiguration
-// races; any pane that still can't be closed is reported per-id.
-func serveClose(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodPost {
-		http.Error(w, "POST only", http.StatusMethodNotAllowed)
-		return
-	}
-	var req struct {
-		PaneIDs []string `json:"pane_ids"`
-	}
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		http.Error(w, "bad json", http.StatusBadRequest)
-		return
-	}
-	if len(req.PaneIDs) == 0 {
-		http.Error(w, "pane_ids required", http.StatusBadRequest)
-		return
-	}
-	ctx := r.Context()
-	closed := make([]string, 0, len(req.PaneIDs))
-	errs := map[string]string{}
-	for i, id := range req.PaneIDs {
-		if i > 0 && !sleepCtx(ctx, closePace) { // backpressure between panes
-			break
-		}
-		if err := closePane(ctx, id); err != nil {
-			errs[id] = err.Error()
-		} else {
-			closed = append(closed, id)
-		}
-	}
-	writeJSON(w, map[string]any{"closed": closed, "errors": errs})
-}
-
-// ---------------------------------------------------------------------------
-// herdr self-update (Settings tab)
-// ---------------------------------------------------------------------------
-
-// herdrBinary is the herdr executable to invoke for out-of-session commands
-// (version, update) — the first field of -term-cmd (what ttyd runs in the
-// terminal), defaulting to "herdr".
-func herdrBinary() string {
-	if f := strings.Fields(*termCmd); len(f) > 0 {
-		return f[0]
-	}
-	return "herdr"
-}
-
-// rlimitNice is RLIMIT_NICE on Linux; Go's syscall package doesn't export it.
-const rlimitNice = 13
-
-// canLowerNiceTo reports whether this process may set its nice value to n.
-// RLIMIT_NICE caps the most-favorable nice level at (20 - rlim_cur), so we need
-// rlim_cur >= 20-n. Compared in the uint64 domain so RLIM_INFINITY reads as
-// "allowed" rather than overflowing to a negative int.
-func canLowerNiceTo(n int) bool {
-	var rl syscall.Rlimit
-	if err := syscall.Getrlimit(rlimitNice, &rl); err != nil {
-		return false
-	}
-	return uint64(20-n) <= rl.Cur
-}
-
-// termPrefix builds a command prefix that launches the herdr terminal so the
-// interactive client stays responsive under load. Two independent, opt-in parts:
-//
-//   - -term-no-swap: run the client in a transient systemd scope with
-//     MemorySwapMax=0 so its pages are never paged out (mirrors the `ccp` alias
-//     for agents). Outermost, so the scheduling tweaks below apply inside it.
-//   - -term-nice N: reset-on-fork (so a server the client might autospawn does
-//     not pass the boost down to agent panes) plus nice -N, the latter added
-//     only when RLIMIT_NICE permits it (else skipped, so we never emit a
-//     "cannot set niceness" warning).
-//
-// Each part degrades to a no-op if its helper binary is missing. ttyd splits the
-// term command on whitespace, so the prefix is space-joined with a trailing space.
-func termPrefix() string {
-	var p strings.Builder
-	if *termNoSwap {
-		if _, err := exec.LookPath("systemd-run"); err == nil {
-			p.WriteString("systemd-run --user --scope --quiet -p MemorySwapMax=0 ")
-		}
-	}
-	if *termNice != 0 {
-		if _, err := exec.LookPath("chrt"); err == nil {
-			p.WriteString("chrt --other --reset-on-fork 0 ")
-			if canLowerNiceTo(*termNice) {
-				if _, err := exec.LookPath("nice"); err == nil {
-					fmt.Fprintf(&p, "nice -n %d ", *termNice)
-				}
-			}
-		}
-	}
-	return p.String()
-}
-
-// outsideHerdrEnv returns the current environment minus the markers herdr uses
-// to detect it's running *inside* a session (HERDR_ENV is set to "1" in every
-// pane; HERDR_PANE_ID / HERDR_SESSION identify the pane/session). The viewer's
-// out-of-herdr shell terminal runs with this env so commands that refuse to run
-// inside a session — notably `herdr update` — work there, even when the viewer
-// itself was launched from a herdr pane and inherited the markers.
-func outsideHerdrEnv() []string {
-	drop := map[string]bool{"HERDR_ENV": true, "HERDR_PANE_ID": true, "HERDR_SESSION": true}
-	src := os.Environ()
-	out := make([]string, 0, len(src))
-	for _, kv := range src {
-		if k, _, ok := strings.Cut(kv, "="); ok && drop[k] {
-			continue
-		}
-		out = append(out, kv)
-	}
-	return out
-}
-
-// lassoHerdrProtocol is the herdr wire-protocol version this lasso build targets:
-// the protocol of the *released* herdr lasso is developed and tested against
-// (herdr 0.6.8 → protocol 12), NOT whatever the herdr source tree is mid-bumping
-// to. Bump it in lockstep when lasso adopts a newer herdr release. We target one
-// protocol exactly — no backwards compatibility — so a mismatch in either
-// direction reads as incompatible. The Settings tab compares it against the
-// protocol the installed herdr daemon actually speaks (from a socket ping) so a
-// drifted install — where terminals/RPC silently break — is visible.
-//
-// Bumped 11→12 for herdr 0.6.7. Protocol 12 first shipped in 0.6.6, which lasso
-// briefly targeted then reverted to 11 (0.6.5) over a 0.6.6 idle-CPU regression
-// (commit 29b1e2d). 0.6.7 kept protocol 12 and fixed that regression; 0.6.8 also
-// keeps protocol 12 (verified by pinging the 0.6.8 binary on an isolated socket —
-// it pongs protocol 12, capabilities.live_handoff), so adopting it is value-only:
-// the wire formats lasso uses are unchanged, no request/response handling differs.
-const lassoHerdrProtocol = 12
-
-// versionInfo is the /api/version payload: the herdr socket protocol this lasso
-// build targets, the protocol the installed herdr daemon reports over its socket,
-// that daemon's version string (display only), and whether the two protocols match.
-// Err carries why the herdr protocol couldn't be read (daemon down, socket gone) so
-// the tab can say so rather than falsely claim a mismatch.
+// versionInfo is the /api/version payload: lasso's own version plus whether a
+// newer build/release is available.
 type versionInfo struct {
-	LassoProtocol int    `json:"lasso_protocol"`
-	LassoVersion  string `json:"lasso_version"`
-	HerdrProtocol int    `json:"herdr_protocol"`
-	HerdrVersion  string `json:"herdr_version,omitempty"`
-	Compatible    bool   `json:"compatible"`
-	Updatable     bool   `json:"updatable"`
-	// UpdateState (only meaningful when Updatable) says whether the running build
-	// is behind main: "available" (a newer commit is waiting to be built),
-	// "current" (already on main's tip), or "unknown" (can't tell — the UI then
-	// shows the update button anyway so the action never vanishes). CommitsBehind
-	// counts how far behind main, when known.
-	UpdateState   string `json:"update_state,omitempty"`
-	CommitsBehind int    `json:"commits_behind,omitempty"`
+	LassoVersion string `json:"lasso_version"`
+	// UpdateState says whether the running build is behind: "available" (a newer
+	// commit/release is waiting), "current" (already up to date), or "unknown".
+	UpdateState string `json:"update_state,omitempty"`
 	// LatestVersion is the newest published GitHub release tag, set only for a
 	// release-binary install (not the supervised/pitchfork checkout, which tracks
-	// main by commit instead). When it's newer than this build the Settings tab
-	// shows an "update available" hint pointing at `lasso update`.
+	// main by commit instead).
 	LatestVersion string `json:"latest_version,omitempty"`
 	Err           string `json:"err,omitempty"`
 }
 
-// serveVersion reports whether the installed herdr speaks the same socket protocol
-// this lasso build targets. It pings the local herdr socket fresh on every request
-// — so the tab's refresh button re-checks a daemon that has since restarted —
-// rather than reusing the once-cached localProtocol().
+// serveVersion reports lasso's own version and whether an update is available.
 func serveVersion(w http.ResponseWriter, r *http.Request) {
-	vi := versionInfo{
-		LassoProtocol: lassoHerdrProtocol,
-		LassoVersion:  lassoVersion(),
-		Updatable:     selfUpdateAvailable(),
-	}
-	if vi.Updatable {
+	vi := versionInfo{LassoVersion: lassoVersion()}
+	if selfUpdateAvailable() {
 		// Supervised checkout: compare the build commit to main's tip (local git).
-		vi.UpdateState, vi.CommitsBehind = selfUpdateStatus()
+		vi.UpdateState, _ = selfUpdateStatus()
 	} else if !*devMode {
 		// Release binary: compare this build's version to the latest GitHub release
 		// (non-blocking — the tag is "" until the background fetch lands, then the
@@ -1055,22 +379,8 @@ func serveVersion(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 	}
-	if v, p, err := herdrPinger(); err != nil {
-		vi.Err = err.Error()
-	} else {
-		vi.HerdrVersion = v
-		vi.HerdrProtocol = p
-		vi.Compatible = p == lassoHerdrProtocol
-	}
 	writeJSON(w, vi)
 }
-
-// herdrPinger reports the installed (local) herdr daemon's version and protocol.
-// A seam over herdrPing(*herdrSock) so serveVersion is unit-testable without a
-// live daemon. It deliberately pings the local socket, not the active backend's,
-// so the Settings tab reflects the local lasso↔herdr install even when a remote
-// host is selected.
-var herdrPinger = func() (string, int, error) { return herdrPing(*herdrSock) }
 
 // ---------------------------------------------------------------------------
 // image paste: save a clipboard image to disk so the agent in the focused
@@ -1113,14 +423,7 @@ func servePasteImage(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "unsupported image content-type "+ct, http.StatusUnsupportedMediaType)
 		return
 	}
-	// Target the selected host (?host=, default active) so the pasted image lands
-	// where the agent will run and the path inserted into the description
-	// resolves on that host.
-	be, err := reqHostBackend(r)
-	if err != nil {
-		http.Error(w, err.Error(), http.StatusBadGateway)
-		return
-	}
+	be := curBackend()
 	body, err := io.ReadAll(http.MaxBytesReader(w, r.Body, maxPasteImage))
 	if err != nil {
 		http.Error(w, "read body: "+err.Error(), http.StatusBadRequest)
@@ -1547,59 +850,6 @@ func isBinary(b []byte) bool {
 	return false
 }
 
-// subscribeEvents opens a long-lived connection subscribed to herdr events and
-// signals `trigger` whenever one arrives (the hub then re-fetches state).
-// Reconnects on failure. Beyond the *.focused events that drive the active-pane
-// view, it listens to the workspace/tab/pane lifecycle events — notably
-// workspace.updated, which fires when workspaces are reordered — so the pane
-// grid's order and membership stay live.
-func subscribeEvents(ctx context.Context, trigger chan<- struct{}) {
-	for ctx.Err() == nil {
-		conn, err := net.Dial("unix", curBackend().HerdrSock())
-		if err != nil {
-			time.Sleep(time.Second)
-			continue
-		}
-		// Close the conn when ctx is cancelled (host switch / shutdown) so the
-		// blocking Scan below unblocks and this goroutine exits promptly instead
-		// of lingering on the now-stale socket. A second deferred Close on the
-		// happy path is harmless (Close is idempotent).
-		stop := make(chan struct{})
-		go func() {
-			select {
-			case <-ctx.Done():
-				conn.Close()
-			case <-stop:
-			}
-		}()
-		sub := `{"id":"ui-sub","method":"events.subscribe","params":{"subscriptions":[` +
-			`{"type":"workspace.created"},{"type":"workspace.updated"},{"type":"workspace.renamed"},` +
-			`{"type":"workspace.closed"},{"type":"workspace.focused"},` +
-			`{"type":"tab.created"},{"type":"tab.closed"},{"type":"tab.renamed"},{"type":"tab.focused"},` +
-			`{"type":"pane.created"},{"type":"pane.closed"},{"type":"pane.exited"},{"type":"pane.focused"}` +
-			`]}}` + "\n"
-		if _, err := conn.Write([]byte(sub)); err != nil {
-			close(stop)
-			conn.Close()
-			continue
-		}
-		sc := bufio.NewScanner(conn)
-		sc.Buffer(make([]byte, 64*1024), 1024*1024)
-		for sc.Scan() {
-			select {
-			case trigger <- struct{}{}:
-			default:
-			}
-		}
-		close(stop)
-		conn.Close()
-		if ctx.Err() != nil {
-			return
-		}
-		time.Sleep(time.Second)
-	}
-}
-
 // ---------------------------------------------------------------------------
 // SSE hub
 // ---------------------------------------------------------------------------
@@ -1607,9 +857,9 @@ func subscribeEvents(ctx context.Context, trigger chan<- struct{}) {
 type hub struct {
 	mu      sync.RWMutex
 	cur     Active
-	rev     int    // pane-grid layout revision (bumped when lastSig changes)
-	lastSig string // last seen layout signature
-	termRev int    // host-switch revision (bumped so the browser reloads terminals)
+	rev     int    // sidebar tree revision (bumped when lastSig changes)
+	lastSig string // last seen tree+agents signature
+	termRev int    // terminal-reload revision (retained in the SSE payload)
 	clients map[chan Active]struct{}
 
 	rootCtx context.Context
@@ -1617,7 +867,7 @@ type hub struct {
 }
 
 func newHub() *hub {
-	return &hub{cur: Active{HerdrUp: true}, clients: map[chan Active]struct{}{}}
+	return &hub{cur: Active{Host: "local"}, clients: map[chan Active]struct{}{}}
 }
 
 // kick forces a near-immediate refresh (non-blocking). The status poller and the
@@ -1638,15 +888,6 @@ func (h *hub) clientCount() int {
 	return len(h.clients)
 }
 
-// bumpTermRev increments the terminal-reload counter so the next SSE frame tells
-// the browser to reload the terminal iframes (their ttyd sessions were respawned
-// against the new host).
-func (h *hub) bumpTermRev() {
-	h.mu.Lock()
-	h.termRev++
-	h.mu.Unlock()
-}
-
 func (h *hub) snapshot() Active { h.mu.RLock(); defer h.mu.RUnlock(); return h.cur }
 
 func (h *hub) run(ctx context.Context) {
@@ -1658,9 +899,8 @@ func (h *hub) run(ctx context.Context) {
 
 	// refresh rebuilds the pushed Active from the workspace/tab tree (bumping
 	// PanesRev when it changes) and the agent-status cache, then broadcasts to
-	// connected browsers if anything changed. There is no herdr to poll anymore —
-	// the status poller and the CRUD handlers kick() the hub when state changes;
-	// the ticker is just a slow safety net.
+	// connected browsers if anything changed. The status poller and the CRUD
+	// handlers kick() the hub when state changes; the ticker is a slow safety net.
 	refresh := func() {
 		statuses := agentStatuses.snapshot()
 		// Fold the live-agent SET (cache keys) into the signature so PanesRev
@@ -1679,7 +919,6 @@ func (h *hub) run(ctx context.Context) {
 			h.rev++
 		}
 		a := Active{
-			HerdrUp:       true,
 			Host:          "local",
 			PanesRev:      h.rev,
 			TermRev:       h.termRev,
@@ -1719,7 +958,7 @@ func (h *hub) run(ctx context.Context) {
 // is no longer comparable with == because it carries a map).
 func sameActive(a, b Active) bool {
 	if a.PanesRev != b.PanesRev || a.TermRev != b.TermRev ||
-		a.Host != b.Host || a.HerdrUp != b.HerdrUp || len(a.AgentStatuses) != len(b.AgentStatuses) {
+		a.Host != b.Host || len(a.AgentStatuses) != len(b.AgentStatuses) {
 		return false
 	}
 	for k, v := range a.AgentStatuses {
@@ -2119,7 +1358,7 @@ func withAuth(next http.Handler, user, pass string, enabled bool) http.Handler {
 		userOK := subtle.ConstantTimeCompare([]byte(u), []byte(user)) == 1
 		passOK := subtle.ConstantTimeCompare([]byte(p), []byte(pass)) == 1
 		if !ok || !userOK || !passOK {
-			w.Header().Set("WWW-Authenticate", `Basic realm="herdr", charset="UTF-8"`)
+			w.Header().Set("WWW-Authenticate", `Basic realm="lasso", charset="UTF-8"`)
 			http.Error(w, "unauthorized", http.StatusUnauthorized)
 			return
 		}

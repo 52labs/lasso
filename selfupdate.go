@@ -11,12 +11,9 @@ import (
 	"syscall"
 )
 
-// Lasso self-update. Unlike herdr (which runs on each host and is updated there
-// via the host switcher's "Update"), lasso runs only on the local machine, as a
-// pitchfork daemon. New features change behavior and can shift the herdr
-// protocol lasso targets, so the host switcher also offers "Update lasso": pull
-// the latest source and let the supervisor rebuild + restart it, bringing lasso
-// in line with a host running a newer herdr.
+// Lasso self-update. lasso runs on the local machine as a pitchfork daemon. The
+// Settings tab offers "Update lasso": pull the latest source and let the
+// supervisor rebuild + restart it.
 //
 // The prod install is a pitchfork daemon (default name "lasso") whose run script
 // does `git checkout main; go build; exec ./lasso` from the source checkout. So
@@ -147,7 +144,7 @@ func serveSelfUpdate(w http.ResponseWriter, r *http.Request) {
 	// about to be restarted and pitchfork logs capture the rebuild.
 	script := fmt.Sprintf(
 		"git -C %s pull --ff-only && pitchfork restart %s",
-		shellQuote(src), shellQuote(daemon))
+		shellSingleQuote(src), shellSingleQuote(daemon))
 	cmd := exec.Command("setsid", "sh", "-c", script)
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
 	cmd.Stdin, cmd.Stdout, cmd.Stderr = nil, nil, nil

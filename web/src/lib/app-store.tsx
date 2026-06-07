@@ -4,23 +4,21 @@ import { type ActiveState, api } from "@/lib/api"
 import { applyMode, watchSystemMode } from "@/lib/mode"
 import { invalidateHostScoped } from "@/lib/query"
 
-// App-wide state derived from herdr, kept live over the /api/events SSE stream.
+// App-wide state from the backend, kept live over the /api/events SSE stream.
 // Components read activeCwd/activePaneID/panesRev reactively and run their own
-// effects off them (Files follows the cwd, Diff reloads, the grid re-highlights
-// the focused pane and reloads on a layout change).
+// effects off them (Files follows the cwd, Diff reloads).
 interface AppState {
   activeCwd: string | null
   activePaneID: string | null
   panesRev: number
-  // Active host name ("local" or an alias), kept live off the SSE stream so the
-  // footer reflects switches initiated anywhere.
+  // The local host label, kept live off the SSE stream.
   host: string | null
   // tab id → agent status (idle|working|blocked), pushed by the status poller.
   agentStatuses: Record<string, string>
 }
 
-// Fired when the active host changes (term_rev bumped) so terminal iframes can
-// reload onto the new host's ttyd session.
+// Fired when term_rev bumps so terminal iframes can reload onto a fresh ttyd
+// session.
 export const HOST_CHANGED_EVENT = "lasso:host-changed"
 
 const AppContext = React.createContext<AppState | undefined>(undefined)
@@ -34,16 +32,15 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     agentStatuses: {},
   })
 
-  // Last seen term_rev — a change means the active host switched, so terminals
-  // must reload. Tracked in a ref so the SSE handler stays referentially stable.
+  // Last seen term_rev — a change means terminals must reload. Tracked in a ref
+  // so the SSE handler stays referentially stable.
   const lastTermRev = React.useRef<number | null>(null)
 
   const apply = React.useCallback((a: ActiveState) => {
     if (typeof a.term_rev === "number") {
       if (lastTermRev.current !== null && a.term_rev !== lastTermRev.current) {
         window.dispatchEvent(new CustomEvent(HOST_CHANGED_EVENT))
-        // The new host has its own remembered repo/branch/agent + repo list, so
-        // drop the cached host-scoped queries; the creator reloads them on open.
+        // Drop the cached creator queries so they reload on next open.
         invalidateHostScoped()
       }
       lastTermRev.current = a.term_rev

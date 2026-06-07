@@ -330,7 +330,7 @@ export function FileViewer({
   )
 }
 
-// A CodeMirror 6 editor themed to the live herdr palette (see lib/codemirror).
+// A CodeMirror 6 editor themed to the live palette (see lib/codemirror).
 // basicSetup gives line numbers, the fold gutter, bracket matching and in-editor
 // search (⌘/Ctrl+F). For very large files we drop the language extension to skip
 // the parsing cost — editing still works, just without highlighting.

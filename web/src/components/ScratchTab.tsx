@@ -23,7 +23,7 @@ export function ScratchTab() {
   const [savePath, setSavePath] = React.useState("")
   const saveInputRef = React.useRef<HTMLInputElement>(null)
 
-  // The editor (plain text — no language) themed to the live herdr palette.
+  // The editor (plain text — no language) themed to the live palette.
   const extensions = React.useMemo(
     () => [editorTheme, EditorView.lineWrapping],
     []

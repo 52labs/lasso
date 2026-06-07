@@ -20,11 +20,8 @@ import (
 // existing config.yaml is imported once on first open (see migrateFromYAML).
 //
 // The database is host-LOCAL: it belongs to the machine lasso runs on, the same
-// way the old config.yaml did. But creation routes through curBackend() to the
-// active herdr host, so anything that names a repo/branch/path on that host is
-// keyed by the active host name (curBackend().Name(): "local" or an ssh alias).
-// That keeps a local repo path from being suggested while a remote host is
-// selected. Pure user settings (branch prefix, default agent, …) stay global.
+// way the old config.yaml did. Host-scoped rows (repo/branch/path) are keyed by
+// host "local"; pure user settings (branch prefix, default agent, …) stay global.
 //
 //	settings    key/value, global, host-agnostic user settings
 //	host_state  per-host remembered selections (last repo/agent/type)
@@ -80,7 +77,7 @@ CREATE TABLE IF NOT EXISTS agents (
   created_at   TEXT NOT NULL DEFAULT ''
 );
 -- workspaces: a directory context (git worktree or scratch dir) holding 1..N
--- tabs. Replaces herdr's workspace concept; lasso owns it now.
+-- tabs.
 CREATE TABLE IF NOT EXISTS workspaces (
   id         TEXT PRIMARY KEY,
   host       TEXT NOT NULL DEFAULT 'local',
@@ -409,7 +406,7 @@ func agentKind(agentID string) string {
 }
 
 // ---------------------------------------------------------------------------
-// workspaces & tabs — the sidebar's tree (replaced herdr's workspace/pane tree)
+// workspaces & tabs — the sidebar's tree
 // ---------------------------------------------------------------------------
 
 // Workspace is a directory context (a git worktree or a scratch dir) that holds
@@ -658,7 +655,7 @@ func nextTabOrdinal(workspaceID string) int {
 	return 0
 }
 
-// nextTabName is the default numeric tab title — herdr names tabs "1", "2", "3".
+// nextTabName is the default numeric tab title ("1", "2", "3", …).
 // It's the next ordinal + 1 (1-based). MAX(ordinal) spans closed tabs too (they
 // soft-close, rows stay), so the number is monotonic per workspace: closing a tab
 // never lets a later tab reuse its number.
@@ -697,96 +694,11 @@ func migrateSchema() error {
 	return nil
 }
 
-// migrateV2 prunes the V1 backfill. lasso's agents table is an append-only log
-// with no closed/archived state: closure was only ever recorded in herdr's
-// session.json (closing a workspace removes its entry there), which lasso never
-// read — so the V1 backfill imported every historical agent as a LIVE workspace,
-// including long-closed throwaways. This one-time step reconciles against herdr's
-// authoritative live set and soft-closes any backfilled workspace whose work_dir
-// herdr no longer lists. Best-effort: if herdr's state is absent/unreadable we
-// leave everything live rather than guess. After this, lasso owns workspace
-// lifecycle entirely via workspaces.closed_at.
-func migrateV2() error {
-	live, ok := herdrLiveWorkDirs()
-	if !ok || len(live) == 0 {
-		return nil // no herdr state to reconcile against — don't prune blindly
-	}
-	rows, err := db.Query(`SELECT id, work_dir FROM workspaces WHERE closed_at=''`)
-	if err != nil {
-		return err
-	}
-	type ws struct{ id, dir string }
-	var all []ws
-	for rows.Next() {
-		var x ws
-		if err := rows.Scan(&x.id, &x.dir); err != nil {
-			rows.Close()
-			return err
-		}
-		all = append(all, x)
-	}
-	rows.Close()
-	if err := rows.Err(); err != nil {
-		return err
-	}
-	for _, x := range all {
-		if x.dir == "" || live[x.dir] {
-			continue
-		}
-		// Not in herdr's live set → the user had closed it. Soft-close it and its
-		// tabs (reversible: clear closed_at to restore).
-		for _, t := range mustListTabs(x.id) {
-			_ = closeTab(t.ID)
-		}
-		_ = closeWorkspace(x.id)
-	}
-	return nil
-}
-
-// mustListTabs is listTabs with the error swallowed (migration best-effort).
-func mustListTabs(wsID string) []Tab { t, _ := listTabs(wsID); return t }
-
-// herdrLiveWorkDirs reads herdr's authoritative live session (default session at
-// ~/.config/herdr/session.json) and returns the set of working directories it
-// still tracks. ok=false when the file is missing/unreadable. This is read ONCE,
-// at migration time, purely to clean up the backfill — lasso does not depend on
-// herdr at runtime.
-func herdrLiveWorkDirs() (map[string]bool, bool) {
-	home, err := os.UserHomeDir()
-	if err != nil {
-		return nil, false
-	}
-	path := filepath.Join(home, ".config", "herdr", "session.json")
-	b, err := os.ReadFile(path)
-	if err != nil {
-		return nil, false
-	}
-	var doc any
-	if err := json.Unmarshal(b, &doc); err != nil {
-		return nil, false
-	}
-	out := map[string]bool{}
-	var walk func(v any)
-	walk = func(v any) {
-		switch t := v.(type) {
-		case map[string]any:
-			for k, val := range t {
-				if k == "cwd" || k == "checkout_path" || k == "path" {
-					if s, ok := val.(string); ok && s != "" {
-						out[s] = true
-					}
-				}
-				walk(val)
-			}
-		case []any:
-			for _, e := range t {
-				walk(e)
-			}
-		}
-	}
-	walk(doc)
-	return out, true
-}
+// migrateV2 was a one-time reconciliation of the V1 backfill against an external
+// live-session source. That source is gone (lasso is tmux-backed and owns
+// workspace lifecycle entirely via workspaces.closed_at), so this is now a no-op
+// retained only to advance the schema version on pre-existing DBs.
+func migrateV2() error { return nil }
 
 // migrateV1 adds the tmux-era columns to pre-existing tables and backfills a
 // workspace + tab for every existing agent (so old agents appear in the new
@@ -832,8 +744,8 @@ func addColumnIfMissing(table, col, def string) error {
 // backfillWorkspacesFromAgents synthesizes one workspace + one agent-tab for each
 // agent that doesn't yet have a tab, mapping the old 1-agent-per-worktree model
 // into the new workspace/tab tree. The agent's row is updated to point at them.
-// Their tmux sessions don't exist yet (herdr panes are gone) — startup
-// reconciliation recreates fresh shells lazily on first attach.
+// Their tmux sessions don't exist yet — startup reconciliation recreates fresh
+// shells lazily on first attach.
 func backfillWorkspacesFromAgents() error {
 	rows, err := db.Query(`SELECT id, host, title, type, repo, work_dir, created_at, tab_id FROM agents`)
 	if err != nil {

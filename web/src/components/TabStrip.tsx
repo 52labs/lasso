@@ -22,8 +22,8 @@ const STATUS_DOT: Record<string, string> = {
   unknown: "bg-muted-foreground/40",
 }
 
-// nextTabNumber suggests the default numeric name for a new tab (herdr-style
-// "1", "2", "3"): the highest numeric tab title + 1, else the tab count + 1.
+// nextTabNumber suggests the default numeric name for a new tab ("1", "2",
+// "3"): the highest numeric tab title + 1, else the tab count + 1.
 // Pre-fills the new-tab modal so pressing Enter gives a numbered tab; the server
 // applies the same default if the field is cleared.
 function nextTabNumber(tabs: { title?: string }[]): string {
@@ -33,8 +33,8 @@ function nextTabNumber(tabs: { title?: string }[]): string {
   return String(nums.length ? Math.max(...nums) + 1 : tabs.length + 1)
 }
 
-// The tab strip above the terminal area: the active workspace's tabs (herdr-style
-// grouping), plus a "+" to open a new shell tab in the same workspace. The "+"
+// The tab strip above the terminal area: the active workspace's tabs, plus a "+"
+// to open a new shell tab in the same workspace. The "+"
 // and right-click "Rename…" both go through PromptDialog (our own modal).
 export function TabStrip({
   workspace,
