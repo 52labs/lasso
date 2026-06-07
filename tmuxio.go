@@ -80,6 +80,11 @@ func tmuxEnsureServer() error {
 		"set", "-g", "history-limit", "50000", ";",
 		"set", "-g", "default-terminal", "tmux-256color", ";",
 		"setw", "-g", "aggressive-resize", "on", ";",
+		// Windows follow the latest attached client's size, so a single ttyd
+		// viewer always drives the geometry (no dead "·" filler columns). This is
+		// tmux's default, set explicitly because nudgeRedraw's resize-window flips
+		// the per-window option to manual and must restore it.
+		"setw", "-g", "window-size", "latest", ";",
 		// Notify lasso the instant a session ends (the user exited the shell) so
 		// its tab closes immediately, before the ttyd client flashes a reconnect
 		// against the dead session. See startSessionCloseListener.
@@ -159,9 +164,16 @@ func tmuxCurrentPath(session string) (string, error) {
 // created detached at a fixed size, then a differently-sized ttyd client attaches
 // — the resize delivers a SIGWINCH mid-startup that eats bash's first prompt (or
 // an agent TUI's first frame), leaving the pane blank until the user types. We
-// replay that SIGWINCH deliberately: a one-row resize, then back to the client's
-// automatic size, makes both shells (readline redraws on SIGWINCH) and TUIs
-// repaint.
+// replay that SIGWINCH deliberately: a one-row resize, then restore automatic
+// (client-driven) sizing, makes both shells (readline redraws on SIGWINCH) and
+// TUIs repaint.
+//
+// CRITICAL: resize-window flips the window's window-size option to *manual* as a
+// side effect, which would freeze the geometry so a later client widen leaves
+// dead "·" filler columns. The trailing `setw window-size latest` both restores
+// automatic sizing (so future resizes follow the client) AND resizes back to the
+// current client now — a second SIGWINCH, another harmless repaint. (`-A` only
+// resizes once; it does NOT restore automatic mode.)
 func nudgeRedraw(session string) {
 	wh, err := tmuxOut("display-message", "-p", "-t", session, "#{window_width} #{window_height}")
 	if err != nil {
@@ -177,7 +189,7 @@ func nudgeRedraw(session string) {
 		return
 	}
 	_ = tmux("resize-window", "-t", session, "-x", strconv.Itoa(w), "-y", strconv.Itoa(h-1))
-	_ = tmux("resize-window", "-t", session, "-A") // revert to automatic (client) size
+	_ = tmux("setw", "-t", session, "window-size", "latest") // repaint + restore auto-sizing
 }
 
 // nudgeRedrawWhenAttached waits for a client to attach, then forces a full
