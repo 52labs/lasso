@@ -22,6 +22,17 @@ const STATUS_DOT: Record<string, string> = {
   unknown: "bg-muted-foreground/40",
 }
 
+// nextTabNumber suggests the default numeric name for a new tab (herdr-style
+// "1", "2", "3"): the highest numeric tab title + 1, else the tab count + 1.
+// Pre-fills the new-tab modal so pressing Enter gives a numbered tab; the server
+// applies the same default if the field is cleared.
+function nextTabNumber(tabs: { title?: string }[]): string {
+  const nums = tabs
+    .map((t) => Number.parseInt(t.title ?? "", 10))
+    .filter((n) => Number.isInteger(n))
+  return String(nums.length ? Math.max(...nums) + 1 : tabs.length + 1)
+}
+
 // The tab strip above the terminal area: the active workspace's tabs (herdr-style
 // grouping), plus a "+" to open a new shell tab in the same workspace. The "+"
 // and right-click "Rename…" both go through PromptDialog (our own modal).
@@ -153,7 +164,12 @@ export function TabStrip({
           type="button"
           title="new tab"
           className="shrink-0 px-2 py-1.5 text-muted-foreground hover:text-primary"
-          onClick={() => setPrompt({ mode: "new", initial: "" })}
+          onClick={() =>
+            setPrompt({
+              mode: "new",
+              initial: nextTabNumber(workspace.tabs ?? []),
+            })
+          }
         >
           <Plus className="size-4" />
         </button>

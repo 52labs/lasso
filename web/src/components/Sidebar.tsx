@@ -98,7 +98,7 @@ export function Sidebar({
         work_dir,
         kind: "scratch",
         pinned: false,
-        tabs: [{ id: tab_id, title: "shell", kind: "shell" }],
+        tabs: [{ id: tab_id, title: "1", kind: "shell" }],
       })
       onSelectTab(tab_id)
       refreshTree()
@@ -223,7 +223,7 @@ function RepoNode({
         kind: "git",
         pinned: false,
         branch: repo.primary_branch,
-        tabs: [{ id: tab_id, title: "shell", kind: "shell" }],
+        tabs: [{ id: tab_id, title: "1", kind: "shell" }],
       })
       onSelectTab(tab_id)
       refreshTree()

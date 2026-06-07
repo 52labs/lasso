@@ -652,6 +652,14 @@ func nextTabOrdinal(workspaceID string) int {
 	return 0
 }
 
+// nextTabName is the default numeric tab title — herdr names tabs "1", "2", "3".
+// It's the next ordinal + 1 (1-based). MAX(ordinal) spans closed tabs too (they
+// soft-close, rows stay), so the number is monotonic per workspace: closing a tab
+// never lets a later tab reuse its number.
+func nextTabName(workspaceID string) string {
+	return strconv.Itoa(nextTabOrdinal(workspaceID) + 1)
+}
+
 // ---------------------------------------------------------------------------
 // schema migrations (PRAGMA user_version)
 // ---------------------------------------------------------------------------

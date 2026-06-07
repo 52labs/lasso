@@ -427,9 +427,11 @@ func serveNewTab(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "workspace not found", http.StatusNotFound)
 		return
 	}
+	ord := nextTabOrdinal(ws.ID)
 	title := strings.TrimSpace(req.Title)
 	if title == "" {
-		title = "shell"
+		// Default to herdr-style numeric naming (ordinal + 1, monotonic).
+		title = strconv.Itoa(ord + 1)
 	}
 	tabID := newID()
 	if err := tmuxNewSession(tabSession(tabID), ws.WorkDir, []string{"LASSO_TAB_ID=" + tabID}); err != nil {
@@ -438,7 +440,7 @@ func serveNewTab(w http.ResponseWriter, r *http.Request) {
 	}
 	tab := Tab{
 		ID: tabID, WorkspaceID: ws.ID, Title: title, Cwd: ws.WorkDir,
-		Kind: "shell", Ordinal: nextTabOrdinal(ws.ID), CreatedAt: time.Now(),
+		Kind: "shell", Ordinal: ord, CreatedAt: time.Now(),
 	}
 	if err := insertTab(tab); err != nil {
 		_ = tmuxKillSession(tabSession(tabID))
@@ -480,7 +482,7 @@ func serveOpenRepo(w http.ResponseWriter, r *http.Request) {
 					http.Error(w, err.Error(), http.StatusInternalServerError)
 					return
 				}
-				_ = insertTab(Tab{ID: tabID, WorkspaceID: ws.ID, Title: "shell", Cwd: repo, Kind: "shell", CreatedAt: time.Now()})
+				_ = insertTab(Tab{ID: tabID, WorkspaceID: ws.ID, Title: nextTabName(ws.ID), Cwd: repo, Kind: "shell", CreatedAt: time.Now()})
 				kickHub()
 				writeJSON(w, map[string]any{"tab_id": tabID, "workspace_id": ws.ID})
 				return
@@ -500,7 +502,7 @@ func serveOpenRepo(w http.ResponseWriter, r *http.Request) {
 		title = rc.DisplayName
 	}
 	_ = insertWorkspace(Workspace{ID: wsID, Host: sidebarHost, Title: title, Repo: repo, WorkDir: repo, Kind: "git", CreatedAt: now})
-	_ = insertTab(Tab{ID: tabID, WorkspaceID: wsID, Title: "shell", Cwd: repo, Kind: "shell", CreatedAt: now})
+	_ = insertTab(Tab{ID: tabID, WorkspaceID: wsID, Title: nextTabName(wsID), Cwd: repo, Kind: "shell", CreatedAt: now})
 	kickHub()
 	writeJSON(w, map[string]any{"tab_id": tabID, "workspace_id": wsID})
 }
@@ -602,7 +604,7 @@ func serveCreateWorktreeOnly(w http.ResponseWriter, r *http.Request) {
 	}
 	now := time.Now()
 	_ = insertWorkspace(Workspace{ID: wsID, Host: sidebarHost, Title: title, Repo: repo, WorkDir: workDir, Kind: "git", CreatedAt: now})
-	_ = insertTab(Tab{ID: tabID, WorkspaceID: wsID, Title: "shell", Cwd: workDir, Kind: "shell", CreatedAt: now})
+	_ = insertTab(Tab{ID: tabID, WorkspaceID: wsID, Title: nextTabName(wsID), Cwd: workDir, Kind: "shell", CreatedAt: now})
 	_ = setLastBaseBranch(sidebarHost, repo, base)
 	kickHub()
 	writeJSON(w, map[string]any{"workspace_id": wsID, "work_dir": workDir, "branch": branch})
@@ -647,7 +649,7 @@ func serveCreateWorkspace(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
-	if err := insertTab(Tab{ID: tabID, WorkspaceID: wsID, Title: "shell", Cwd: workDir, Kind: "shell", CreatedAt: now}); err != nil {
+	if err := insertTab(Tab{ID: tabID, WorkspaceID: wsID, Title: nextTabName(wsID), Cwd: workDir, Kind: "shell", CreatedAt: now}); err != nil {
 		_ = tmuxKillSession(session)
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
