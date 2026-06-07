@@ -2,7 +2,7 @@ import * as React from "react"
 
 import { type ActiveState, api } from "@/lib/api"
 import { invalidateHostScoped } from "@/lib/query"
-import { refreshTheme } from "@/lib/theme"
+import { applyOnyxTheme } from "@/lib/theme"
 
 // App-wide state derived from herdr, kept live over the /api/events SSE stream.
 // Components read activeCwd/activePaneID/panesRev reactively and run their own
@@ -12,7 +12,6 @@ interface AppState {
   activeCwd: string | null
   activePaneID: string | null
   panesRev: number
-  themeRev: number
   // Active host name ("local" or an alias), kept live off the SSE stream so the
   // footer reflects switches initiated anywhere.
   host: string | null
@@ -31,7 +30,6 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     activeCwd: null,
     activePaneID: null,
     panesRev: -1,
-    themeRev: -1,
     host: null,
     agentStatuses: {},
   })
@@ -54,7 +52,6 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
       activeCwd: a.cwd || prev.activeCwd,
       activePaneID: a.pane_id || prev.activePaneID,
       panesRev: typeof a.panes_rev === "number" ? a.panes_rev : prev.panesRev,
-      themeRev: typeof a.theme_rev === "number" ? a.theme_rev : prev.themeRev,
       host: a.host || prev.host,
       agentStatuses: a.agent_statuses ?? prev.agentStatuses,
     }))
@@ -91,14 +88,12 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     return () => es?.close()
   }, [apply])
 
-  // Repaint the UI + terminals whenever herdr's theme revision moves (including
-  // the priming value, so a reload always converges to the current theme).
-  // themeRev is a trigger-only dep: refreshTheme() re-fetches /api/theme on each
-  // bump (SSE) rather than reading the rev itself.
-  // biome-ignore lint/correctness/useExhaustiveDependencies: themeRev is the intentional re-theme trigger
+  // Pin the terminals to the fixed Onyx palette + Nerd Font once on mount. The
+  // UI/CSS side is static (Onyx tokens in index.css); this only themes the live
+  // ttyd terminals. The reconciler re-pins them across ttyd reconnects.
   React.useEffect(() => {
-    refreshTheme()
-  }, [state.themeRev])
+    applyOnyxTheme()
+  }, [])
 
   return <AppContext.Provider value={state}>{children}</AppContext.Provider>
 }

@@ -1,4 +1,32 @@
-import { api, type ThemePayload } from "@/lib/api"
+// ONYX_XTERM_THEME is the fixed xterm.js palette for every terminal, derived
+// from the Onyx design tokens (onyx preset.json / colors_and_type.css). Onyx
+// defines only bg/fg/accent/warn/danger/ok, so the ANSI 16 are filled in around
+// those: indigo→blue, accent-1→magenta, ok→green, warn→yellow, danger→red, and
+// a derived cyan (Onyx has none). Replaces the old per-theme palette the server
+// used to push over /api/theme; the theme switcher is gone (dark-only Onyx).
+export const ONYX_XTERM_THEME: Record<string, unknown> = {
+  background: "#06070c",
+  foreground: "#f4f5fa",
+  cursor: "#7b7fff",
+  cursorAccent: "#06070c",
+  selectionBackground: "rgba(123, 127, 255, 0.30)",
+  black: "#11131c",
+  red: "#f2545b",
+  green: "#4ade9a",
+  yellow: "#f2b144",
+  blue: "#7b7fff",
+  magenta: "#9d7cff",
+  cyan: "#6db3c4",
+  white: "#b7bbc8",
+  brightBlack: "#3b3f4e",
+  brightRed: "#f57b80",
+  brightGreen: "#74e6a8",
+  brightYellow: "#f6c674",
+  brightBlue: "#9498ff",
+  brightMagenta: "#b3a4ff",
+  brightCyan: "#8fcdd9",
+  brightWhite: "#f4f5fa",
+}
 
 // Legacy fixed terminal iframes (the herdr terminal + right shell), kept for
 // any still-mounted herdr-era frames. The per-tab terminals are matched by
@@ -126,20 +154,6 @@ export function applyTermFont(tries = 0) {
 
 let lastXtermTheme: Record<string, unknown> | null = null
 
-// applyCSSVars takes the `:root { --bg: …; --accent: … }` block the Go server
-// produces and writes each variable onto the document root, namespaced as
-// --h-* so it can't collide with shadcn's own design tokens (which read these
-// via index.css). This is the live-theme repaint: the sidebar, file viewer,
-// diff, markdown and syntax colors all cascade from these vars.
-function applyCSSVars(css: string) {
-  const root = document.documentElement
-  const re = /--([\w-]+)\s*:\s*([^;]+);/g
-  let m: RegExpExecArray | null
-  while ((m = re.exec(css)) !== null) {
-    root.style.setProperty(`--h-${m[1]}`, m[2].trim())
-  }
-}
-
 // applyTermTheme sets xterm.js's theme on every terminal iframe. ttyd 1.7.4
 // exposes the Terminal as window.term and the iframes are same-origin (proxied
 // under /terminal/ and /shell/), so the parent can reach in. A terminal may not
@@ -215,18 +229,14 @@ export function startTermThemeReconciler() {
   termThemeReconciler = setInterval(reconcileTermTheme, 1500)
 }
 
-// refreshTheme pulls the resolved palette and repaints both halves of the UI:
-// the React/CSS side (rewrite the --h-* vars) and the live terminals (set the
-// xterm.js theme inside the same-origin ttyd iframes — no reconnect).
-export async function refreshTheme() {
-  let t: ThemePayload
-  try {
-    t = await api.theme()
-  } catch {
-    return
-  }
-  applyCSSVars(t.css)
-  lastXtermTheme = t.xterm
-  applyTermTheme(t.xterm, 0)
+// applyOnyxTheme pins every terminal to the fixed Onyx palette + Nerd Font. The
+// UI/CSS side is now static (Onyx tokens baked into index.css), so this only
+// drives the live terminals: it sets the xterm.js theme inside the same-origin
+// ttyd iframes (no reconnect) and injects the terminal font. Called once on app
+// mount; the reconciler (startTermThemeReconciler) re-pins across ttyd
+// reconnects.
+export function applyOnyxTheme() {
+  lastXtermTheme = ONYX_XTERM_THEME
+  applyTermTheme(ONYX_XTERM_THEME, 0)
   applyTermFont(0)
 }

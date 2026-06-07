@@ -2,11 +2,59 @@
 @import "tw-animate-css";
 @import "shadcn/tailwind.css";
 
+/* Onyx design-system fonts, self-hosted via @fontsource (Vite bundles the woff2
+ * into the embedded build — no Google Fonts CDN on this loopback tool). Geist is
+ * the UI sans, Space Grotesk the display/heading face, JetBrains Mono the code
+ * face. The *terminal* keeps its own vendored JetBrainsMono Nerd Font (injected
+ * into the ttyd iframe by lib/theme.ts) for the Nerd glyphs TUIs draw with. */
+@import "@fontsource/geist-sans/400.css";
+@import "@fontsource/geist-sans/500.css";
+@import "@fontsource/geist-sans/600.css";
+@import "@fontsource/geist-sans/700.css";
+@import "@fontsource/space-grotesk/500.css";
+@import "@fontsource/space-grotesk/600.css";
+@import "@fontsource/space-grotesk/700.css";
+@import "@fontsource/jetbrains-mono/400.css";
+@import "@fontsource/jetbrains-mono/500.css";
+@import "@fontsource/jetbrains-mono/600.css";
+
 @custom-variant dark (&:is(.dark *));
 
 @theme inline {
-  --font-sans: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
-  --font-mono: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  /* Onyx type stacks: Geist (UI sans), Space Grotesk (display), JetBrains Mono
+   * (code). font-display is exposed as a Tailwind utility for headings. */
+  --font-sans: "Geist", system-ui, sans-serif;
+  --font-display: "Space Grotesk", "Geist", system-ui, sans-serif;
+  --font-mono: "JetBrains Mono", ui-monospace, SFMono-Regular, Menlo, monospace;
+  /* Onyx color + radius + motion utilities (from onyx preset.json), available as
+   * bg-onyx-bg / text-onyx-accent / rounded-onyx-md / ease-onyx for new work. */
+  --color-onyx-bg: #06070c;
+  --color-onyx-bg-1: #0a0b12;
+  --color-onyx-bg-2: #11131c;
+  --color-onyx-bg-vis: #08091a;
+  --color-onyx-fg: #f4f5fa;
+  --color-onyx-fg-1: #b7bbc8;
+  --color-onyx-fg-2: #6b7080;
+  --color-onyx-fg-3: #3b3f4e;
+  --color-onyx-line: #1f2230;
+  --color-onyx-line-1: #2a2d3d;
+  --color-onyx-line-active: #3b3f5a;
+  --color-onyx-line-dash: #2a2d3d;
+  --color-onyx-accent: #7b7fff;
+  --color-onyx-accent-1: #9498ff;
+  --color-onyx-accent-2: #5c61e6;
+  --color-onyx-accent-fade: rgba(123, 127, 255, 0.18);
+  --color-onyx-accent-grid: rgba(123, 127, 255, 0.45);
+  --color-onyx-warn: #f2b144;
+  --color-onyx-warn-fade: rgba(242, 177, 68, 0.16);
+  --color-onyx-danger: #f2545b;
+  --color-onyx-danger-fade: rgba(242, 84, 91, 0.16);
+  --color-onyx-ok: #4ade9a;
+  --color-onyx-ok-fade: rgba(74, 222, 154, 0.16);
+  --radius-onyx-sm: 2px;
+  --radius-onyx-md: 4px;
+  --radius-onyx-lg: 6px;
+  --ease-onyx: cubic-bezier(0.2, 0.7, 0.1, 1);
   --color-sidebar-ring: var(--sidebar-ring);
   --color-sidebar-border: var(--sidebar-border);
   --color-sidebar-accent-foreground: var(--sidebar-accent-foreground);
@@ -64,35 +112,35 @@
 }
 
 /*
- * The herdr palette. These --h-* variables are the single source of truth for
- * lasso's colors: the server's /api/theme endpoint pushes the resolved herdr
- * theme onto :root at runtime (see lib/theme.ts), and these values are just the
- * Rosé Pine fallback used before that fetch lands (no flash of wrong colors).
- * shadcn's design tokens below are mapped onto them, so every shadcn primitive
- * tracks the live herdr theme automatically.
+ * The Onyx palette. These --h-* variables are the single source of truth for
+ * lasso's colors: every bespoke view below, the CodeMirror theme, highlight.js,
+ * and shadcn's design tokens (mapped onto them) all cascade from here. Values are
+ * the canonical Onyx dark tokens (onyx preset.json) — static, no runtime theme
+ * fetch. The --h-* names are kept as a stable seam so consumers didn't need
+ * rewriting when we migrated off herdr's 18-palette switcher onto Onyx.
  */
 :root {
-  --h-bg: #191724; /* base — matches terminal bg */
-  --h-panel: #1f1d2e; /* surface */
-  --h-border: #26233a; /* overlay */
-  --h-hover: #26233a; /* hover/elevated surface */
-  --h-fg: #e0def4; /* text */
-  --h-muted: #6e6a86; /* muted */
-  --h-accent: #9ccfd8; /* foam */
-  --h-accent-dim: #9ccfd826;
-  --h-dir: #c4a7e7; /* iris */
-  --h-good: #9ccfd8; /* foam */
-  --h-warn: #f6c177; /* gold */
-  --h-bad: #eb6f92; /* love */
+  --h-bg: #06070c; /* onyx --bg (base, matches terminal bg) */
+  --h-panel: #0a0b12; /* onyx --bg-1 (cards/panels) */
+  --h-border: #1f2230; /* onyx --line */
+  --h-hover: #11131c; /* onyx --bg-2 (hover/elevated surface) */
+  --h-fg: #f4f5fa; /* onyx --fg */
+  --h-muted: #6b7080; /* onyx --fg-2 */
+  --h-accent: #7b7fff; /* onyx --accent (indigo) */
+  --h-accent-dim: rgba(123, 127, 255, 0.18); /* onyx --accent-fade */
+  --h-dir: #9498ff; /* onyx --accent-1 */
+  --h-good: #4ade9a; /* onyx --ok */
+  --h-warn: #f2b144; /* onyx --warn */
+  --h-bad: #f2545b; /* onyx --danger */
 
-  --radius: 0.375rem;
+  --radius: 0.25rem; /* onyx — near-flat */
 
   /* shadcn tokens → herdr palette */
   --background: var(--h-bg);
   --foreground: var(--h-fg);
   --card: var(--h-panel);
   --card-foreground: var(--h-fg);
-  --popover: var(--h-panel);
+  --popover: var(--h-hover); /* onyx dark popover = --bg-2 */
   --popover-foreground: var(--h-fg);
   --primary: var(--h-accent);
   --primary-foreground: var(--h-bg);
@@ -129,12 +177,17 @@
   }
   body {
     @apply bg-background text-foreground;
-    font:
-      13px / 1.5 ui-monospace,
-      SFMono-Regular,
-      Menlo,
-      Consolas,
-      monospace;
+    font: 13px / 1.5 var(--font-sans);
+  }
+  /* Onyx selection + focus treatment (onyx preset.json css block): indigo-tinted
+   * selection, a 1px indigo focus ring at 2px offset. */
+  ::selection {
+    background: rgba(123, 127, 255, 0.18);
+    color: #f4f5fa;
+  }
+  :focus-visible {
+    outline: 1px solid #7b7fff;
+    outline-offset: 2px;
   }
 }
 

@@ -6,7 +6,6 @@ export interface ActiveState {
   cwd?: string
   pane_id?: string
   panes_rev?: number
-  theme_rev?: number
   // Active host ("local" or an ssh-config alias) and a counter that bumps on
   // every host switch so the browser can reload the terminal iframes.
   host?: string
@@ -154,15 +153,6 @@ export interface VersionInfo {
   err?: string
 }
 
-export interface ThemePayload {
-  name: string
-  resolved: string
-  customized: boolean
-  css: string
-  // xterm.js ITheme — shape is opaque to us; we hand it straight to the iframe.
-  xterm: Record<string, unknown>
-}
-
 // ---------------------------------------------------------------------------
 // Sidebar tree (tmux era): repos → worktrees, plus a flat agent list.
 // ---------------------------------------------------------------------------
@@ -227,11 +217,6 @@ export interface AgentRow {
   repo?: string
   cwd: string
   prompt?: string
-}
-
-export interface ThemeMeta {
-  name: string
-  light: boolean
 }
 
 // httpError builds a concise Error from a non-OK response. lasso/herdr return
@@ -359,7 +344,6 @@ function withHost(url: string, host?: string): string {
 
 export const api = {
   active: () => getJSON<ActiveState>("/api/active"),
-  theme: () => getJSON<ThemePayload>("/api/theme"),
 
   // The ssh-config hosts probed for a compatible herdr server. ?refresh=1 skips
   // the server-side cache (the footer's manual refresh).
@@ -520,11 +504,6 @@ export const api = {
       "/api/create-worktree",
       body
     ),
-
-  // Themes: list available + select one (the select repaints via SSE).
-  themes: () =>
-    getJSON<{ themes: ThemeMeta[]; selected: string }>("/api/themes"),
-  setTheme: (name: string) => postJSON<{ ok: boolean }>("/api/theme", { name }),
 
   files: (path: string) =>
     getJSON<DirListing>(`/api/files?path=${encodeURIComponent(path)}`),

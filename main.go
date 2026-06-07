@@ -63,24 +63,7 @@ var (
 	statusEvery = flag.Duration("status-poll", 750*time.Millisecond, "interval the agent-status poller scrapes tmux panes (paused when no browser is connected)")
 	allowNoAuth = flag.Bool("insecure-no-auth", false, "permit a non-loopback bind without auth (tailnet-only use; never on a public interface)")
 	devMode     = flag.Bool("dev", false, "dev mode: fall forward to the next free web port if the requested one is busy (so multiple instances coexist). The frontend itself is served by the Vite dev server with hot reload — see `mise run dev`.")
-	themeName   = flag.String("theme", "auto", "color theme: \"auto\" follows herdr's config.toml live, or force a herdr theme name — dark: catppuccin/tokyo-night/dracula/nord/gruvbox/one-dark/solarized/kanagawa/rose-pine/vesper/terminal; light: catppuccin-latte/tokyo-night-day/gruvbox-light/one-light/solarized-light/kanagawa-lotus/rose-pine-dawn")
 )
-
-// theme is resolved at startup (mirroring herdr's config) and drives both the
-// embedded terminal's palette and the sidebar CSS. The hub re-resolves it live
-// (see hub.curTheme); this global only seeds the initial page + ttyd spawn.
-var theme resolvedTheme
-
-// themePayload is the JSON served at /api/theme: the resolved theme's CSS
-// variables (for the sidebar) and xterm.js ITheme (for the live terminal), so
-// the browser can repaint both when herdr's theme changes without a reload.
-type themePayload struct {
-	Name       string          `json:"name"`
-	Resolved   string          `json:"resolved"`
-	Customized bool            `json:"customized"`
-	CSS        string          `json:"css"`   // :root declaration lines
-	Xterm      json.RawMessage `json:"xterm"` // xterm.js ITheme object
-}
 
 func defaultSock() string {
 	if p := os.Getenv("HERDR_SOCKET_PATH"); p != "" {
@@ -118,13 +101,6 @@ func runServer() {
 			"or pass -insecure-no-auth to bind bare (only safe on a private interface like tailscale0)", *listenAddr)
 	}
 
-	theme = loadTheme()
-	if theme.Customized {
-		log.Printf("theme:    %q -> %s (+custom overrides)", theme.Name, theme.Resolved)
-	} else {
-		log.Printf("theme:    %q -> %s", theme.Name, theme.Resolved)
-	}
-
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
@@ -155,39 +131,6 @@ func runServer() {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/api/active", func(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, hub.snapshot())
-	})
-	mux.HandleFunc("/api/theme", func(w http.ResponseWriter, r *http.Request) {
-		if r.Method == http.MethodPost {
-			var req struct {
-				Name string `json:"name"`
-			}
-			if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-				http.Error(w, err.Error(), http.StatusBadRequest)
-				return
-			}
-			if _, ok := themes[normalizeThemeName(req.Name)]; !ok {
-				http.Error(w, "unknown theme", http.StatusBadRequest)
-				return
-			}
-			if err := setSetting("theme", req.Name); err != nil {
-				http.Error(w, err.Error(), http.StatusInternalServerError)
-				return
-			}
-			hub.bumpTheme() // re-resolve + push the new palette over SSE
-			writeJSON(w, map[string]any{"ok": true})
-			return
-		}
-		rt := hub.themeSnapshot()
-		writeJSON(w, themePayload{
-			Name:       rt.Name,
-			Resolved:   rt.Resolved,
-			Customized: rt.Customized,
-			CSS:        rt.cssVars(),
-			Xterm:      json.RawMessage(rt.xtermJSON()),
-		})
-	})
-	mux.HandleFunc("/api/themes", func(w http.ResponseWriter, r *http.Request) {
-		writeJSON(w, map[string]any{"themes": availableThemes(), "selected": getSettingValue("theme")})
 	})
 	mux.HandleFunc("/api/events", hub.serveSSE)
 	mux.HandleFunc("/api/files", serveFiles)
@@ -387,18 +330,11 @@ func startTtydArgv(ctx context.Context, sock, basePath string, cmdArgv []string,
 	// can bind.
 	_ = os.Remove(sock)
 
-	// The xterm.js ITheme (background/foreground/cursor + 16 ANSI colors) is
-	// derived from herdr's selected theme, so the terminal palette lines up
-	// with herdr's chrome and the sidebar. Passed to ttyd via `-t theme=<json>`,
-	// which forwards it to xterm.js in the browser. Seed from the hub's *live*
-	// theme (the global `theme` is only the startup snapshot) so a terminal
-	// spawned after a theme change — e.g. a Grid cell, or a host-switch respawn —
-	// starts on the current palette rather than flashing the stale one before the
-	// browser re-applies it.
-	xtheme := theme.xtermJSON()
-	if srvHub != nil {
-		xtheme = srvHub.themeSnapshot().xtermJSON()
-	}
+	// The xterm.js ITheme (background/foreground/cursor + 16 ANSI colors) is the
+	// fixed Onyx palette, passed to ttyd via `-t theme=<json>` so the terminal
+	// starts already themed rather than flashing ttyd's default light palette
+	// before the browser re-applies it (see web/src/lib/theme.ts).
+	xtheme := onyxXtermJSON
 	args := []string{
 		"-i", sock, // private unix socket (ttyd accepts a socket path here)
 		"-b", basePath, // base path so assets/ws resolve under the proxy
@@ -564,7 +500,6 @@ type Active struct {
 	Agent          string `json:"agent"`
 	AgentStatus    string `json:"agent_status"`
 	PanesRev       int    `json:"panes_rev"` // bumps when the workspace/tab tree changes
-	ThemeRev       int    `json:"theme_rev"` // bumps when the selected theme changes (Settings)
 	HerdrUp        bool   `json:"herdr_up"`  // retained for the frontend transition; always true under tmux
 	Host           string `json:"host"`      // active host: always "local" (multi-host deferred)
 	TermRev        int    `json:"term_rev"`  // bumps so the browser reloads terminal iframes
@@ -1670,22 +1605,19 @@ func subscribeEvents(ctx context.Context, trigger chan<- struct{}) {
 // ---------------------------------------------------------------------------
 
 type hub struct {
-	mu       sync.RWMutex
-	cur      Active
-	rev      int    // pane-grid layout revision (bumped when lastSig changes)
-	lastSig  string // last seen layout signature
-	themeRev int    // theme revision (bumped when the resolved theme changes)
-	termRev  int    // host-switch revision (bumped so the browser reloads terminals)
-	curTheme resolvedTheme
-	clients  map[chan Active]struct{}
+	mu      sync.RWMutex
+	cur     Active
+	rev     int    // pane-grid layout revision (bumped when lastSig changes)
+	lastSig string // last seen layout signature
+	termRev int    // host-switch revision (bumped so the browser reloads terminals)
+	clients map[chan Active]struct{}
 
 	rootCtx context.Context
 	trigger chan struct{}
 }
 
-// newHub seeds the hub's theme with the one resolved at startup.
 func newHub() *hub {
-	return &hub{cur: Active{HerdrUp: true}, curTheme: theme, clients: map[chan Active]struct{}{}}
+	return &hub{cur: Active{HerdrUp: true}, clients: map[chan Active]struct{}{}}
 }
 
 // kick forces a near-immediate refresh (non-blocking). The status poller and the
@@ -1706,22 +1638,6 @@ func (h *hub) clientCount() int {
 	return len(h.clients)
 }
 
-// bumpTheme re-resolves the selected theme and, if it changed, bumps themeRev and
-// kicks an SSE frame so the browser repaints. Called by POST /api/theme.
-func (h *hub) bumpTheme() {
-	rt := loadTheme()
-	h.mu.Lock()
-	changed := rt != h.curTheme
-	if changed {
-		h.curTheme = rt
-		h.themeRev++
-	}
-	h.mu.Unlock()
-	if changed {
-		h.kick()
-	}
-}
-
 // bumpTermRev increments the terminal-reload counter so the next SSE frame tells
 // the browser to reload the terminal iframes (their ttyd sessions were respawned
 // against the new host).
@@ -1731,8 +1647,7 @@ func (h *hub) bumpTermRev() {
 	h.mu.Unlock()
 }
 
-func (h *hub) snapshot() Active             { h.mu.RLock(); defer h.mu.RUnlock(); return h.cur }
-func (h *hub) themeSnapshot() resolvedTheme { h.mu.RLock(); defer h.mu.RUnlock(); return h.curTheme }
+func (h *hub) snapshot() Active { h.mu.RLock(); defer h.mu.RUnlock(); return h.cur }
 
 func (h *hub) run(ctx context.Context) {
 	h.rootCtx = ctx
@@ -1767,7 +1682,6 @@ func (h *hub) run(ctx context.Context) {
 			HerdrUp:       true,
 			Host:          "local",
 			PanesRev:      h.rev,
-			ThemeRev:      h.themeRev,
 			TermRev:       h.termRev,
 			AgentStatuses: statuses,
 		}
@@ -1804,7 +1718,7 @@ func (h *hub) run(ctx context.Context) {
 // sameActive compares two Active values including the AgentStatuses map (Active
 // is no longer comparable with == because it carries a map).
 func sameActive(a, b Active) bool {
-	if a.PanesRev != b.PanesRev || a.ThemeRev != b.ThemeRev || a.TermRev != b.TermRev ||
+	if a.PanesRev != b.PanesRev || a.TermRev != b.TermRev ||
 		a.Host != b.Host || a.HerdrUp != b.HerdrUp || len(a.AgentStatuses) != len(b.AgentStatuses) {
 		return false
 	}
@@ -2166,16 +2080,8 @@ func serveSPAIndex(w http.ResponseWriter, dist fs.FS) {
 		http.Error(w, "frontend build missing (run `bun run build` in web/)", http.StatusInternalServerError)
 		return
 	}
-	// Inject the server-resolved herdr theme into <head> so the first paint
-	// matches config.toml instead of flashing index.css's fallback palette
-	// before the SPA boots and fetches /api/theme. index.html is served
-	// no-store (below), so each reload re-injects the current resolved theme.
-	// A missing </head> (shouldn't happen with the Vite build) leaves the HTML
-	// untouched — graceful fallback.
-	if srvHub != nil {
-		style := `<style id="lasso-theme-boot">` + srvHub.themeSnapshot().cssVarsRoot() + `</style>`
-		b = []byte(strings.Replace(string(b), "</head>", style+"</head>", 1))
-	}
+	// No theme injection needed: Onyx tokens are static in the bundled
+	// index.css, so the first paint is already correct (no flash).
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	w.Header().Set("Cache-Control", "no-store")
 	_, _ = w.Write(b)
