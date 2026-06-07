@@ -263,39 +263,34 @@ func primeShellPromptWhenAttached(session string) {
 	if !waitAttached(session) {
 		return
 	}
-	// Wait for rc to finish (the screen stops changing) before the single Enter.
-	deadline := time.Now().Add(20 * time.Second)
-	prev, stable := "\x00", 0
+	// Send an Enter every ~400ms and stop the instant the pane has content. While
+	// rc is still booting bash flushes typeahead, so those Enters are DISCARDED
+	// (not buffered) — no stacking; the FIRST Enter after the shell goes
+	// interactive lands and prints exactly one prompt, whose output streams to the
+	// attached client (an Enter is an input event, which is exactly what makes tmux
+	// stream to the client). We poll across the whole rc boot (not the ~1s the old
+	// per-tab ttyd needed): the viewport attaches the warm client instantly, so
+	// unlike a fresh ttyd — which arrived after rc had finished — we reach the shell
+	// mid-boot and must keep trying until it's ready. No resize nudge here: it
+	// reflows the freshly-streamed prompt and can leave a duplicate `❯` in the
+	// client's buffer.
+	deadline := time.Now().Add(25 * time.Second)
 	for time.Now().Before(deadline) {
 		if !tmuxHasSession(session) {
 			return
 		}
-		if stable >= 3 { // ~1s unchanged → rc has quiesced at its (unpainted) prompt
-			break
-		}
-		cur, _ := tmuxCapture(session)
-		if cur == prev {
-			stable++
-		} else {
-			prev, stable = cur, 0
-		}
-		time.Sleep(350 * time.Millisecond)
-	}
-	if !tmuxHasSession(session) {
-		return
-	}
-	_ = tmuxSendEnter(session) // the single, effective line-accept
-	// Wait for the prompt to paint, then push it to the (idle) warm client.
-	for i := 0; i < 15; i++ {
-		if !tmuxHasSession(session) {
+		if out, _ := tmuxCapture(session); strings.TrimSpace(out) != "" {
+			// Prompt is in the grid. Force the warm client to take a clean full
+			// frame of it — an incremental stream to a switched client is
+			// unreliable, and a resize nudge reflows it into a duplicate `❯`. A
+			// switch-client always sends a full redraw (it's how switching to an
+			// existing tab renders correctly), so bounce the client off and back.
+			forceViewportRedraw(session)
 			return
 		}
-		if out, _ := tmuxCapture(session); strings.TrimSpace(out) != "" {
-			break
-		}
-		time.Sleep(200 * time.Millisecond)
+		_ = tmuxSendEnter(session)
+		time.Sleep(400 * time.Millisecond)
 	}
-	nudgeRedraw(session)
 }
 
 // --- the persistent viewport: one ttyd, switched between sessions -------------

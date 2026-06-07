@@ -214,6 +214,25 @@ func viewportWatcher() {
 	}
 }
 
+// forceViewportRedraw makes every client currently viewing session take a clean
+// full frame of it, by bouncing it to the park session and straight back.
+// switch-client always pushes a full redraw (unlike an incremental stream to an
+// already-attached client, which tmux delivers unreliably) — this is the same
+// mechanism that makes switching to an existing tab render correctly. Used after
+// a fresh shell's prompt is primed into the grid.
+func forceViewportRedraw(session string) {
+	park := tmuxParkSession()
+	if park == session {
+		return
+	}
+	for tty, sess := range tmuxClientSessions() {
+		if sess == session {
+			_ = tmuxSwitchClient(tty, park)
+			_ = tmuxSwitchClient(tty, session)
+		}
+	}
+}
+
 // serveTabTermProxy routes /tab-term/<token>/… to the viewport ttyd (HTTP + WS).
 func serveTabTermProxy(w http.ResponseWriter, r *http.Request) {
 	rest := strings.TrimPrefix(r.URL.Path, "/tab-term/")
