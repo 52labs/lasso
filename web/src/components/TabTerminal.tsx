@@ -1,5 +1,6 @@
 import * as React from "react"
 
+import { EmptyWorkspace } from "@/components/EmptyWorkspace"
 import { api } from "@/lib/api"
 import { bootTermFrame, focusTerminal, refitTerminal } from "@/lib/terminal"
 
@@ -116,11 +117,7 @@ export function TabTerminal({ tabId }: { tabId: string | null }) {
           style={{ display: tabId ? "block" : "none" }}
         />
       )}
-      {!tabId && (
-        <div className="flex h-full items-center justify-center text-muted-foreground text-sm">
-          No tab selected. Create an agent, or pick a workspace.
-        </div>
-      )}
+      {!tabId && <EmptyWorkspace />}
       {tabId && (!base || !ready) && (
         <div className="absolute inset-0 flex items-center justify-center gap-2 bg-[var(--h-bg)] text-muted-foreground text-sm">
           <span className="size-3.5 animate-spin rounded-full border-2 border-current border-t-transparent" />

@@ -362,8 +362,11 @@ function Shell() {
             </div>
             <div className="relative flex min-h-0 flex-1 flex-col">
               {/* One persistent viewport, mounted once and pointed at the
-                  selected tab — never remounted per tab (see TabTerminal). */}
-              <TabTerminal tabId={selectedTabId ?? null} />
+                  selected tab — never remounted per tab (see TabTerminal). Pass
+                  null when the selection doesn't resolve to a workspace (matches
+                  the strip's "no workspace selected") so TabTerminal hides the
+                  iframe and shows the empty state instead of a stray session. */}
+              <TabTerminal tabId={activeWorkspace ? selectedTabId : null} />
             </div>
           </div>
         </ResizablePanel>
