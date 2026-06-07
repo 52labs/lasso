@@ -317,9 +317,26 @@ func listAgentsTool(_ context.Context, _ *mcp.CallToolRequest, in listAgentsIn) 
 	}
 	out := listAgentsOut{Host: host}
 	for _, rec := range recs {
+		// The agents table is an append-only log; only surface agents whose tab is
+		// still open (close_agent soft-closes the tab), so list_agents reflects LIVE
+		// agents — matching the sidebar tree.
+		if !agentTabLive(rec) {
+			continue
+		}
 		out.Agents = append(out.Agents, agentInfoFrom(host, rec, agentStatusNow(rec)))
 	}
 	return nil, out, nil
+}
+
+// agentTabLive reports whether an agent record's backing tab is still open. Falls
+// back to a live tmux session when the record predates the tabs table.
+func agentTabLive(rec AgentRecord) bool {
+	if rec.TabID != "" {
+		if t, err := getTab(rec.TabID); err == nil {
+			return t.ClosedAt.IsZero()
+		}
+	}
+	return tmuxHasSession(agentSession(rec))
 }
 
 // ---------------------------------------------------------------------------
@@ -554,7 +571,8 @@ func closeAgentTool(_ context.Context, _ *mcp.CallToolRequest, in closeAgentIn) 
 				return nil, out, fmt.Errorf("git worktree remove: %w", err)
 			}
 		}
-		out.PaneClosed, out.RemovedWorktree = true, true
+		// Killing the tabs' sessions (closeOneTab) takes the agent process with them.
+		out.AgentKilled, out.PaneClosed, out.RemovedWorktree = true, true, true
 		kickHub()
 		return nil, out, nil
 	}
@@ -568,7 +586,9 @@ func closeAgentTool(_ context.Context, _ *mcp.CallToolRequest, in closeAgentIn) 
 	if len(mustTabs(rec.WorkspaceID)) == 0 {
 		_ = closeWorkspace(rec.WorkspaceID)
 	}
-	out.PaneClosed = true
+	// closeOneTab kills the tab's tmux session, which ends the agent process even
+	// if the earlier in-band Ctrl-C didn't (agents often ignore a lone SIGINT).
+	out.AgentKilled, out.PaneClosed = true, true
 	kickHub()
 	return nil, out, nil
 }
