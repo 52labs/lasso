@@ -1,8 +1,8 @@
 import * as React from "react"
 
 import { type ActiveState, api } from "@/lib/api"
+import { applyMode, watchSystemMode } from "@/lib/mode"
 import { invalidateHostScoped } from "@/lib/query"
-import { applyOnyxTheme } from "@/lib/theme"
 
 // App-wide state derived from herdr, kept live over the /api/events SSE stream.
 // Components read activeCwd/activePaneID/panesRev reactively and run their own
@@ -88,11 +88,12 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     return () => es?.close()
   }, [apply])
 
-  // Pin the terminals to the fixed Onyx palette + Nerd Font once on mount. The
-  // UI/CSS side is static (Onyx tokens in index.css); this only themes the live
-  // ttyd terminals. The reconciler re-pins them across ttyd reconnects.
+  // Apply the saved appearance mode on mount (sets the html dark/light class +
+  // pins the matching xterm palette) and keep it in sync with the OS while on
+  // "system". The reconciler re-pins terminals across ttyd reconnects.
   React.useEffect(() => {
-    applyOnyxTheme()
+    applyMode()
+    watchSystemMode()
   }, [])
 
   return <AppContext.Provider value={state}>{children}</AppContext.Provider>

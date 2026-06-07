@@ -114,10 +114,13 @@
 /*
  * The Onyx palette. These --h-* variables are the single source of truth for
  * lasso's colors: every bespoke view below, the CodeMirror theme, highlight.js,
- * and shadcn's design tokens (mapped onto them) all cascade from here. Values are
- * the canonical Onyx dark tokens (onyx preset.json) — static, no runtime theme
- * fetch. The --h-* names are kept as a stable seam so consumers didn't need
- * rewriting when we migrated off herdr's 18-palette switcher onto Onyx.
+ * and shadcn's design tokens (mapped onto them) all cascade from here. :root holds
+ * the canonical Onyx *dark* tokens (onyx preset.json); the `:root.light` block
+ * below overrides only the --h-* values for light mode, so every shadcn token and
+ * bespoke view flips automatically. The active mode is set as a dark/light class
+ * on <html> (see lib/mode.ts + the inline script in index.html). The --h-* names
+ * are kept as a stable seam so consumers didn't need rewriting when we migrated
+ * off herdr's 18-palette switcher onto Onyx.
  */
 :root {
   --h-bg: #06070c; /* onyx --bg (base, matches terminal bg) */
@@ -164,6 +167,25 @@
   --sidebar-ring: var(--h-accent);
 }
 
+/* Light mode — override only the --h-* seam with Onyx's light tokens (onyx
+ * preset.json light block); the shadcn-token mapping in :root re-resolves to
+ * these automatically. Semantic colors (good/warn/bad) are darkened from Onyx's
+ * bright pastels so they stay legible as text on the light canvas. */
+:root.light {
+  --h-bg: #f4f5fa; /* onyx light background */
+  --h-panel: #ffffff; /* onyx light card */
+  --h-border: #d6d9e6; /* onyx light border */
+  --h-hover: #e5e7f0; /* onyx light secondary/muted */
+  --h-fg: #06070c; /* onyx light foreground */
+  --h-muted: #6b7080; /* onyx --fg-2 */
+  --h-accent: #5c61e6; /* onyx light primary (deeper indigo) */
+  --h-accent-dim: rgba(92, 97, 230, 0.14);
+  --h-dir: #5c61e6;
+  --h-good: #15935f; /* darkened ok for light-bg legibility */
+  --h-warn: #a8780f; /* darkened warn */
+  --h-bad: #d63d44; /* darkened danger */
+}
+
 @layer base {
   * {
     @apply border-border outline-ring/50;
@@ -179,14 +201,15 @@
     @apply bg-background text-foreground;
     font: 13px / 1.5 var(--font-sans);
   }
-  /* Onyx selection + focus treatment (onyx preset.json css block): indigo-tinted
-   * selection, a 1px indigo focus ring at 2px offset. */
+  /* Onyx selection + focus treatment (onyx preset.json css block): accent-tinted
+   * selection, a 1px accent focus ring at 2px offset. Uses the --h-* vars so it
+   * adapts to light/dark. */
   ::selection {
-    background: rgba(123, 127, 255, 0.18);
-    color: #f4f5fa;
+    background: var(--h-accent-dim);
+    color: var(--h-fg);
   }
   :focus-visible {
-    outline: 1px solid #7b7fff;
+    outline: 1px solid var(--h-accent);
     outline-offset: 2px;
   }
 }

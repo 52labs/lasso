@@ -1,9 +1,26 @@
 <!doctype html>
-<html lang="en" class="dark">
+<html lang="en">
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>lasso</title>
+    <!-- Apply the saved appearance mode (system|light|dark) before first paint so
+         there's no flash of the wrong theme. Mirrors lib/mode.ts. -->
+    <script>
+      ;(() => {
+        let m, dark
+        try {
+          m = localStorage.getItem("lasso-mode") || "system"
+          dark =
+            m === "dark" ||
+            (m !== "light" &&
+              window.matchMedia("(prefers-color-scheme: dark)").matches)
+          document.documentElement.classList.add(dark ? "dark" : "light")
+        } catch {
+          document.documentElement.classList.add("dark")
+        }
+      })()
+    </script>
     <link rel="icon" type="image/x-icon" href="/favicon.ico" />
     <link rel="icon" type="image/png" sizes="32x32" href="/favicon-32.png" />
     <link rel="icon" type="image/png" sizes="16x16" href="/favicon-16.png" />

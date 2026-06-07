@@ -1,5 +1,5 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
-import { Keyboard, RotateCw } from "lucide-react"
+import { Keyboard, Monitor, Moon, RotateCw, Sun } from "lucide-react"
 import * as React from "react"
 import { Pill } from "@/components/Pill"
 import { Button } from "@/components/ui/button"
@@ -11,6 +11,7 @@ import {
 } from "@/components/ui/dialog"
 import { api } from "@/lib/api"
 import { useApp } from "@/lib/app-store"
+import { getMode, type Mode, setMode } from "@/lib/mode"
 import { qk } from "@/lib/query"
 import { SHORTCUTS } from "@/lib/shortcuts"
 import { cn } from "@/lib/utils"
@@ -124,6 +125,7 @@ export function SettingsTab({ active }: { active: boolean }) {
       </header>
 
       <div className="@container min-h-0 flex-1 overflow-y-auto px-3 py-4">
+        <AppearanceToggle />
         <div className="mb-4 flex flex-col gap-1">
           <label className={labelClass} htmlFor="settings-host">
             Configuring host
@@ -154,6 +156,48 @@ export function SettingsTab({ active }: { active: boolean }) {
       </div>
 
       <ShortcutsDialog open={shortcutsOpen} onOpenChange={setShortcutsOpen} />
+    </div>
+  )
+}
+
+// AppearanceToggle picks the UI + terminal color mode: System (follow the OS),
+// Light, or Dark. The choice persists in localStorage and applies live (sets the
+// html dark/light class + re-pins the terminal palette) via lib/mode.
+function AppearanceToggle() {
+  const [mode, setModeState] = React.useState<Mode>(() => getMode())
+  const choose = (m: Mode) => {
+    setModeState(m)
+    setMode(m)
+  }
+  const opts: { m: Mode; label: string; Icon: typeof Monitor }[] = [
+    { m: "system", label: "System", Icon: Monitor },
+    { m: "light", label: "Light", Icon: Sun },
+    { m: "dark", label: "Dark", Icon: Moon },
+  ]
+  return (
+    <div className="mb-4 flex flex-col gap-1">
+      <span className={labelClass}>Appearance</span>
+      <div className="inline-flex w-fit gap-0.5 rounded-lg border border-border p-0.5">
+        {opts.map(({ m, label, Icon }) => (
+          <button
+            key={m}
+            type="button"
+            onClick={() => choose(m)}
+            className={cn(
+              "inline-flex items-center gap-1.5 rounded-md px-2.5 py-1 text-[13px] transition-colors",
+              mode === m
+                ? "bg-primary text-primary-foreground"
+                : "text-muted-foreground hover:text-foreground"
+            )}
+          >
+            <Icon className="size-3.5" />
+            {label}
+          </button>
+        ))}
+      </div>
+      <p className="text-[11px] text-muted-foreground">
+        Applies to the UI and terminals. System follows your OS setting.
+      </p>
     </div>
   )
 }

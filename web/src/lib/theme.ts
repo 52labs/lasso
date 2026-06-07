@@ -1,11 +1,11 @@
-// ONYX_XTERM_THEME is the fixed xterm.js palette for every terminal, derived
-// from the Onyx design tokens (onyx preset.json / colors_and_type.css). It runs
-// indigo-forward to match Onyx's cool, achromatic-plus-indigo look: the cool
-// slots (blue+cyan+magenta) all collapse into the indigo accent family, while
-// green/yellow/red stay as the Onyx ok/warn/danger tokens so they remain
-// functional status colors (git diff, ls). Replaces the old per-theme palette
-// the server pushed over /api/theme; the theme switcher is gone (dark-only Onyx).
-export const ONYX_XTERM_THEME: Record<string, unknown> = {
+// The xterm.js palettes for the terminal, derived from the Onyx design tokens
+// (onyx preset.json / colors_and_type.css). Both run indigo-forward to match
+// Onyx's cool, achromatic-plus-indigo look — the cool slots (blue+cyan+magenta)
+// collapse into the indigo accent family, while green/yellow/red stay as the
+// ok/warn/danger tokens so they remain functional status colors (git diff, ls).
+// Which one is live follows the app's appearance mode (see lib/mode.ts); the
+// browser re-pins it on mode change and across ttyd reconnects.
+export const ONYX_XTERM_DARK: Record<string, unknown> = {
   background: "#06070c",
   foreground: "#f4f5fa",
   cursor: "#7b7fff",
@@ -27,6 +27,32 @@ export const ONYX_XTERM_THEME: Record<string, unknown> = {
   brightMagenta: "#b3a4ff",
   brightCyan: "#b3a4ff",
   brightWhite: "#f4f5fa",
+}
+
+// Light mode: dark text on Onyx's light canvas; the bright pastels are darkened
+// so they stay legible on a light background.
+export const ONYX_XTERM_LIGHT: Record<string, unknown> = {
+  background: "#f4f5fa",
+  foreground: "#1a1c23",
+  cursor: "#5c61e6",
+  cursorAccent: "#f4f5fa",
+  selectionBackground: "rgba(92, 97, 230, 0.20)",
+  black: "#1a1c23",
+  red: "#c83a41",
+  green: "#1a9259",
+  yellow: "#a8780f",
+  blue: "#5c61e6",
+  magenta: "#5c61e6",
+  cyan: "#5c61e6",
+  white: "#8a8f9c",
+  brightBlack: "#6b7080",
+  brightRed: "#e0545b",
+  brightGreen: "#28a86a",
+  brightYellow: "#c9941f",
+  brightBlue: "#7b7fff",
+  brightMagenta: "#7b7fff",
+  brightCyan: "#7b7fff",
+  brightWhite: "#1a1c23",
 }
 
 // Legacy fixed terminal iframes (the herdr terminal + right shell), kept for
@@ -230,14 +256,16 @@ export function startTermThemeReconciler() {
   termThemeReconciler = setInterval(reconcileTermTheme, 1500)
 }
 
-// applyOnyxTheme pins every terminal to the fixed Onyx palette + Nerd Font. The
-// UI/CSS side is now static (Onyx tokens baked into index.css), so this only
-// drives the live terminals: it sets the xterm.js theme inside the same-origin
-// ttyd iframes (no reconnect) and injects the terminal font. Called once on app
-// mount; the reconciler (startTermThemeReconciler) re-pins across ttyd
+// applyTermThemeForMode pins every terminal to the Onyx palette for the given
+// resolved appearance ("light" | "dark") plus the Nerd Font. The UI/CSS side is
+// driven by the html dark/light class (see lib/mode.ts); this drives the live
+// terminals — it sets the xterm.js theme inside the same-origin ttyd iframes (no
+// reconnect) and injects the terminal font. Called on mount and whenever the mode
+// changes; the reconciler (startTermThemeReconciler) re-pins across ttyd
 // reconnects.
-export function applyOnyxTheme() {
-  lastXtermTheme = ONYX_XTERM_THEME
-  applyTermTheme(ONYX_XTERM_THEME, 0)
+export function applyTermThemeForMode(resolved: "light" | "dark") {
+  const theme = resolved === "light" ? ONYX_XTERM_LIGHT : ONYX_XTERM_DARK
+  lastXtermTheme = theme
+  applyTermTheme(theme, 0)
   applyTermFont(0)
 }
