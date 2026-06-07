@@ -144,6 +144,7 @@ export function Sidebar({
     })
   }, [])
   const clearDel = React.useCallback(() => setDelSel(new Set()), [])
+  const openBulkDelete = React.useCallback(() => setConfirmBulk(true), [])
   // Clear the selection with Escape.
   React.useEffect(() => {
     if (delSel.size === 0) return
@@ -152,6 +153,21 @@ export function Sidebar({
     }
     window.addEventListener("keydown", onKey)
     return () => window.removeEventListener("keydown", onKey)
+  }, [delSel.size, clearDel])
+  // Clicking away dismisses the selection: any plain left-click outside the
+  // selection's own controls clears it. ⌘-clicks (toggling more in) and
+  // right-clicks (the delete menu) are left alone, as are elements tagged
+  // data-bulk-keep (the action bar, confirm dialog, and delete context menu).
+  React.useEffect(() => {
+    if (delSel.size === 0) return
+    const onDown = (e: MouseEvent) => {
+      if (e.button !== 0 || e.metaKey || e.ctrlKey) return
+      const el = e.target as HTMLElement | null
+      if (el?.closest("[data-bulk-keep]")) return
+      clearDel()
+    }
+    document.addEventListener("mousedown", onDown, true)
+    return () => document.removeEventListener("mousedown", onDown, true)
   }, [delSel.size, clearDel])
   const bulkDelete = React.useCallback(async () => {
     const ids = [...delSel]
@@ -185,6 +201,7 @@ export function Sidebar({
                   depth={1}
                   delSel={delSel}
                   onToggleDel={toggleDel}
+                  onBulkDelete={openBulkDelete}
                 />
               ))}
               {(tree.data?.repos ?? []).map((repo) => (
@@ -195,6 +212,7 @@ export function Sidebar({
                   onSelectTab={onSelectTab}
                   delSel={delSel}
                   onToggleDel={toggleDel}
+                  onBulkDelete={openBulkDelete}
                 />
               ))}
             </div>
@@ -219,7 +237,10 @@ export function Sidebar({
         {/* Bulk-delete bar: appears while one or more workspaces are ⌘/Ctrl-clicked
             (or selected via the context menu). */}
         {delSel.size > 0 && (
-          <div className="absolute inset-x-0 bottom-0 flex items-center gap-2 border-border border-t bg-card px-3 py-1.5">
+          <div
+            data-bulk-keep
+            className="absolute inset-x-0 bottom-0 flex items-center gap-2 border-border border-t bg-card px-3 py-1.5"
+          >
             <span className="text-muted-foreground text-xs">
               {delSel.size} selected
             </span>
@@ -248,7 +269,7 @@ export function Sidebar({
           onSubmit={submitNewWorkspace}
         />
         <AlertDialog open={confirmBulk} onOpenChange={setConfirmBulk}>
-          <AlertDialogContent>
+          <AlertDialogContent data-bulk-keep>
             <AlertDialogHeader>
               <AlertDialogTitle>
                 Delete {delSel.size} workspace{delSel.size === 1 ? "" : "s"}?
@@ -304,12 +325,14 @@ function RepoNode({
   onSelectTab,
   delSel,
   onToggleDel,
+  onBulkDelete,
 }: {
   repo: TreeRepo
   selectedTabId: string | null
   onSelectTab: (tabId: string) => void
   delSel: Set<string>
   onToggleDel: (id: string) => void
+  onBulkDelete: () => void
 }) {
   const { agentStatuses } = useApp()
   const [open, setOpen] = React.useState(true)
@@ -452,6 +475,7 @@ function RepoNode({
             depth={2}
             delSel={delSel}
             onToggleDel={onToggleDel}
+            onBulkDelete={onBulkDelete}
           />
         ))}
     </div>
@@ -470,6 +494,7 @@ function WorkspaceNode({
   depth,
   delSel,
   onToggleDel,
+  onBulkDelete,
 }: {
   ws: TreeWorkspace
   selectedTabId: string | null
@@ -477,6 +502,7 @@ function WorkspaceNode({
   depth: number
   delSel: Set<string>
   onToggleDel: (id: string) => void
+  onBulkDelete: () => void
 }) {
   const { agentStatuses } = useApp()
   const tabs = ws.tabs ?? []
@@ -548,40 +574,50 @@ function WorkspaceNode({
             )}
           </button>
         </ContextMenuTrigger>
-        <ContextMenuContent>
-          <ContextMenuItem
-            onSelect={async () => {
-              const t = await api.newTab(ws.id).catch((e) => {
-                toast.error(String(e))
-                return null
-              })
-              if (t) {
-                treeAddTab(ws.id, { id: t.id, title: t.title, kind: "shell" })
-                onSelectTab(t.id)
-              }
-              refreshTree()
-            }}
-          >
-            New tab
-          </ContextMenuItem>
-          <ContextMenuItem onSelect={() => setRenameOpen(true)}>
-            Rename…
-          </ContextMenuItem>
-          <ContextMenuSeparator />
-          <ContextMenuItem onSelect={() => onToggleDel(ws.id)}>
-            {markedForDelete ? "Deselect" : "Select"} (⌘-click)
-          </ContextMenuItem>
-          <ContextMenuItem
-            variant="destructive"
-            onSelect={() => {
-              // A multi-tab workspace close kills every tab — confirm first.
-              if (tabs.length > 1) setConfirmClose(true)
-              else doClose()
-            }}
-          >
-            Close workspace
-          </ContextMenuItem>
-        </ContextMenuContent>
+        {markedForDelete ? (
+          // Right-clicking a selected workspace during a multi-select offers only
+          // the bulk delete (data-bulk-keep so picking it doesn't clear first).
+          <ContextMenuContent data-bulk-keep>
+            <ContextMenuItem variant="destructive" onSelect={onBulkDelete}>
+              Delete {delSel.size} workspace{delSel.size === 1 ? "" : "s"}
+            </ContextMenuItem>
+          </ContextMenuContent>
+        ) : (
+          <ContextMenuContent>
+            <ContextMenuItem
+              onSelect={async () => {
+                const t = await api.newTab(ws.id).catch((e) => {
+                  toast.error(String(e))
+                  return null
+                })
+                if (t) {
+                  treeAddTab(ws.id, { id: t.id, title: t.title, kind: "shell" })
+                  onSelectTab(t.id)
+                }
+                refreshTree()
+              }}
+            >
+              New tab
+            </ContextMenuItem>
+            <ContextMenuItem onSelect={() => setRenameOpen(true)}>
+              Rename…
+            </ContextMenuItem>
+            <ContextMenuSeparator />
+            <ContextMenuItem onSelect={() => onToggleDel(ws.id)}>
+              Select (⌘-click)
+            </ContextMenuItem>
+            <ContextMenuItem
+              variant="destructive"
+              onSelect={() => {
+                // A multi-tab workspace close kills every tab — confirm first.
+                if (tabs.length > 1) setConfirmClose(true)
+                else doClose()
+              }}
+            >
+              Close workspace
+            </ContextMenuItem>
+          </ContextMenuContent>
+        )}
       </ContextMenu>
 
       <PromptDialog
