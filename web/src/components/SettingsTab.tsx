@@ -155,7 +155,7 @@ function AppearanceToggle() {
 
 // ShortcutsDialog shows the app's keyboard shortcuts (the SHORTCUTS the App key
 // handler implements) in a modal. Reference only — nothing to configure.
-function ShortcutsDialog({
+export function ShortcutsDialog({
   open,
   onOpenChange,
 }: {
