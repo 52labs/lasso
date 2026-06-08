@@ -20,7 +20,7 @@ import { GridTab } from "@/components/GridTab"
 import { HostSwitcher } from "@/components/HostSwitcher"
 import { PaneSwitcher } from "@/components/PaneSwitcher"
 import { ScratchTab } from "@/components/ScratchTab"
-import { SettingsTab } from "@/components/SettingsTab"
+import { SettingsTab, ShortcutsDialog } from "@/components/SettingsTab"
 import { Sidebar } from "@/components/Sidebar"
 import { TabStrip } from "@/components/TabStrip"
 import { TabTerminal } from "@/components/TabTerminal"
@@ -34,7 +34,9 @@ import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import { api, type TreeWorkspace } from "@/lib/api"
 import { AppProvider, lsGet, lsSet } from "@/lib/app-store"
 import { useDiff } from "@/lib/git"
+import { installHistoryToggle } from "@/lib/history-toggle"
 import { qk } from "@/lib/query"
+import { matchShortcut } from "@/lib/shortcuts"
 import { cn } from "@/lib/utils"
 
 type RightView = "files" | "scratch" | "browser" | "grid" | "settings"
@@ -192,6 +194,7 @@ function Shell() {
   const [rightCollapsed, setRightCollapsed] = React.useState(false)
   const [leftCollapsed, setLeftCollapsed] = React.useState(false)
   const [paletteOpen, setPaletteOpen] = React.useState(false)
+  const [shortcutsOpen, setShortcutsOpen] = React.useState(false)
   const [selectedTabId, setSelectedTabId] = React.useState<string | null>(() =>
     lsGet("lasso-selected-tab")
   )
@@ -287,31 +290,34 @@ function Shell() {
     }
   }, [rightView])
 
-  // ⌘[ toggles the left sidebar, ⌘] the right panel, ⌘K the switcher, ⌘I opens
-  // the new-workspace modal. Cmd-only so terminal control keys (Ctrl-*) are never
-  // clobbered; the terminal iframes re-dispatch Cmd shortcuts to this document so
-  // they work with focus inside.
+  // ⌘K opens the switcher, ⌘I the new-workspace modal. Cmd-only so terminal
+  // control keys (Ctrl-*) are never clobbered; the terminal iframes re-dispatch
+  // Cmd shortcuts to this document so they work with focus inside. (⌘[/⌘] are
+  // NOT keydowns — macOS reserves them for history nav and eats them before the
+  // page; they're handled by the history trap below.)
   React.useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
-      if (!e.metaKey || e.ctrlKey || e.altKey || e.shiftKey) return
-      const k = e.key.toLowerCase()
-      if (k === "[") {
-        e.preventDefault()
-        toggleLeft()
-      } else if (k === "]") {
-        e.preventDefault()
-        toggleRight()
-      } else if (k === "k") {
-        e.preventDefault()
-        setPaletteOpen(true)
-      } else if (k === "i") {
-        e.preventDefault()
+      const action = matchShortcut(e)
+      if (!action) return
+      e.preventDefault()
+      e.stopPropagation()
+      if (action === "palette") setPaletteOpen(true)
+      else if (action === "shortcuts") setShortcutsOpen(true)
+      else if (action === "new-workspace")
         window.dispatchEvent(new CustomEvent("lasso:new-workspace"))
-      }
+      else if (action === "new-tab")
+        window.dispatchEvent(new CustomEvent("lasso:new-tab"))
     }
-    document.addEventListener("keydown", onKey)
-    return () => document.removeEventListener("keydown", onKey)
-  }, [toggleLeft, toggleRight])
+    document.addEventListener("keydown", onKey, true)
+    return () => document.removeEventListener("keydown", onKey, true)
+  }, [])
+
+  // ⌘[ / ⌘] (and the Back/Forward buttons / swipe) toggle the side panels via a
+  // history trap, since macOS browsers won't deliver those keys to the page.
+  React.useEffect(
+    () => installHistoryToggle(toggleLeft, toggleRight),
+    [toggleLeft, toggleRight]
+  )
 
   return (
     <div className="relative h-full w-full">
@@ -478,6 +484,10 @@ function Shell() {
         onOpenChange={setPaletteOpen}
         onSelectTab={selectTab}
       />
+
+      {/* ⌘? opens the keyboard-shortcuts reference from anywhere (the Settings
+          tab has its own copy behind the keyboard icon). */}
+      <ShortcutsDialog open={shortcutsOpen} onOpenChange={setShortcutsOpen} />
     </div>
   )
 }

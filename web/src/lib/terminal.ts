@@ -1,4 +1,5 @@
 import { api } from "@/lib/api"
+import { matchShortcut } from "@/lib/shortcuts"
 import {
   applyTermFont,
   applyTermTheme,
@@ -220,14 +221,21 @@ export function wireTerminalIframe(id: string, suppressContext: boolean) {
 
   // Forward app-level shortcuts (Cmd/Ctrl+<key>) to the parent document so
   // global handlers fire even while the terminal holds keyboard focus — the
-  // iframe is same-origin, so we can re-dispatch. If a parent listener claims
-  // the combo (preventDefault ⇒ dispatchEvent returns false), mirror that back
-  // into the iframe so neither xterm nor the browser also acts on it. Clones
-  // land on the parent `document`, not this one, so there's no re-entrancy.
+  // iframe is same-origin, so we can re-dispatch. Clones land on the parent
+  // `document`, not this one, so there's no re-entrancy.
+  //
+  // For our OWN keydown shortcuts (⌘K/⌘I — matchShortcut) we neutralize the
+  // original unconditionally, so xterm never also acts on them, not just when the
+  // re-dispatched clone is claimed. For any other Cmd/Ctrl combo we still mirror
+  // a parent claim (preventDefault ⇒ dispatchEvent returns false) so e.g. Cmd-C
+  // copy keeps reaching xterm when nobody claimed it. (⌘[/⌘] never get here —
+  // the browser consumes them for history nav; they're handled by the history
+  // trap, see lib/history-toggle.ts.)
   doc.addEventListener(
     "keydown",
     (e: KeyboardEvent) => {
       if (!(e.metaKey || e.ctrlKey)) return
+      const ours = matchShortcut(e) !== null
       const clone = new KeyboardEvent("keydown", {
         key: e.key,
         code: e.code,
@@ -238,7 +246,8 @@ export function wireTerminalIframe(id: string, suppressContext: boolean) {
         bubbles: true,
         cancelable: true,
       })
-      if (!document.dispatchEvent(clone)) {
+      const claimed = !document.dispatchEvent(clone)
+      if (ours || claimed) {
         e.preventDefault()
         e.stopPropagation()
       }
