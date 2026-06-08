@@ -58,6 +58,17 @@ export function TabStrip({
     queryClient.invalidateQueries({ queryKey: qk.agents })
   }
 
+  // ⌘U opens the new-tab prompt for the active workspace (App dispatches the
+  // event globally so it fires with focus inside a terminal).
+  React.useEffect(() => {
+    const open = () => {
+      if (!workspace) return
+      setPrompt({ mode: "new", initial: nextTabNumber(workspace.tabs ?? []) })
+    }
+    window.addEventListener("lasso:new-tab", open)
+    return () => window.removeEventListener("lasso:new-tab", open)
+  }, [workspace])
+
   const createTab = async (title: string) => {
     if (!workspace) return
     try {

@@ -17,7 +17,7 @@ import { FilesPanel } from "@/components/FilesPanel"
 import { GitStatusBadge } from "@/components/GitStatusBadge"
 import { PaneSwitcher } from "@/components/PaneSwitcher"
 import { ScratchTab } from "@/components/ScratchTab"
-import { SettingsTab } from "@/components/SettingsTab"
+import { SettingsTab, ShortcutsDialog } from "@/components/SettingsTab"
 import { Sidebar } from "@/components/Sidebar"
 import { TabStrip } from "@/components/TabStrip"
 import { TabTerminal } from "@/components/TabTerminal"
@@ -190,6 +190,7 @@ function Shell() {
   const [rightCollapsed, setRightCollapsed] = React.useState(false)
   const [leftCollapsed, setLeftCollapsed] = React.useState(false)
   const [paletteOpen, setPaletteOpen] = React.useState(false)
+  const [shortcutsOpen, setShortcutsOpen] = React.useState(false)
   const [selectedTabId, setSelectedTabId] = React.useState<string | null>(() =>
     lsGet("lasso-selected-tab")
   )
@@ -281,8 +282,11 @@ function Shell() {
       if (action === "toggle-left") toggleLeft()
       else if (action === "toggle-right") toggleRight()
       else if (action === "palette") setPaletteOpen(true)
+      else if (action === "shortcuts") setShortcutsOpen(true)
       else if (action === "new-workspace")
         window.dispatchEvent(new CustomEvent("lasso:new-workspace"))
+      else if (action === "new-tab")
+        window.dispatchEvent(new CustomEvent("lasso:new-tab"))
     }
     document.addEventListener("keydown", onKey, true)
     return () => document.removeEventListener("keydown", onKey, true)
@@ -448,6 +452,10 @@ function Shell() {
         onOpenChange={setPaletteOpen}
         onSelectTab={selectTab}
       />
+
+      {/* ⌘? opens the keyboard-shortcuts reference from anywhere (the Settings
+          tab has its own copy behind the keyboard icon). */}
+      <ShortcutsDialog open={shortcutsOpen} onOpenChange={setShortcutsOpen} />
     </div>
   )
 }
