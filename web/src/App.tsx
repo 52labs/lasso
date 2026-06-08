@@ -224,18 +224,36 @@ function Shell() {
   // selection so create-focus isn't clobbered by a stale refetch).
   const seenTabs = React.useRef<Set<string>>(new Set())
 
+  // Order in which tabs have been opened, most-recent last (deduped). When the
+  // active tab's workspace is closed we fall back to the last terminal the user
+  // was on rather than jumping to the global first tab.
+  const tabHistory = React.useRef<string[]>([])
+  React.useEffect(() => {
+    if (!selectedTabId) return
+    const h = tabHistory.current
+    const i = h.indexOf(selectedTabId)
+    if (i !== -1) h.splice(i, 1)
+    h.push(selectedTabId)
+  }, [selectedTabId])
+
   // Default the selection to the first tab once the tree loads, and move off a
   // selection whose tab was closed — but never off one still loading in.
   React.useEffect(() => {
     if (!tree.data) return
     const tabs = allWorkspaces(tree.data).flatMap((ws) => ws.tabs ?? [])
+    const ids = new Set(tabs.map((t) => t.id))
     for (const t of tabs) seenTabs.current.add(t.id)
+    // Drop closed tabs from history so the fallback only ever lands on a live one.
+    tabHistory.current = tabHistory.current.filter((id) => ids.has(id))
     if (selectedTabId) {
-      const exists = tabs.some((t) => t.id === selectedTabId)
+      const exists = ids.has(selectedTabId)
       // Present, or selected-but-not-yet-in-tree (pending create) → leave it.
       if (exists || !seenTabs.current.has(selectedTabId)) return
     }
-    setSelectedTabId(tabs[0]?.id ?? null)
+    // Selection's tab is gone (e.g. its workspace was closed): fall back to the
+    // last opened terminal still alive, else the first tab.
+    const recent = tabHistory.current[tabHistory.current.length - 1]
+    setSelectedTabId(recent ?? tabs[0]?.id ?? null)
   }, [tree.data, selectedTabId])
 
   const selectTab = React.useCallback((tabId: string) => {
