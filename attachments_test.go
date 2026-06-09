@@ -9,9 +9,9 @@ import (
 
 // fakeCopyBackend implements the file ops moveAttachments needs (Open to read
 // staging, Create to write the dest, RemoveAll to clear staging), delegating to
-// os.* — staging and dest both resolve under LASSO_DIR (a local temp dir) here,
-// standing in for "both on the selected host". It records what it touched so the
-// test can assert the move went through the backend, not raw os.* on lasso.
+// os.* — staging and dest both resolve under LASSO_DIR (a local temp dir) here.
+// It records what it touched so the test can assert the move went through the
+// backend, not raw os.*.
 type fakeCopyBackend struct {
 	Backend
 	opened  map[string]bool
@@ -32,11 +32,10 @@ func (f *fakeCopyBackend) RemoveAll(p string) error {
 	return os.RemoveAll(p)
 }
 
-// Attachments are staged on the selected host's ~/.lasso/uploads (serveAgentUpload
-// writes them through the backend) and moved into the work dir on that SAME host.
-// This guards that moveAttachments reads the staged file and writes the dest both
-// through the backend (so a remote host's staging+workdir never round-trip through
-// some other host) and clears staging afterward.
+// Attachments are staged in ~/.lasso/uploads (serveAgentUpload writes them
+// through the backend) and moved into the work dir. This guards that
+// moveAttachments reads the staged file and writes the dest both through the
+// backend and clears staging afterward.
 func TestMoveAttachmentsWritesThroughBackend(t *testing.T) {
 	base := t.TempDir()
 	t.Setenv("LASSO_DIR", base)
@@ -53,7 +52,7 @@ func TestMoveAttachmentsWritesThroughBackend(t *testing.T) {
 		}
 	}
 
-	// A destination standing in for the agent's work dir on the selected host.
+	// A destination standing in for the agent's work dir.
 	dest := filepath.Join(base, "workdir")
 	if err := os.MkdirAll(dest, 0o755); err != nil {
 		t.Fatal(err)

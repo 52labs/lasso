@@ -57,57 +57,37 @@ func TestDefaultAgentEmptyRoundTrip(t *testing.T) {
 	}
 }
 
-func TestPerHostIsolation(t *testing.T) {
-	openTestDB(t)
-	if err := setLastRepo("local", "/a"); err != nil {
-		t.Fatal(err)
-	}
-	if err := setLastRepo("minime", "/b"); err != nil {
-		t.Fatal(err)
-	}
-	if hs, _ := getHostState("local"); hs.LastRepo != "/a" {
-		t.Errorf("local last_repo = %q, want /a", hs.LastRepo)
-	}
-	if hs, _ := getHostState("minime"); hs.LastRepo != "/b" {
-		t.Errorf("minime last_repo = %q, want /b", hs.LastRepo)
-	}
-	// A host with no state reads as zero, not another host's value.
-	if hs, _ := getHostState("other"); hs.LastRepo != "" {
-		t.Errorf("other last_repo = %q, want empty", hs.LastRepo)
-	}
-}
-
 func TestLastAgentAndType(t *testing.T) {
 	openTestDB(t)
-	if err := setLastAgent("local", "codex"); err != nil {
+	if err := setLastAgent("codex"); err != nil {
 		t.Fatal(err)
 	}
-	if err := setLastAgentType("local", "scratch"); err != nil {
+	if err := setLastAgentType("scratch"); err != nil {
 		t.Fatal(err)
 	}
-	hs, _ := getHostState("local")
+	hs, _ := getHostState()
 	if hs.LastAgent != "codex" || hs.LastAgentType != "scratch" {
 		t.Errorf("got agent=%q type=%q, want codex/scratch", hs.LastAgent, hs.LastAgentType)
 	}
 	// Updating one field leaves the others intact (per-column upsert).
-	if err := setLastRepo("local", "/repo"); err != nil {
+	if err := setLastRepo("/repo"); err != nil {
 		t.Fatal(err)
 	}
-	hs, _ = getHostState("local")
+	hs, _ = getHostState()
 	if hs.LastAgent != "codex" || hs.LastAgentType != "scratch" || hs.LastRepo != "/repo" {
 		t.Errorf("after setLastRepo: %+v", hs)
 	}
 }
 
-func TestLoadLassoConfigPerHost(t *testing.T) {
+func TestLoadLassoConfig(t *testing.T) {
 	openTestDB(t)
 	_ = setSetting("branch_prefix", "feat/")
-	_ = setLastRepo("local", "/repo")
-	_ = setRepoCopyFiles("local", "/repo", ".env")
-	_ = setLastBaseBranch("local", "/repo", "main")
-	_ = appendAgent("local", AgentRecord{ID: "1", Title: "t", Type: "git", CreatedAt: time.Now()})
+	_ = setLastRepo("/repo")
+	_ = setRepoCopyFiles("/repo", ".env")
+	_ = setLastBaseBranch("/repo", "main")
+	_ = appendAgent(AgentRecord{ID: "1", Title: "t", Type: "git", CreatedAt: time.Now()})
 
-	c, err := loadLassoConfig("local")
+	c, err := loadLassoConfig()
 	if err != nil {
 		t.Fatalf("loadLassoConfig: %v", err)
 	}
@@ -120,19 +100,11 @@ func TestLoadLassoConfigPerHost(t *testing.T) {
 	if len(c.Agents) != 1 || c.Agents[0].ID != "1" {
 		t.Errorf("agents = %+v", c.Agents)
 	}
-	// Another host shares global settings but not the per-host memory/log.
-	other, _ := loadLassoConfig("other")
-	if other.BranchPrefix != "feat/" {
-		t.Errorf("other branch_prefix = %q, want feat/", other.BranchPrefix)
-	}
-	if other.LastRepo != "" || len(other.Agents) != 0 || len(other.Repos) != 0 {
-		t.Errorf("other host leaked state: %+v", other)
-	}
 }
 
 func TestWorkspaceTabCRUD(t *testing.T) {
 	openTestDB(t)
-	ws := Workspace{ID: "w1", Host: "local", Title: "feature x", Repo: "/r", WorkDir: "/wt", Kind: "git"}
+	ws := Workspace{ID: "w1", Title: "feature x", Repo: "/r", WorkDir: "/wt", Kind: "git"}
 	if err := insertWorkspace(ws); err != nil {
 		t.Fatalf("insertWorkspace: %v", err)
 	}
@@ -147,7 +119,7 @@ func TestWorkspaceTabCRUD(t *testing.T) {
 	if err != nil || got.Title != "feature x" || got.Kind != "git" {
 		t.Fatalf("getWorkspace = %+v err=%v", got, err)
 	}
-	wss, _ := listWorkspaces("local")
+	wss, _ := listWorkspaces()
 	if len(wss) != 1 {
 		t.Fatalf("listWorkspaces = %d, want 1", len(wss))
 	}
@@ -182,7 +154,7 @@ func TestWorkspaceTabCRUD(t *testing.T) {
 	}
 	// close workspace → closes it and remaining tabs
 	_ = closeWorkspace("w1")
-	if wss, _ := listWorkspaces("local"); len(wss) != 0 {
+	if wss, _ := listWorkspaces(); len(wss) != 0 {
 		t.Errorf("after closeWorkspace, live workspaces = %d, want 0", len(wss))
 	}
 	if tabs, _ := listTabs("w1"); len(tabs) != 0 {
@@ -192,15 +164,15 @@ func TestWorkspaceTabCRUD(t *testing.T) {
 
 func TestRepoDisplayName(t *testing.T) {
 	openTestDB(t)
-	if err := setRepoDisplayName("local", "/r", "My Repo"); err != nil {
+	if err := setRepoDisplayName("/r", "My Repo"); err != nil {
 		t.Fatal(err)
 	}
-	rc, _ := getRepoState("local", "/r")
+	rc, _ := getRepoState("/r")
 	if rc.DisplayName != "My Repo" {
 		t.Errorf("repo state = %+v, want display name", rc)
 	}
 	// Round-trips through listRepoState too.
-	all, _ := listRepoState("local")
+	all, _ := listRepoState()
 	if all["/r"] == nil || all["/r"].DisplayName != "My Repo" {
 		t.Errorf("listRepoState = %+v", all["/r"])
 	}
@@ -211,7 +183,7 @@ func TestRepoDisplayName(t *testing.T) {
 // wired to them.
 func TestBackfillFromLegacyAgents(t *testing.T) {
 	openTestDB(t)
-	if err := appendAgent("local", AgentRecord{
+	if err := appendAgent(AgentRecord{
 		ID: "ag1", Title: "Legacy", Type: "git", Repo: "/r", WorkDir: "/wt", Agent: "claude", CreatedAt: time.Now(),
 	}); err != nil {
 		t.Fatal(err)
@@ -235,7 +207,7 @@ func TestBackfillFromLegacyAgents(t *testing.T) {
 	if err != nil || tab.Kind != "agent" || tab.AgentID != "ag1" || tab.WorkspaceID != "wag1" {
 		t.Fatalf("backfilled tab = %+v err=%v", tab, err)
 	}
-	ags, _ := listAgents("local")
+	ags, _ := listAgents()
 	if len(ags) != 1 || ags[0].TabID != "ag1" || ags[0].WorkspaceID != "wag1" {
 		t.Fatalf("agent not wired to tab/workspace: %+v", ags)
 	}
@@ -283,14 +255,14 @@ agents:
 	if s, _ := getSettings(); s.ReposRoot != "~/code" || s.BranchPrefix != "feat/" || s.DefaultAgent != "codex" {
 		t.Errorf("settings not migrated: %+v", s)
 	}
-	if hs, _ := getHostState("local"); hs.LastRepo != "/home/x/proj" {
+	if hs, _ := getHostState(); hs.LastRepo != "/home/x/proj" {
 		t.Errorf("last_repo = %q, want /home/x/proj", hs.LastRepo)
 	}
-	rc, _ := getRepoState("local", "/home/x/proj")
+	rc, _ := getRepoState("/home/x/proj")
 	if rc.LastBaseBranch != "dev" || rc.CopyFiles != ".env" || rc.Setup != "bun install" {
 		t.Errorf("repo state not migrated: %+v", rc)
 	}
-	agents, _ := listAgents("local")
+	agents, _ := listAgents()
 	if len(agents) != 1 || agents[0].Title != "First" {
 		t.Errorf("agents not migrated: %+v", agents)
 	}

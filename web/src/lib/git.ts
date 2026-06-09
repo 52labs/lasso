@@ -7,11 +7,11 @@ import { qk } from "@/lib/query"
 // (not just while the Files panel is open) so the tab badge and the
 // collapsed-sidebar indicator stay live even when the file viewer is hidden or
 // the sidebar starts collapsed. Multiple callers share a single poll via the
-// query cache, keyed on host + cwd.
+// query cache, keyed on cwd.
 export function useDiff() {
-  const { activeCwd, host } = useApp()
+  const { activeCwd } = useApp()
   return useQuery({
-    queryKey: qk.diff(host ?? "", activeCwd ?? ""),
+    queryKey: qk.diff(activeCwd ?? ""),
     queryFn: () => api.diff(activeCwd as string),
     enabled: !!activeCwd,
     refetchInterval: 2500,
