@@ -109,6 +109,11 @@ export interface TreeRepo {
   name: string
   primary_branch: string
   last_commit: number
+  // Primary branch's status vs its configured upstream. upstream is absent for
+  // local-only repos; ahead/behind are commit counts (absent when zero).
+  upstream?: string
+  ahead?: number
+  behind?: number
   workspaces: TreeWorkspace[] // linked worktrees only
   // The repo row is itself the main checkout (primary branch). main_tab_id is
   // its tab if one exists; otherwise click calls openRepo to create one.

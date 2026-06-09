@@ -588,8 +588,14 @@ function RepoNode({
                 />
               )}
               <span className="truncate font-medium">{repo.name}</span>
-              <span className="ml-auto shrink-0 pl-1 text-[11px] text-muted-foreground">
-                {repo.primary_branch}
+              <span className="ml-auto flex shrink-0 items-center gap-1 pl-1 text-[11px] text-muted-foreground">
+                {repo.upstream && (repo.ahead || repo.behind) ? (
+                  <span className="flex items-center gap-0.5 tabular-nums">
+                    {repo.ahead ? <span>↑{repo.ahead}</span> : null}
+                    {repo.behind ? <span>↓{repo.behind}</span> : null}
+                  </span>
+                ) : null}
+                <span>{repo.primary_branch}</span>
               </span>
             </button>
           </div>
