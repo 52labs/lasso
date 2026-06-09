@@ -55,6 +55,11 @@ type treeRepo struct {
 	PrimaryBranch string          `json:"primary_branch"`
 	LastCommit    int64           `json:"last_commit"` // unix secs (ordering + display)
 	Workspaces    []treeWorkspace `json:"workspaces"`  // linked worktrees only
+	// Primary branch's status vs its configured upstream (origin tracking ref).
+	// Upstream is "" for local-only repos; Ahead/Behind are commit counts.
+	Upstream string `json:"upstream,omitempty"`
+	Ahead    int    `json:"ahead,omitempty"`
+	Behind   int    `json:"behind,omitempty"`
 	// The repo row is itself the main checkout: clicking it opens a
 	// terminal on the primary branch. MainTabID is its tab if one already exists,
 	// else "" — the frontend then asks /api/repo/open to create one on click.
@@ -140,6 +145,7 @@ func serveTree(w http.ResponseWriter, r *http.Request) {
 			name = rc.DisplayName
 		}
 		primary, ct := repoPrimaryBranchAndTime(be, path)
+		upstream, ahead, behind := repoUpstreamStatus(be, path, primary)
 		repoWss := byRepo[path]
 		if repoWss == nil {
 			repoWss = []treeWorkspace{}
@@ -147,6 +153,7 @@ func serveTree(w http.ResponseWriter, r *http.Request) {
 		tr := treeRepo{
 			Path: path, Name: name, PrimaryBranch: primary,
 			LastCommit: ct, Workspaces: repoWss,
+			Upstream: upstream, Ahead: ahead, Behind: behind,
 		}
 		if main, ok := mainByRepo[path]; ok {
 			m := main
@@ -279,6 +286,33 @@ func repoPrimaryBranchAndTime(be Backend, repo string) (string, int64) {
 		primary = "main"
 	}
 	return primary, 0
+}
+
+// repoUpstreamStatus resolves the primary branch's tracking ref and its
+// ahead/behind commit counts. Returns ("", 0, 0) when no upstream is configured
+// (local-only repo) or git errors.
+func repoUpstreamStatus(be Backend, repo, primary string) (string, int, int) {
+	if primary == "" {
+		return "", 0, 0
+	}
+	up, err := be.GitOut(repo, "rev-parse", "--abbrev-ref", primary+"@{upstream}")
+	if err != nil {
+		return "", 0, 0
+	}
+	upstream := strings.TrimSpace(up)
+	out, err := be.GitOut(repo, "rev-list", "--left-right", "--count",
+		primary+"..."+primary+"@{upstream}")
+	if err != nil {
+		return upstream, 0, 0
+	}
+	// git prints "<ahead>\t<behind>" (left = primary-only, right = upstream-only)
+	fields := strings.Fields(strings.TrimSpace(out))
+	ahead, behind := 0, 0
+	if len(fields) == 2 {
+		ahead, _ = strconv.Atoi(fields[0])
+		behind, _ = strconv.Atoi(fields[1])
+	}
+	return upstream, ahead, behind
 }
 
 // ---------------------------------------------------------------------------
