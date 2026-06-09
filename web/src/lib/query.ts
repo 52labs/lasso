@@ -15,17 +15,14 @@ export const queryClient = new QueryClient({
   },
 })
 
-// Centralized query keys for the agent-creation data flow. The backend is
-// local-only; the host segment is always "local" and kept only to preserve the
-// existing key shape.
+// Centralized query keys for the agent-creation data flow.
 export const qk = {
-  agentConfig: (host: string) => ["agent-config", host] as const,
-  repos: (host: string) => ["repos", host] as const,
-  repoBranches: (host: string, path: string) =>
-    ["repo-branches", host, path] as const,
+  agentConfig: () => ["agent-config"] as const,
+  repos: () => ["repos"] as const,
+  repoBranches: (path: string) => ["repo-branches", path] as const,
   tree: ["tree"] as const,
   agents: ["agents"] as const,
-  diff: (host: string, path: string) => ["diff", host, path] as const,
+  diff: (path: string) => ["diff", path] as const,
   sidebarPct: ["sidebar-pct"] as const,
   version: ["version"] as const,
 }
@@ -114,9 +111,9 @@ export function treeSetRepoMain(repoPath: string, ws: TreeWorkspace) {
   })
 }
 
-// invalidateHostScoped refetches the creator data + version, called when the
+// invalidateCreatorData refetches the creator data + version, called when the
 // backend signals terminals must reload so the creator picks up fresh state.
-export function invalidateHostScoped() {
+export function invalidateCreatorData() {
   queryClient.invalidateQueries({ queryKey: ["agent-config"] })
   queryClient.invalidateQueries({ queryKey: ["repos"] })
   queryClient.invalidateQueries({ queryKey: ["repo-branches"] })

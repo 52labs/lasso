@@ -13,10 +13,7 @@ import (
 // The sidebar's data + mutations. The React sidebar shows git repos from
 // repos_root with their lasso worktrees nested as a tree, ordered by latest
 // commit to the primary branch (pinned repos first), plus scratch workspaces,
-// plus a flat agent list with live status. Local-only: everything routes through
-// curBackend() against host "local".
-
-const sidebarHost = "local"
+// plus a flat agent list with live status. Everything routes through curBackend().
 
 // newID returns a fresh base36 id (timestamp-based), the scheme used for agent,
 // workspace, and tab ids throughout.
@@ -89,9 +86,9 @@ func spacesKeyRepo(path string) string    { return "repo:" + path }
 
 func serveTree(w http.ResponseWriter, r *http.Request) {
 	be := curBackend()
-	_, repos, _ := reposList(be, sidebarHost)
-	repoState, _ := listRepoState(sidebarHost)
-	wss, _ := listWorkspaces(sidebarHost)
+	_, repos, _ := reposList(be)
+	repoState, _ := listRepoState()
+	wss, _ := listWorkspaces()
 	statuses := agentStatuses.snapshot()
 	kinds := tabAgentKinds() // tab id → live agent kind (process-based)
 
@@ -336,7 +333,7 @@ func serveAgentsList(w http.ResponseWriter, r *http.Request) {
 	statuses := agentStatuses.snapshot()
 	kinds := tabAgentKinds() // only tabs running an agent right now
 	agentByID := map[string]AgentRecord{}
-	if agents, err := listAgents(sidebarHost); err == nil {
+	if agents, err := listAgents(); err == nil {
 		for _, a := range agents {
 			agentByID[a.ID] = a
 		}
@@ -572,7 +569,7 @@ func serveOpenRepo(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	// Reuse the existing main-checkout workspace if there is one.
-	if wss, err := listWorkspaces(sidebarHost); err == nil {
+	if wss, err := listWorkspaces(); err == nil {
 		for _, ws := range wss {
 			if ws.Kind == "git" && ws.WorkDir == repo {
 				if tabs, _ := listTabs(ws.ID); len(tabs) > 0 {
@@ -601,10 +598,10 @@ func serveOpenRepo(w http.ResponseWriter, r *http.Request) {
 	}
 	now := time.Now()
 	title := filepath.Base(repo)
-	if rc, err := getRepoState(sidebarHost, repo); err == nil && rc.DisplayName != "" {
+	if rc, err := getRepoState(repo); err == nil && rc.DisplayName != "" {
 		title = rc.DisplayName
 	}
-	_ = insertWorkspace(Workspace{ID: wsID, Host: sidebarHost, Title: title, Repo: repo, WorkDir: repo, Kind: "git", CreatedAt: now})
+	_ = insertWorkspace(Workspace{ID: wsID, Title: title, Repo: repo, WorkDir: repo, Kind: "git", CreatedAt: now})
 	_ = insertTab(Tab{ID: tabID, WorkspaceID: wsID, Title: nextTabName(wsID), Cwd: repo, Kind: "shell", CreatedAt: now})
 	kickHub()
 	writeJSON(w, map[string]any{"tab_id": tabID, "workspace_id": wsID})
@@ -642,7 +639,7 @@ func serveRepoRename(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "repo required", http.StatusBadRequest)
 		return
 	}
-	if err := setRepoDisplayName(sidebarHost, req.Repo, strings.TrimSpace(req.Name)); err != nil {
+	if err := setRepoDisplayName(req.Repo, strings.TrimSpace(req.Name)); err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
@@ -704,9 +701,9 @@ func serveCreateWorktreeOnly(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	now := time.Now()
-	_ = insertWorkspace(Workspace{ID: wsID, Host: sidebarHost, Title: title, Repo: repo, WorkDir: workDir, Kind: "git", CreatedAt: now})
+	_ = insertWorkspace(Workspace{ID: wsID, Title: title, Repo: repo, WorkDir: workDir, Kind: "git", CreatedAt: now})
 	_ = insertTab(Tab{ID: tabID, WorkspaceID: wsID, Title: nextTabName(wsID), Cwd: workDir, Kind: "shell", CreatedAt: now})
-	_ = setLastBaseBranch(sidebarHost, repo, base)
+	_ = setLastBaseBranch(repo, base)
 	kickHub()
 	writeJSON(w, map[string]any{"workspace_id": wsID, "work_dir": workDir, "branch": branch})
 }
@@ -732,7 +729,7 @@ func serveCreateWorkspace(w http.ResponseWriter, r *http.Request) {
 	if slug == "" {
 		slug = "scratch"
 	}
-	workDir := uniqueChildDir(lassoScratchDirFor(be), slug+"-"+randSuffix())
+	workDir := uniqueChildDir(lassoScratchDir(), slug+"-"+randSuffix())
 	if err := be.MkdirAll(workDir, 0o755); err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
@@ -747,7 +744,7 @@ func serveCreateWorkspace(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	now := time.Now()
-	if err := insertWorkspace(Workspace{ID: wsID, Host: sidebarHost, Title: title, WorkDir: workDir, Kind: "scratch", CreatedAt: now}); err != nil {
+	if err := insertWorkspace(Workspace{ID: wsID, Title: title, WorkDir: workDir, Kind: "scratch", CreatedAt: now}); err != nil {
 		_ = tmuxKillSession(session)
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
@@ -762,7 +759,7 @@ func serveCreateWorkspace(w http.ResponseWriter, r *http.Request) {
 	// into the workspace dir before sending — a warm-pool claim cd's there
 	// asynchronously (a cold session already starts there), so this keeps setup
 	// from running in $HOME — then wait for the rc so leading chars aren't eaten.
-	if defaults, derr := hostDefaults(be.Name()); derr == nil {
+	if defaults, derr := getDefaults(); derr == nil {
 		if s := strings.TrimSpace(defaults.ScratchSetup); s != "" {
 			go func(sess, dir, setup string) {
 				deadline := time.Now().Add(15 * time.Second)
@@ -809,12 +806,6 @@ func serveUIState(w http.ResponseWriter, r *http.Request) {
 		if err := json.NewDecoder(r.Body).Decode(&us); err != nil {
 			http.Error(w, err.Error(), http.StatusBadRequest)
 			return
-		}
-		if us.GridHiddenHosts == nil {
-			us.GridHiddenHosts = []string{}
-		}
-		if us.GridSelected == nil {
-			us.GridSelected = []string{}
 		}
 		if err := saveUIState(us); err != nil {
 			http.Error(w, err.Error(), http.StatusInternalServerError)

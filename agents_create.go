@@ -49,7 +49,7 @@ func firstLine(s string) string {
 }
 
 // uniqueChildDir returns an absolute path under parent based on slug, suffixing
-// -2, -3, … if the name is already taken on the active host.
+// -2, -3, … if the name is already taken on disk.
 func uniqueChildDir(parent, slug string) string {
 	if slug == "" {
 		slug = "agent"
@@ -115,11 +115,10 @@ func splitGlobs(spec string) []string {
 
 func serveAgentConfig(w http.ResponseWriter, r *http.Request) {
 	// Settings (defaults) plus last-used selections + the agent log all live in
-	// the local lasso.db.
-	host := "local"
+	// the lasso.db.
 	switch r.Method {
 	case http.MethodGet:
-		c, err := hostAgentConfig(host)
+		c, err := loadAgentConfig()
 		if err != nil {
 			http.Error(w, err.Error(), http.StatusBadGateway)
 			return
@@ -134,11 +133,11 @@ func serveAgentConfig(w http.ResponseWriter, r *http.Request) {
 			http.Error(w, err.Error(), http.StatusBadRequest)
 			return
 		}
-		if err := hostSetDefaults(host, p); err != nil {
+		if err := applyDefaults(p); err != nil {
 			http.Error(w, err.Error(), http.StatusBadGateway)
 			return
 		}
-		c, err := hostAgentConfig(host)
+		c, err := loadAgentConfig()
 		if err != nil {
 			http.Error(w, err.Error(), http.StatusBadGateway)
 			return
@@ -158,7 +157,6 @@ func serveRepoConfig(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "POST required", http.StatusMethodNotAllowed)
 		return
 	}
-	host := "local"
 	var req repoConfigPatch
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		http.Error(w, err.Error(), http.StatusBadRequest)
@@ -169,9 +167,8 @@ func serveRepoConfig(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "path required", http.StatusBadRequest)
 		return
 	}
-	// Repo paths from the picker are absolute; the provider writes to the chosen
-	// host's own db (and the remote CLI ~-expands against the remote home).
-	rc, err := hostSetRepoConfig(host, path, req.CopyFiles, req.Setup)
+	// Repo paths from the picker are absolute.
+	rc, err := applyRepoConfig(path, req.CopyFiles, req.Setup)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusBadGateway)
 		return
@@ -192,8 +189,7 @@ type repoEntry struct {
 }
 
 func serveRepos(w http.ResponseWriter, r *http.Request) {
-	host := "local"
-	root, repos, err := hostReposList(host)
+	root, repos, err := listReposLocal()
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusBadGateway)
 		return
@@ -318,13 +314,10 @@ func createAgent(b Backend, req createAgentReq) (AgentRecord, error) {
 	if req.Agent == "" {
 		req.Agent = "claude"
 	}
-	host := b.Name()
 	// The files-to-copy and setup commands are properties of the repo (and the
-	// scratch default), configured in Settings — not per-agent. Read them from
-	// the target host's OWN settings (its lasso.db, via the provider) so a remote
-	// host's worktree is set up from its own configuration. Best-effort: a setup
-	// we can't read just means none runs, never a failed create.
-	defaults, _ := hostDefaults(host)
+	// scratch default), configured in Settings — not per-agent. Best-effort: a
+	// setup we can't read just means none runs, never a failed create.
+	defaults, _ := getDefaults()
 	slug := slugify(req.Title)
 
 	rec := AgentRecord{
@@ -373,8 +366,8 @@ func createAgent(b Backend, req createAgentReq) (AgentRecord, error) {
 		rec.WorkDir = workDir
 
 		// Copy the repo's configured files into the worktree and run its setup
-		// script before the agent (both per-repo settings, keyed by host+repo).
-		rc, _ := hostRepoConfig(host, repo)
+		// script before the agent (both per-repo settings).
+		rc, _ := getRepoState(repo)
 		copyRepoFiles(b, repo, workDir, rc.CopyFiles)
 		setup = rc.Setup
 
@@ -383,7 +376,7 @@ func createAgent(b Backend, req createAgentReq) (AgentRecord, error) {
 		// the dir itself — two same-titled scratch agents then get distinct dirs
 		// (e.g. hey-boss-a3f9), the way worktrees stay distinct via their branch.
 		// uniqueChildDir still guards the (astronomically unlikely) suffix clash.
-		workDir := uniqueChildDir(lassoScratchDirFor(b), slug+"-"+randSuffix())
+		workDir := uniqueChildDir(lassoScratchDir(), slug+"-"+randSuffix())
 		if err := b.MkdirAll(workDir, 0o755); err != nil {
 			return AgentRecord{}, &createErr{http.StatusInternalServerError, fmt.Errorf("mkdir %s: %w", workDir, err)}
 		}
@@ -408,7 +401,7 @@ func createAgent(b Backend, req createAgentReq) (AgentRecord, error) {
 		return AgentRecord{}, &createErr{http.StatusInternalServerError, fmt.Errorf("start agent shell: %w", err)}
 	}
 	if err := insertWorkspace(Workspace{
-		ID: rec.WorkspaceID, Host: host, Title: rec.Title, Repo: rec.Repo,
+		ID: rec.WorkspaceID, Title: rec.Title, Repo: rec.Repo,
 		WorkDir: rec.WorkDir, Kind: req.Type, CreatedAt: rec.CreatedAt,
 	}); err != nil {
 		_ = tmuxKillSession(session)
@@ -429,23 +422,21 @@ func createAgent(b Backend, req createAgentReq) (AgentRecord, error) {
 	}
 
 	// Launch: run the setup script (if any), then the agent command, in the root
-	// agent shell. Done in a
-	// goroutine (so create returns immediately) that first waits for the shell to
-	// settle: a freshly-spawned pane is still sourcing its rc (mise/fnox, etc.,
-	// slow over SSH on a remote host) and types sent into it before it's ready get
-	// their leading characters eaten. The backend is captured so the launch always
-	// targets the host the agent was created on, even if the active host changes.
+	// agent shell. Done in a goroutine (so create returns immediately) that first
+	// waits for the shell to settle: a freshly-spawned pane is still sourcing its
+	// rc (mise/fnox, etc.) and types sent into it before it's ready get their
+	// leading characters eaten.
 	go launchAgentInSession(session, rec.WorkDir, rec.TabID, setup, agentCommand(req.Agent, rec.PlanMode, agentPrompt(rec)))
 
-	// Persist this host's remembered selections, then append the record. Errors
-	// here are non-fatal: the agent is already running, so we still return it.
+	// Persist the remembered selections, then append the record. Errors here are
+	// non-fatal: the agent is already running, so we still return it.
 	if req.Type == "git" {
-		_ = setLastRepo(host, rec.Repo)
-		_ = setLastBaseBranch(host, rec.Repo, rec.BaseBranch)
+		_ = setLastRepo(rec.Repo)
+		_ = setLastBaseBranch(rec.Repo, rec.BaseBranch)
 	}
-	_ = setLastAgent(host, rec.Agent)
-	_ = setLastAgentType(host, rec.Type)
-	if err := appendAgent(host, rec); err != nil {
+	_ = setLastAgent(rec.Agent)
+	_ = setLastAgentType(rec.Type)
+	if err := appendAgent(rec); err != nil {
 		return AgentRecord{}, &createErr{http.StatusInternalServerError, fmt.Errorf("save agent: %w", err)}
 	}
 	return rec, nil
@@ -472,8 +463,7 @@ func uniqueBranch(cur Backend, repo, branch string) string {
 // copyRepoFiles copies files matching the comma/newline-separated globs from the
 // repo into the worktree, skipping files that already exist. Best effort — a
 // failing pattern is silently ignored (it mirrors fulcrum's copyFilesToWorktree).
-// Globbing goes through the active backend (backendGlob), not the local os, so a
-// repo on a remote host is matched on that host rather than missed entirely.
+// Globbing goes through the backend (backendGlob) rather than the local os.
 func copyRepoFiles(cur Backend, repo, dest, spec string) {
 	for _, pattern := range splitGlobs(spec) {
 		for _, src := range backendGlob(cur, filepath.Join(repo, pattern)) {
@@ -510,11 +500,10 @@ func copyFile(cur Backend, src, dst string) {
 	_, _ = io.Copy(out, in)
 }
 
-// backendGlob evaluates a filepath.Glob-style pattern on the active backend, so
-// the same copy-files spec works whether the repo is local or on a remote host.
-// It ports the stdlib's segment-by-segment matching (no recursive `**`), but
-// lists directories via cur.ReadDir / cur.Lstat instead of the local os. The
-// pattern is expected to be an absolute path (callers join it onto the repo).
+// backendGlob evaluates a filepath.Glob-style pattern through the backend. It
+// ports the stdlib's segment-by-segment matching (no recursive `**`), but lists
+// directories via cur.ReadDir / cur.Lstat instead of the local os. The pattern
+// is expected to be an absolute path (callers join it onto the repo).
 func backendGlob(cur Backend, pattern string) []string {
 	if !globHasMeta(pattern) {
 		if _, err := cur.Lstat(pattern); err != nil {
@@ -566,7 +555,7 @@ func moveAttachments(cur Backend, uploadDir string, names []string, dest string)
 	if uploadDir == "" || len(names) == 0 {
 		return
 	}
-	staging := filepath.Join(lassoUploadsDirFor(cur), filepath.Base(uploadDir))
+	staging := filepath.Join(lassoUploadsDir(), filepath.Base(uploadDir))
 	for _, n := range names {
 		base := filepath.Base(n)
 		if base == "" || base == "." {
@@ -577,8 +566,7 @@ func moveAttachments(cur Backend, uploadDir string, names []string, dest string)
 	_ = cur.RemoveAll(staging)
 }
 
-// copyOnBackend copies a file from src to dst, both on the same backend (the
-// local disk, or one remote host over SFTP).
+// copyOnBackend copies a file from src to dst, both on the backend.
 func copyOnBackend(cur Backend, src, dst string) {
 	in, err := cur.Open(src)
 	if err != nil {
@@ -660,7 +648,7 @@ func createWorktree(b Backend, repo, base, branch, titleSlug string) (string, er
 	if repoSlug == "" {
 		repoSlug = "repo"
 	}
-	parent := filepath.Join(lassoWorktreesDirFor(b), repoSlug)
+	parent := filepath.Join(lassoWorktreesDir(), repoSlug)
 	workDir := uniqueChildDir(parent, worktreeDirSlug(branch, titleSlug))
 	if err := b.MkdirAll(parent, 0o755); err != nil {
 		return "", fmt.Errorf("mkdir worktree parent: %w", err)
@@ -728,7 +716,7 @@ func serveAgentUpload(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	id := strconv.FormatInt(time.Now().UnixNano(), 36)
-	staging := filepath.Join(lassoUploadsDirFor(be), id)
+	staging := filepath.Join(lassoUploadsDir(), id)
 	if err := be.MkdirAll(staging, 0o755); err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return

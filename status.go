@@ -128,7 +128,7 @@ func statusPoller(ctx context.Context, h *hub) {
 // titles, kinds, pin/closed state). The hub bumps PanesRev when it changes so the
 // sidebar re-renders after a workspace/tab is created, renamed, pinned, or closed.
 func treeSignature() string {
-	wss, err := listWorkspaces("local")
+	wss, err := listWorkspaces()
 	if err != nil {
 		return ""
 	}
