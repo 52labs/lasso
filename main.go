@@ -147,6 +147,7 @@ func runServer() {
 	mux.HandleFunc("/api/spaces/reorder", serveSpacesReorder)
 	mux.HandleFunc("/api/repo/rename", serveRepoRename)
 	mux.HandleFunc("/api/repo/open", serveOpenRepo)
+	mux.HandleFunc("/api/repo/close", serveRepoClose)
 	mux.HandleFunc("/api/create-worktree", serveCreateWorktreeOnly)
 	mux.HandleFunc("/api/ui-state", serveUIState)
 	mux.HandleFunc("/api/theme", serveTheme)

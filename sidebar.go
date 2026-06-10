@@ -512,6 +512,40 @@ func serveWorkspaceClose(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, map[string]any{"ok": true})
 }
 
+// serveRepoClose closes an entire repo from the sidebar: every workspace tied to
+// it — the main checkout (work_dir == repo root) and all its linked worktrees —
+// along with their tabs. With no live workspace left, the repo row drops out of
+// the tree (serveTree only shows repos that have one). A soft close like the
+// others: the git checkout/worktrees on disk are untouched; only the sidebar
+// rows go away, and reopening the repo via New Agent / ⌘K brings it back.
+func serveRepoClose(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		Repo string `json:"repo"`
+	}
+	if !decodeJSON(w, r, &req) {
+		return
+	}
+	be := curBackend()
+	repo := expandTildeOn(be, req.Repo)
+	if repo == "" {
+		http.Error(w, "repo required", http.StatusBadRequest)
+		return
+	}
+	wss, _ := listWorkspaces()
+	for _, ws := range wss {
+		if ws.Kind != "git" || ws.Repo != repo {
+			continue
+		}
+		tabs, _ := listTabs(ws.ID)
+		for _, t := range tabs {
+			closeOneTab(t.ID)
+		}
+		_ = closeWorkspace(ws.ID)
+	}
+	kickHub()
+	writeJSON(w, map[string]any{"ok": true})
+}
+
 // serveNewTab adds a plain shell tab to a workspace (a new tmux session in the
 // workspace's directory).
 func serveNewTab(w http.ResponseWriter, r *http.Request) {

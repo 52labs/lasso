@@ -316,6 +316,11 @@ export const api = {
     }),
   renameRepo: (repo: string, name: string) =>
     postJSON<{ ok: boolean }>("/api/repo/rename", { repo, name }),
+  // Close a whole repo: closes its main checkout and every linked worktree (and
+  // their tabs/agents), dropping the repo from the spaces pane. The on-disk
+  // checkout/worktrees are kept; reopen via New Agent / ⌘K.
+  closeRepo: (repo: string) =>
+    postJSON<{ ok: boolean }>("/api/repo/close", { repo }),
 
   // Make a git worktree + workspace with a shell tab but NO agent.
   createWorktree: (body: {
