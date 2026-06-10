@@ -4,6 +4,7 @@ import {
   ChevronRight,
   Files,
   Globe,
+  LayoutGrid,
   type LucideIcon,
   NotebookPen,
   PanelLeft,
@@ -15,6 +16,8 @@ import { BrowserTab } from "@/components/BrowserTab"
 import { CreateAgentDialog } from "@/components/CreateAgentDialog"
 import { FilesPanel } from "@/components/FilesPanel"
 import { GitStatusBadge } from "@/components/GitStatusBadge"
+import { GridTab } from "@/components/GridTab"
+import { HostSwitcher } from "@/components/HostSwitcher"
 import { PaneSwitcher } from "@/components/PaneSwitcher"
 import { ScratchTab } from "@/components/ScratchTab"
 import { SettingsTab, ShortcutsDialog } from "@/components/SettingsTab"
@@ -36,7 +39,7 @@ import { qk } from "@/lib/query"
 import { matchShortcut } from "@/lib/shortcuts"
 import { cn } from "@/lib/utils"
 
-type RightView = "files" | "scratch" | "browser" | "settings"
+type RightView = "files" | "scratch" | "browser" | "grid" | "settings"
 
 // Persist each side panel's collapsed state and width (% of the group) so both
 // survive reloads/restarts.
@@ -334,6 +337,25 @@ function Shell() {
     else p.collapse()
   }, [])
 
+  // The Grid wants more room than the 32% default right panel (its cells have a
+  // ~360px min). When the Grid tab is opened, widen the panel; restore the prior
+  // size on leave. The width before opening Grid is remembered in a ref.
+  const preGridSize = React.useRef<number | null>(null)
+  React.useEffect(() => {
+    const p = rightPanel.current
+    if (!p) return
+    if (rightView === "grid") {
+      const cur = p.getSize().asPercentage * 100
+      if (cur < 55) {
+        preGridSize.current = cur
+        p.resize("62%")
+      }
+    } else if (preGridSize.current != null) {
+      p.resize(`${preGridSize.current}%`)
+      preGridSize.current = null
+    }
+  }, [rightView])
+
   // ⌘K opens the switcher, ⌘I the new-workspace modal. Cmd-only so terminal
   // control keys (Ctrl-*) are never clobbered; the terminal iframes re-dispatch
   // Cmd shortcuts to this document so they work with focus inside. (⌘[/⌘] are
@@ -413,6 +435,7 @@ function Shell() {
                   <PanelLeft className="size-4" />
                 </button>
               )}
+              <HostSwitcher />
               <div className="min-w-0 flex-1">
                 <TabStrip
                   workspace={activeWorkspace}
@@ -501,6 +524,7 @@ function Shell() {
                 },
                 { value: "scratch", label: "Scratch", icon: NotebookPen },
                 { value: "browser", label: "Browser", icon: Globe },
+                { value: "grid", label: "Grid", icon: LayoutGrid },
                 { value: "settings", label: "Settings", icon: Settings },
               ]}
               trailing={
@@ -528,6 +552,9 @@ function Shell() {
               </Pane>
               <Pane show={rightView === "browser"}>
                 <BrowserTab />
+              </Pane>
+              <Pane show={rightView === "grid"}>
+                <GridTab active={rightView === "grid"} selectTab={selectTab} />
               </Pane>
               <Pane show={rightView === "settings"}>
                 <SettingsTab active={rightView === "settings"} />
