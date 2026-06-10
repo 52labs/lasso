@@ -545,6 +545,11 @@ function RepoNode({
       .catch((e) => toast.error(String(e)))
     refreshTree()
   }
+  const [confirmClose, setConfirmClose] = React.useState(false)
+  const doClose = async () => {
+    await api.closeRepo(repo.path).catch((e) => toast.error(String(e)))
+    refreshTree()
+  }
   return (
     <div>
       <ContextMenu>
@@ -626,8 +631,42 @@ function RepoNode({
           </ContextMenuItem>
           <ContextMenuSeparator />
           <ContextMenuItem onSelect={rename}>Rename…</ContextMenuItem>
+          <ContextMenuItem
+            variant="destructive"
+            onSelect={() => setConfirmClose(true)}
+          >
+            Close repo
+          </ContextMenuItem>
         </ContextMenuContent>
       </ContextMenu>
+
+      <AlertDialog open={confirmClose} onOpenChange={setConfirmClose}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Close “{repo.name}”?</AlertDialogTitle>
+            <AlertDialogDescription>
+              Closing this repo ends its main checkout
+              {worktrees.length > 0
+                ? ` and ${worktrees.length} worktree${
+                    worktrees.length === 1 ? "" : "s"
+                  }`
+                : ""}
+              , including any running agents. The checkout on disk is kept — this
+              just removes it from the sidebar.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel>Cancel</AlertDialogCancel>
+            <AlertDialogAction
+              onClick={doClose}
+              className="bg-[var(--h-bad)] text-white hover:bg-[var(--h-bad)]/90"
+            >
+              Close repo
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
+
       {open &&
         worktrees.map((ws) => (
           <WorkspaceNode
