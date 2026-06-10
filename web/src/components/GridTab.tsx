@@ -45,8 +45,10 @@ const POLL_MS = 2500
 // alive (reaped after ~60s idle). Comfortably under that.
 const KEEPALIVE_MS = 18_000
 
-// Grid layout constants — must match .termgrid (gap) and .termcell (flex-basis).
+// Grid layout constants — must match .termgrid (gap + right padding) and
+// .termcell (flex-basis).
 const GRID_GAP = 0
+const GRID_PAD_RIGHT = 16
 const GRID_MIN_CELL = 360
 
 // cellKey uniquely identifies a pane across hosts (tab ids are globally unique,
@@ -79,7 +81,7 @@ export function GridTab({
     const el = gridRef.current
     if (!el) return
     const measure = () => {
-      const content = el.clientWidth - GRID_GAP * 2
+      const content = el.clientWidth - GRID_PAD_RIGHT
       setCols(
         Math.max(
           1,
