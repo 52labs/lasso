@@ -22,7 +22,6 @@ import { PaneSwitcher } from "@/components/PaneSwitcher"
 import { ScratchTab } from "@/components/ScratchTab"
 import { SettingsTab, ShortcutsDialog } from "@/components/SettingsTab"
 import { Sidebar } from "@/components/Sidebar"
-import { TabStrip } from "@/components/TabStrip"
 import { TabTerminal } from "@/components/TabTerminal"
 import {
   ResizableHandle,
@@ -395,8 +394,6 @@ function Shell() {
       else if (action === "grid") toggleGrid()
       else if (action === "new-workspace")
         window.dispatchEvent(new CustomEvent("lasso:new-workspace"))
-      else if (action === "new-tab")
-        window.dispatchEvent(new CustomEvent("lasso:new-tab"))
     }
     document.addEventListener("keydown", onKey, true)
     return () => document.removeEventListener("keydown", onKey, true)
@@ -410,8 +407,81 @@ function Shell() {
   )
 
   return (
-    <div className="relative h-full w-full">
-      <ResizablePanelGroup orientation="horizontal" className="h-full w-full">
+    <div className="relative flex h-full w-full flex-col">
+      {/* Full-width header: the app-level controls live here — never inside a
+          panel — so their placement is identical whether the sidebar is open,
+          collapsed, or replaced by the grid. */}
+      <div className="flex shrink-0 items-center border-border border-b">
+        <button
+          type="button"
+          title={
+            gridMode
+              ? "exit grid to the sidebar"
+              : leftCollapsed
+                ? "show sidebar (⌘[)"
+                : "hide sidebar (⌘[)"
+          }
+          aria-pressed={!gridMode && !leftCollapsed}
+          className="px-2 py-1.5 text-muted-foreground hover:text-primary"
+          onClick={() => {
+            // In grid mode the sidebar's space belongs to the grid; asking for
+            // the sidebar means leaving the grid (and restoring it expanded).
+            if (gridMode) {
+              preGridLeftCollapsed.current = false
+              toggleGrid()
+              return
+            }
+            toggleLeft()
+          }}
+        >
+          <PanelLeft className="size-4" />
+        </button>
+        <HostSwitcher />
+        <button
+          type="button"
+          aria-pressed={gridMode}
+          title={gridMode ? "back to terminal (⌘G)" : "grid view (⌘G)"}
+          className={cn(
+            "ml-1 flex size-6 shrink-0 items-center justify-center self-center rounded border",
+            gridMode
+              ? "border-primary/50 bg-accent text-primary"
+              : "border-border text-muted-foreground hover:border-primary hover:text-primary"
+          )}
+          onClick={toggleGrid}
+        >
+          <LayoutGrid className="size-3.5" />
+        </button>
+        <span className="block min-w-0 flex-1 truncate px-2 py-1.5 text-[13px] text-muted-foreground">
+          {gridMode
+            ? "all terminals · every host"
+            : (activeWorkspace?.title ?? "no workspace selected")}
+        </span>
+        <div className="ml-2 flex shrink-0 items-center gap-1.5">
+          <CreateAgentDialog variant="header" />
+          {rightCollapsed && (
+            <>
+              <GitStatusBadge
+                dirty={diffDirty}
+                ready={gitReady}
+                textClassName="self-center text-[13px]"
+              />
+              <button
+                type="button"
+                className="my-1 mr-1.5 flex size-6 shrink-0 items-center justify-center self-center rounded border border-border text-muted-foreground hover:border-primary hover:text-primary"
+                title="show file viewer (⌘])"
+                onClick={toggleRight}
+              >
+                <ChevronLeft className="size-4" />
+              </button>
+            </>
+          )}
+        </div>
+      </div>
+
+      <ResizablePanelGroup
+        orientation="horizontal"
+        className="min-h-0 w-full flex-1"
+      >
         {/* Left: spaces tree + agents pane */}
         <ResizablePanel
           id="sidebar"
@@ -440,7 +510,7 @@ function Shell() {
 
         <ResizableHandle withHandle className={cn(leftCollapsed && "hidden")} />
 
-        {/* Center: tab strip + the selected tab's terminal */}
+        {/* Center: the selected workspace's terminal (or the grid) */}
         <ResizablePanel
           id="center"
           defaultSize={50}
@@ -448,69 +518,6 @@ function Shell() {
           className="min-h-0"
         >
           <div className="flex h-full min-h-0 flex-col">
-            <div className="flex items-center">
-              {leftCollapsed && !gridMode && (
-                <button
-                  type="button"
-                  title="show sidebar (⌘[)"
-                  className="px-2 py-1.5 text-muted-foreground hover:text-primary"
-                  onClick={toggleLeft}
-                >
-                  <PanelLeft className="size-4" />
-                </button>
-              )}
-              <HostSwitcher />
-              <button
-                type="button"
-                aria-pressed={gridMode}
-                title={gridMode ? "back to terminal (⌘G)" : "grid view (⌘G)"}
-                className={cn(
-                  "ml-1 flex size-6 shrink-0 items-center justify-center self-center rounded border",
-                  gridMode
-                    ? "border-primary/50 bg-accent text-primary"
-                    : "border-border text-muted-foreground hover:border-primary hover:text-primary"
-                )}
-                onClick={toggleGrid}
-              >
-                <LayoutGrid className="size-3.5" />
-              </button>
-              <div className="min-w-0 flex-1">
-                {gridMode ? (
-                  <span className="block px-2 py-1.5 text-[13px] text-muted-foreground">
-                    all terminals · every host
-                  </span>
-                ) : (
-                  <TabStrip
-                    workspace={activeWorkspace}
-                    selectedTabId={selectedTabId}
-                    onSelectTab={selectTab}
-                  />
-                )}
-              </div>
-              {/* New Agent at the far right; when the file viewer is collapsed the
-                  git status + an expand control follow it (mirrors main, so git
-                  state is visible and the panel reachable without ⌘]). */}
-              <div className="ml-2 flex shrink-0 items-center gap-1.5">
-                <CreateAgentDialog variant="header" />
-                {rightCollapsed && (
-                  <>
-                    <GitStatusBadge
-                      dirty={diffDirty}
-                      ready={gitReady}
-                      textClassName="self-center text-[13px]"
-                    />
-                    <button
-                      type="button"
-                      className="my-1 mr-1.5 flex size-6 shrink-0 items-center justify-center self-center rounded border border-border text-muted-foreground hover:border-primary hover:text-primary"
-                      title="show file viewer (⌘])"
-                      onClick={toggleRight}
-                    >
-                      <ChevronLeft className="size-4" />
-                    </button>
-                  </>
-                )}
-              </div>
-            </div>
             <div className="relative flex min-h-0 flex-1 flex-col">
               {/* One persistent viewport, mounted once and pointed at the
                   selected tab — never remounted per tab (see TabTerminal). Pass

@@ -11,7 +11,6 @@ export interface Shortcut {
 export const SHORTCUTS: Shortcut[] = [
   { keys: "⌘K", label: "Find a pane…" },
   { keys: "⌘I", label: "New terminal…" },
-  { keys: "⌘U", label: "New tab…" },
   { keys: "⌘G", label: "Toggle the grid view" },
   { keys: "⌘[", label: "Toggle the left sidebar" },
   { keys: "⌘]", label: "Toggle the right panel" },
@@ -21,7 +20,6 @@ export const SHORTCUTS: Shortcut[] = [
 export type ShortcutAction =
   | "palette"
   | "new-workspace"
-  | "new-tab"
   | "grid"
   | "shortcuts"
 
@@ -57,8 +55,6 @@ export function matchShortcut(e: {
       return "palette"
     case "KeyI":
       return "new-workspace"
-    case "KeyU":
-      return "new-tab"
     case "KeyG":
       return "grid"
   }
@@ -67,8 +63,6 @@ export function matchShortcut(e: {
       return "palette"
     case "i":
       return "new-workspace"
-    case "u":
-      return "new-tab"
     case "g":
       return "grid"
   }
