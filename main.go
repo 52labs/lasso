@@ -1318,6 +1318,11 @@ func serveFile(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	defer f.Close()
+	// ServeContent sets Last-Modified; without an explicit Cache-Control the
+	// browser applies heuristic freshness (~10% of the file's age) and serves
+	// stale content from its cache after an edit — reopening a just-saved file
+	// showed the old version. File content must always be fetched fresh.
+	w.Header().Set("Cache-Control", "no-store")
 	// `download=1` forces a browser save (Content-Disposition: attachment) and
 	// bypasses the preview cap — the viewer's text fetch omits it, so previews
 	// still stay bounded.
