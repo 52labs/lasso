@@ -10,6 +10,7 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog"
 import { api } from "@/lib/api"
+import { useApp } from "@/lib/app-store"
 import { getMode, type Mode, setMode } from "@/lib/mode"
 import { qk } from "@/lib/query"
 import { SHORTCUTS } from "@/lib/shortcuts"
@@ -185,17 +186,21 @@ export function ShortcutsDialog({
 
 // AgentCreatorSettings edits the creator defaults and each repo's copy-files +
 // setup, persisted via /api/agent-config and /api/repo-config (~/.lasso/lasso.db).
+// Both are scoped to the ACTIVE host: every host has its own defaults, repo
+// search paths (scanned on its filesystem), and per-repo setup.
 function AgentCreatorSettings({ active }: { active: boolean }) {
   const queryClient = useQueryClient()
+  const { host: activeHost } = useApp()
+  const host = activeHost || "local"
 
   const configQuery = useQuery({
-    queryKey: qk.agentConfig(),
-    queryFn: () => api.agentConfig(),
+    queryKey: qk.agentConfig(host),
+    queryFn: () => api.agentConfig(host),
     enabled: active,
   })
   const reposQuery = useQuery({
-    queryKey: qk.repos(),
-    queryFn: () => api.repos(),
+    queryKey: qk.repos(host),
+    queryFn: () => api.repos(host),
     enabled: active,
   })
   const repos = reposQuery.data?.repos ?? []
@@ -206,6 +211,12 @@ function AgentCreatorSettings({ active }: { active: boolean }) {
   const [defaultAgent, setDefaultAgent] = React.useState("")
   const [scratchSetup, setScratchSetup] = React.useState("")
   const seededRef = React.useRef(false)
+  // biome-ignore lint/correctness/useExhaustiveDependencies: host is the reset trigger
+  React.useEffect(() => {
+    // A host switch shows a different host's defaults — drop in-progress edits
+    // and re-seed from that host's config once it arrives.
+    seededRef.current = false
+  }, [host])
   React.useEffect(() => {
     if (seededRef.current || !configQuery.data) return
     seededRef.current = true
@@ -239,24 +250,30 @@ function AgentCreatorSettings({ active }: { active: boolean }) {
 
   const saveDefaultsMutation = useMutation({
     mutationFn: () =>
-      api.saveAgentConfig({
-        repos_root: reposRoot,
-        default_agent: defaultAgent,
-        scratch_setup: scratchSetup,
-      }),
+      api.saveAgentConfig(
+        {
+          repos_root: reposRoot,
+          default_agent: defaultAgent,
+          scratch_setup: scratchSetup,
+        },
+        host
+      ),
     onSuccess: () => {
       // Repos root may have changed — refetch both config and the repo scan.
-      queryClient.invalidateQueries({ queryKey: qk.agentConfig() })
-      queryClient.invalidateQueries({ queryKey: qk.repos() })
+      queryClient.invalidateQueries({ queryKey: qk.agentConfig(host) })
+      queryClient.invalidateQueries({ queryKey: qk.repos(host) })
     },
   })
 
   const saveRepoMutation = useMutation({
     mutationFn: () =>
-      api.saveRepoConfig({ path: repoPath, copy_files: copyFiles, setup }),
+      api.saveRepoConfig(
+        { path: repoPath, copy_files: copyFiles, setup },
+        host
+      ),
     onSuccess: () => {
       setSavedRepo(repoPath)
-      queryClient.invalidateQueries({ queryKey: qk.repos() })
+      queryClient.invalidateQueries({ queryKey: qk.repos(host) })
     },
   })
 
@@ -270,6 +287,9 @@ function AgentCreatorSettings({ active }: { active: boolean }) {
       <section className="flex min-w-0 flex-1 flex-col gap-3 rounded-lg border border-border p-4 shadow-sm">
         <h3 className="font-medium text-foreground text-sm">
           New Agent defaults
+          <span className="ml-1.5 font-normal text-muted-foreground">
+            · {host}
+          </span>
         </h3>
 
         <Field
@@ -335,6 +355,9 @@ function AgentCreatorSettings({ active }: { active: boolean }) {
         <div className="flex flex-col gap-0.5">
           <h3 className="font-medium text-foreground text-sm">
             Per-repository setup
+            <span className="ml-1.5 font-normal text-muted-foreground">
+              · {host}
+            </span>
           </h3>
           <p className="text-[11px] text-muted-foreground">
             Files copied into a new worktree and commands run before the agent —

@@ -10,13 +10,13 @@ import "runtime/debug"
 // A var (not const) so release builds can stamp the exact tag via
 // `-ldflags "-X main.lassoSemver=<version>"` (see .github/workflows/release.yml);
 // the committed value is the source/dev default.
-var lassoSemver = "0.5.1"
+var lassoSemver = "0.6.0"
 
 // lassoVersion is the human-facing build identity: the hand-set semver plus the
 // exact commit it was built from, e.g. "0.1.0 (dc1e696)". The semver says
 // "which release", the commit says "which build of it" — useful when several
 // builds share a version (a dirty rebuild, a hotfix between bumps). Shown in the
-// Settings tab.
+// Settings tab and host switcher.
 func lassoVersion() string {
 	return lassoSemver + " (" + lassoCommit() + ")"
 }

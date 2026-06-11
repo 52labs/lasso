@@ -2,7 +2,7 @@ import * as React from "react"
 
 import { type ActiveState, api } from "@/lib/api"
 import { applyMode, watchSystemMode } from "@/lib/mode"
-import { invalidateCreatorData } from "@/lib/query"
+import { invalidateHostScoped } from "@/lib/query"
 
 // App-wide state from the backend, kept live over the /api/events SSE stream.
 // Components read activeCwd/activePaneID/panesRev reactively and run their own
@@ -11,6 +11,8 @@ interface AppState {
   activeCwd: string | null
   activePaneID: string | null
   panesRev: number
+  // The local host label, kept live off the SSE stream.
+  host: string | null
   // Bumps when the server-persisted UI layout (/api/ui-state) is written, so
   // the Shell re-pulls it and applies another client's panel widths.
   uiRev: number
@@ -20,7 +22,7 @@ interface AppState {
 
 // Fired when term_rev bumps so terminal iframes can reload onto a fresh ttyd
 // session.
-export const TERM_RELOAD_EVENT = "lasso:term-reload"
+export const HOST_CHANGED_EVENT = "lasso:host-changed"
 
 const AppContext = React.createContext<AppState | undefined>(undefined)
 
@@ -29,6 +31,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     activeCwd: null,
     activePaneID: null,
     panesRev: -1,
+    host: null,
     uiRev: -1,
     agentStatuses: {},
   })
@@ -40,9 +43,9 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
   const apply = React.useCallback((a: ActiveState) => {
     if (typeof a.term_rev === "number") {
       if (lastTermRev.current !== null && a.term_rev !== lastTermRev.current) {
-        window.dispatchEvent(new CustomEvent(TERM_RELOAD_EVENT))
+        window.dispatchEvent(new CustomEvent(HOST_CHANGED_EVENT))
         // Drop the cached creator queries so they reload on next open.
-        invalidateCreatorData()
+        invalidateHostScoped()
       }
       lastTermRev.current = a.term_rev
     }
@@ -50,6 +53,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
       activeCwd: a.cwd || prev.activeCwd,
       activePaneID: a.pane_id || prev.activePaneID,
       panesRev: typeof a.panes_rev === "number" ? a.panes_rev : prev.panesRev,
+      host: a.host || prev.host,
       uiRev: typeof a.ui_rev === "number" ? a.ui_rev : prev.uiRev,
       agentStatuses: a.agent_statuses ?? prev.agentStatuses,
     }))

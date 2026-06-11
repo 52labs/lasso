@@ -2,6 +2,7 @@ import * as React from "react"
 
 import { EmptyWorkspace } from "@/components/EmptyWorkspace"
 import { api } from "@/lib/api"
+import { HOST_CHANGED_EVENT } from "@/lib/app-store"
 import { bootTermFrame, focusTerminal, refitTerminal } from "@/lib/terminal"
 
 // The viewport: a SINGLE persistent terminal iframe (one ttyd) that we point at
@@ -25,16 +26,39 @@ export function TabTerminal({ tabId }: { tabId: string | null }) {
   // Warm the viewport once on mount (POST with no tab → attach to park). This
   // overlaps the attach handshake with app load so the first selected tab is
   // already warm.
+  //
+  // But NOT while the page has never been visible: a browser session-restore
+  // can load lasso in a background tab that's never looked at, and its iframe
+  // would still connect — holding a tmux client stuck at ttyd's default 80x24
+  // forever (xterm never gets layout, so it never fits). Under `window-size
+  // latest` that ghost client can win the window size whenever the active
+  // client detaches (e.g. leaving grid mode), shrinking the terminal everyone
+  // else sees. Defer the attach until the tab is first shown.
   React.useEffect(() => {
     let cancelled = false
-    api
-      .tabTerm("")
-      .then((r) => {
-        if (!cancelled) setBase(r.base)
-      })
-      .catch(() => {})
+    const warm = () => {
+      api
+        .tabTerm("")
+        .then((r) => {
+          if (!cancelled) setBase(r.base)
+        })
+        .catch(() => {})
+    }
+    if (document.visibilityState !== "hidden") {
+      warm()
+      return () => {
+        cancelled = true
+      }
+    }
+    const onVisible = () => {
+      if (document.visibilityState === "hidden") return
+      document.removeEventListener("visibilitychange", onVisible)
+      warm()
+    }
+    document.addEventListener("visibilitychange", onVisible)
     return () => {
       cancelled = true
+      document.removeEventListener("visibilitychange", onVisible)
     }
   }, [])
 
@@ -45,7 +69,16 @@ export function TabTerminal({ tabId }: { tabId: string | null }) {
   React.useEffect(() => {
     if (!base || !tabId) return
     setReady(false)
-    api.tabTerm(tabId).catch(() => {})
+    // The returned base can CHANGE when the tab lives on a remote host: a remote
+    // tab is shown through its own `ssh -tt` ttyd, not the warm local viewport. So
+    // adopt the returned base — same value (local→local) is a no-op; a different
+    // one remounts the iframe onto the right host's terminal.
+    api
+      .tabTerm(tabId)
+      .then((r) => {
+        if (r.base) setBase(r.base)
+      })
+      .catch(() => {})
     const fit = setTimeout(() => refitTerminal(id), 60)
     let cancelled = false
     let timer: ReturnType<typeof setTimeout>
@@ -78,8 +111,11 @@ export function TabTerminal({ tabId }: { tabId: string | null }) {
 
   // Keepalive: if the viewport ttyd died (crash), respawn it and pick up the new
   // base (which remounts the iframe — the only time we pay the handshake again).
+  // Skipped while the page is hidden (same ghost-client concern as the warm-up);
+  // a visible page recovers on its next tick.
   React.useEffect(() => {
     const t = setInterval(() => {
+      if (document.visibilityState === "hidden") return
       api
         .tabTermTouch()
         .then((r) => {
@@ -92,6 +128,22 @@ export function TabTerminal({ tabId }: { tabId: string | null }) {
         .catch(() => {})
     }, KEEPALIVE_MS)
     return () => clearInterval(t)
+  }, [tabId])
+
+  // When the active host switches (term_rev bump), re-point the viewport at the
+  // current tab so its base reflects the new host's terminal (the selected tab may
+  // not change, e.g. switching back to a host you already had a tab open on).
+  React.useEffect(() => {
+    const onHostChange = () => {
+      api
+        .tabTerm(tabId ?? "")
+        .then((r) => {
+          if (r.base) setBase(r.base)
+        })
+        .catch(() => {})
+    }
+    window.addEventListener(HOST_CHANGED_EVENT, onHostChange)
+    return () => window.removeEventListener(HOST_CHANGED_EVENT, onHostChange)
   }, [tabId])
 
   // Wire xterm once the iframe element exists (base only changes on rare respawn).
@@ -119,7 +171,7 @@ export function TabTerminal({ tabId }: { tabId: string | null }) {
       )}
       {!tabId && <EmptyWorkspace />}
       {tabId && (!base || !ready) && (
-        <div className="absolute inset-0 flex items-center justify-center gap-2 bg-[var(--h-bg)] text-muted-foreground text-sm">
+        <div className="absolute inset-0 flex items-center justify-center gap-2 bg-background text-muted-foreground text-sm">
           <span className="size-3.5 animate-spin rounded-full border-2 border-current border-t-transparent" />
           {base ? "starting…" : "attaching…"}
         </div>

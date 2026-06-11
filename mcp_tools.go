@@ -11,7 +11,7 @@ import (
 
 // MCP tool surface. Each tool is a thin wrapper over lasso's tmux-backed agent
 // machinery. Three groups:
-//   - discovery:   list_repos, list_branches
+//   - discovery:   list_hosts, list_repos, list_branches
 //   - spawning:    create_agent (loop it for the bulk "one per repo" case)
 //   - interaction: list_agents, get_agent, send_agent, read_agent, wait_agent,
 //                  close_agent  (the agent's tmux session is the stateful conversation)
@@ -23,8 +23,13 @@ import (
 // tags; fields are optional iff their json tag carries `omitempty`).
 func registerMCPTools(s *mcp.Server) {
 	mcp.AddTool(s, &mcp.Tool{
+		Name:        "list_hosts",
+		Description: "List the hosts lasso can drive (the local box plus reachable, protocol-compatible SSH hosts). Use the returned alias as the `host` argument of the other tools; omit `host` to target the local box.",
+	}, listHostsTool)
+
+	mcp.AddTool(s, &mcp.Tool{
 		Name:        "list_repos",
-		Description: "List the git repositories under the configured repo roots. Use a returned `path` as `repo` when creating a git agent. You may also pass any absolute repo path to create_agent directly — this only enumerates the configured roots.",
+		Description: "List the git repositories under the host's configured repo roots. Use a returned `path` as `repo` when creating a git agent. You may also pass any absolute repo path to create_agent directly — this only enumerates the configured roots.",
 	}, listReposTool)
 
 	mcp.AddTool(s, &mcp.Tool{
@@ -39,7 +44,7 @@ func registerMCPTools(s *mcp.Server) {
 
 	mcp.AddTool(s, &mcp.Tool{
 		Name:        "list_agents",
-		Description: "List the agents lasso has created, each with its live status (working/idle/blocked/unknown) when the agent is running.",
+		Description: "List the agents lasso has created on a host, each with its live status (working/idle/blocked/unknown) when the agent is running.",
 	}, listAgentsTool)
 
 	mcp.AddTool(s, &mcp.Tool{
@@ -81,6 +86,7 @@ func registerMCPTools(s *mcp.Server) {
 // caller needs to drive it, plus live status when known.
 type agentInfo struct {
 	ID          string `json:"id"`
+	Host        string `json:"host"`
 	Title       string `json:"title"`
 	Type        string `json:"type"`
 	Agent       string `json:"agent"`
@@ -94,9 +100,9 @@ type agentInfo struct {
 	CreatedAt   string `json:"created_at"`
 }
 
-func agentInfoFrom(rec AgentRecord, status string) agentInfo {
+func agentInfoFrom(host string, rec AgentRecord, status string) agentInfo {
 	return agentInfo{
-		ID: rec.ID, Title: rec.Title, Type: rec.Type, Agent: rec.Agent,
+		ID: rec.ID, Host: host, Title: rec.Title, Type: rec.Type, Agent: rec.Agent,
 		Repo: rec.Repo, Branch: rec.Branch, BaseBranch: rec.BaseBranch,
 		WorkDir: rec.WorkDir, WorkspaceID: rec.WorkspaceID, RootPane: agentSession(rec),
 		Status: status, CreatedAt: rec.CreatedAt.Format(time.RFC3339),
@@ -113,11 +119,38 @@ func agentSession(rec AgentRecord) string {
 	return tabSession(id)
 }
 
-// agentStatusNow detects an agent's status on demand by scraping its tmux pane —
-// not the poller cache, which is paused when no browser is connected (so MCP
-// callers always get a fresh read). A gone session / exited agent reads idle.
+// recSession is agentSession plus a re-assertion of the session→host mapping from
+// the record, so a remote agent's tmux commands route over SSH even after a lasso
+// restart cleared the in-memory map. Use this for any RUNTIME tmux op on an agent.
+func recSession(rec AgentRecord) string {
+	s := agentSession(rec)
+	setSessionHost(s, rec.Host)
+	return s
+}
+
+// agentStatusNow detects an agent's status on demand by scraping its tmux pane.
+// For a LOCAL agent it always does a fresh read (the poller pauses when no browser
+// is connected). For a REMOTE agent each read is an ssh round trip, so it serves a
+// recently-cached value when the poller has one and only sshes on a cache miss —
+// bounding the ssh cost of wait_agent. A gone session / exited agent reads idle.
 func agentStatusNow(rec AgentRecord) string {
-	session := agentSession(rec)
+	session := recSession(rec)
+	if !isLocalHost(rec.Host) {
+		if st, ok := agentStatuses.statusFresh(rec.Host, rec.TabID, 2*time.Second); ok {
+			return string(st)
+		}
+		if !tmuxHasSession(session) {
+			return string(StatusIdle)
+		}
+		screen, err := tmuxCapture(session)
+		if err != nil {
+			return string(StatusUnknown)
+		}
+		var lw time.Time
+		st := detectAgentStatus(rec.Agent, screen, agentStatuses.status(rec.Host, rec.TabID), &lw, time.Now())
+		agentStatuses.set(rec.Host, rec.TabID, st)
+		return string(st)
+	}
 	if !tmuxHasSession(session) || sessionAgentKind(session) == "" {
 		return string(StatusIdle)
 	}
@@ -126,7 +159,7 @@ func agentStatusNow(rec AgentRecord) string {
 		return string(StatusUnknown)
 	}
 	var lw time.Time
-	return string(detectAgentStatus(rec.Agent, screen, agentStatuses.status(rec.TabID), &lw, time.Now()))
+	return string(detectAgentStatus(rec.Agent, screen, agentStatuses.status(rec.Host, rec.TabID), &lw, time.Now()))
 }
 
 // agentReadCeiling caps a positive `lines` request so a single read can't ask
@@ -138,7 +171,7 @@ const agentReadCeiling = 50000
 // scrollback; lines == 0 falls back to 200; positive values are clamped to
 // agentReadCeiling.
 func agentReadText(rec AgentRecord, source string, lines int) (string, error) {
-	session := agentSession(rec)
+	session := recSession(rec)
 	if !tmuxHasSession(session) {
 		return "", fmt.Errorf("agent %q has no live terminal", rec.ID)
 	}
@@ -158,10 +191,51 @@ func agentReadText(rec AgentRecord, source string, lines int) (string, error) {
 }
 
 // ---------------------------------------------------------------------------
+// list_hosts
+// ---------------------------------------------------------------------------
+
+type listHostsIn struct{}
+
+type hostEntry struct {
+	Host       string `json:"host"`       // value to pass as `host` ("local" or an ssh alias)
+	Label      string `json:"label"`      // display name (hostname / alias)
+	Reachable  bool   `json:"reachable"`  // ssh connected (always true for local)
+	Running    bool   `json:"running"`    // usable as a target: reachable + tmux present
+	Compatible bool   `json:"compatible"` // same as running (no protocol to match in the tmux model)
+	Version    string `json:"version,omitempty"`
+	Err        string `json:"err,omitempty"`
+}
+
+type listHostsOut struct {
+	Active string      `json:"active"` // the host the lasso UI currently drives
+	Hosts  []hostEntry `json:"hosts"`
+}
+
+func listHostsTool(ctx context.Context, _ *mcp.CallToolRequest, _ listHostsIn) (*mcp.CallToolResult, listHostsOut, error) {
+	out := listHostsOut{
+		Active: curBackend().Name(),
+		Hosts: []hostEntry{{
+			Host: "local", Label: localHostname(), Reachable: true,
+			Running: true, Compatible: true, Version: lassoVersion(),
+		}},
+	}
+	for _, h := range discoverHosts(ctx, false) {
+		out.Hosts = append(out.Hosts, hostEntry{
+			Host: h.Alias, Label: h.Alias,
+			Reachable: h.Reachable, Running: h.usable(), Compatible: h.usable(),
+			Version: h.TmuxVersion, Err: h.Err,
+		})
+	}
+	return nil, out, nil
+}
+
+// ---------------------------------------------------------------------------
 // list_repos
 // ---------------------------------------------------------------------------
 
-type listReposIn struct{}
+type listReposIn struct {
+	Host string `json:"host,omitempty" jsonschema:"Host to list repos on; omit for the local box."`
+}
 
 type repoBrief struct {
 	Path           string `json:"path"`
@@ -174,8 +248,12 @@ type listReposOut struct {
 	Repos []repoBrief `json:"repos"`
 }
 
-func listReposTool(_ context.Context, _ *mcp.CallToolRequest, _ listReposIn) (*mcp.CallToolResult, listReposOut, error) {
-	root, repos, err := listReposLocal()
+func listReposTool(_ context.Context, _ *mcp.CallToolRequest, in listReposIn) (*mcp.CallToolResult, listReposOut, error) {
+	host := in.Host
+	if host == "" {
+		host = "local"
+	}
+	root, repos, err := hostReposList(host)
 	if err != nil {
 		return nil, listReposOut{}, err
 	}
@@ -191,6 +269,7 @@ func listReposTool(_ context.Context, _ *mcp.CallToolRequest, _ listReposIn) (*m
 // ---------------------------------------------------------------------------
 
 type listBranchesIn struct {
+	Host string `json:"host,omitempty" jsonschema:"Host the repo lives on; omit for the local box."`
 	Repo string `json:"repo" jsonschema:"Absolute path to the git repository."`
 }
 
@@ -204,7 +283,10 @@ func listBranchesTool(_ context.Context, _ *mcp.CallToolRequest, in listBranches
 	if strings.TrimSpace(in.Repo) == "" {
 		return nil, listBranchesOut{}, fmt.Errorf("repo is required")
 	}
-	b := curBackend()
+	b, err := resolveBackend(in.Host)
+	if err != nil {
+		return nil, listBranchesOut{}, err
+	}
 	local, remote, def := branchList(b, expandTildeOn(b, in.Repo))
 	return nil, listBranchesOut{Branches: local, RemoteBranches: remote, Default: def}, nil
 }
@@ -214,6 +296,7 @@ func listBranchesTool(_ context.Context, _ *mcp.CallToolRequest, in listBranches
 // ---------------------------------------------------------------------------
 
 type createAgentIn struct {
+	Host         string `json:"host,omitempty" jsonschema:"Host to create the agent on; omit for the local box."`
 	Type         string `json:"type" jsonschema:"\"git\" (a new worktree off base_branch) or \"scratch\" (an empty workspace)."`
 	Title        string `json:"title,omitempty" jsonschema:"Optional short title for the agent/worktree; defaults to the prompt's first line."`
 	Repo         string `json:"repo,omitempty" jsonschema:"Absolute path to the git repository. Required when type is \"git\"."`
@@ -227,7 +310,10 @@ type createAgentIn struct {
 }
 
 func createAgentTool(_ context.Context, _ *mcp.CallToolRequest, in createAgentIn) (*mcp.CallToolResult, agentInfo, error) {
-	b := curBackend()
+	b, err := resolveBackend(in.Host)
+	if err != nil {
+		return nil, agentInfo{}, err
+	}
 	rec, err := createAgent(b, createAgentReq{
 		Type:         in.Type,
 		Title:        in.Title,
@@ -246,25 +332,32 @@ func createAgentTool(_ context.Context, _ *mcp.CallToolRequest, in createAgentIn
 	if err != nil {
 		return nil, agentInfo{}, err
 	}
-	return nil, agentInfoFrom(rec, ""), nil
+	return nil, agentInfoFrom(b.Name(), rec, ""), nil
 }
 
 // ---------------------------------------------------------------------------
 // list_agents
 // ---------------------------------------------------------------------------
 
-type listAgentsIn struct{}
+type listAgentsIn struct {
+	Host string `json:"host,omitempty" jsonschema:"Host to list agents on; omit for the local box."`
+}
 
 type listAgentsOut struct {
+	Host   string      `json:"host"`
 	Agents []agentInfo `json:"agents"`
 }
 
-func listAgentsTool(_ context.Context, _ *mcp.CallToolRequest, _ listAgentsIn) (*mcp.CallToolResult, listAgentsOut, error) {
-	recs, err := listAgents()
+func listAgentsTool(_ context.Context, _ *mcp.CallToolRequest, in listAgentsIn) (*mcp.CallToolResult, listAgentsOut, error) {
+	host := in.Host
+	if host == "" {
+		host = "local"
+	}
+	recs, err := listAgents(host)
 	if err != nil {
 		return nil, listAgentsOut{}, err
 	}
-	var out listAgentsOut
+	out := listAgentsOut{Host: host}
 	for _, rec := range recs {
 		// The agents table is an append-only log; only surface agents whose tab is
 		// still open (close_agent soft-closes the tab), so list_agents reflects LIVE
@@ -272,7 +365,7 @@ func listAgentsTool(_ context.Context, _ *mcp.CallToolRequest, _ listAgentsIn) (
 		if !agentTabLive(rec) {
 			continue
 		}
-		out.Agents = append(out.Agents, agentInfoFrom(rec, agentStatusNow(rec)))
+		out.Agents = append(out.Agents, agentInfoFrom(host, rec, agentStatusNow(rec)))
 	}
 	return nil, out, nil
 }
@@ -285,7 +378,7 @@ func agentTabLive(rec AgentRecord) bool {
 			return t.ClosedAt.IsZero()
 		}
 	}
-	return tmuxHasSession(agentSession(rec))
+	return tmuxHasSession(recSession(rec))
 }
 
 // ---------------------------------------------------------------------------
@@ -293,6 +386,7 @@ func agentTabLive(rec AgentRecord) bool {
 // ---------------------------------------------------------------------------
 
 type whoamiIn struct {
+	Host  string `json:"host,omitempty" jsonschema:"Host the calling agent runs on; omit for the local box."`
 	TabID string `json:"tab_id,omitempty" jsonschema:"Your own lasso tab id — the value of the $LASSO_TAB_ID environment variable in your shell. The server cannot read your environment, so you must pass it. If unset you are not running inside a lasso-managed terminal."`
 }
 
@@ -303,29 +397,33 @@ type whoamiOut struct {
 }
 
 func whoamiTool(_ context.Context, _ *mcp.CallToolRequest, in whoamiIn) (*mcp.CallToolResult, whoamiOut, error) {
-	recs, err := listAgents()
+	host := in.Host
+	if host == "" {
+		host = "local"
+	}
+	recs, err := listAgents(host)
 	if err != nil {
 		return nil, whoamiOut{}, err
 	}
-	return nil, resolveWhoami(recs, in.TabID), nil
+	return nil, resolveWhoami(host, recs, in.TabID), nil
 }
 
 // resolveWhoami maps a $LASSO_TAB_ID value to the lasso agent that owns that tab.
 // Each agent's tmux session is created with LASSO_TAB_ID set, so an agent reads
 // the var and passes it here. Never errors — an unresolvable id yields
 // found:false with an explanation.
-func resolveWhoami(recs []AgentRecord, tabID string) whoamiOut {
+func resolveWhoami(host string, recs []AgentRecord, tabID string) whoamiOut {
 	tabID = strings.TrimSpace(tabID)
 	if tabID == "" {
 		return whoamiOut{Detail: "no tab_id given: pass the value of your $LASSO_TAB_ID environment variable. If it's empty or unset, you are not running inside a lasso-managed terminal."}
 	}
 	for _, rec := range recs {
 		if (rec.TabID != "" && rec.TabID == tabID) || rec.ID == tabID {
-			ai := agentInfoFrom(rec, agentStatusNow(rec))
+			ai := agentInfoFrom(host, rec, agentStatusNow(rec))
 			return whoamiOut{Found: true, Agent: &ai}
 		}
 	}
-	return whoamiOut{Detail: fmt.Sprintf("tab %q does not map to any lasso agent — you may be in a terminal lasso did not create.", tabID)}
+	return whoamiOut{Detail: fmt.Sprintf("tab %q does not map to any lasso agent on host %q — you may be in a terminal lasso did not create.", tabID, host)}
 }
 
 // ---------------------------------------------------------------------------
@@ -333,6 +431,7 @@ func resolveWhoami(recs []AgentRecord, tabID string) whoamiOut {
 // ---------------------------------------------------------------------------
 
 type getAgentIn struct {
+	Host    string `json:"host,omitempty" jsonschema:"Host the agent is on; omit for the local box."`
 	AgentID string `json:"agent_id" jsonschema:"The agent's id (from create_agent / list_agents)."`
 	Lines   int    `json:"lines,omitempty" jsonschema:"How many lines of recent output to include (default 50)."`
 }
@@ -343,7 +442,7 @@ type getAgentOut struct {
 }
 
 func getAgentTool(_ context.Context, _ *mcp.CallToolRequest, in getAgentIn) (*mcp.CallToolResult, getAgentOut, error) {
-	rec, err := findAgentRecord(in.AgentID)
+	rec, err := findAgentRecord(in.Host, in.AgentID)
 	if err != nil {
 		return nil, getAgentOut{}, err
 	}
@@ -352,7 +451,7 @@ func getAgentTool(_ context.Context, _ *mcp.CallToolRequest, in getAgentIn) (*mc
 		lines = 50
 	}
 	output, _ := agentReadText(rec, "recent", lines)
-	return nil, getAgentOut{Agent: agentInfoFrom(rec, agentStatusNow(rec)), Output: output}, nil
+	return nil, getAgentOut{Agent: agentInfoFrom(hostOrLocal(in.Host), rec, agentStatusNow(rec)), Output: output}, nil
 }
 
 // ---------------------------------------------------------------------------
@@ -360,6 +459,7 @@ func getAgentTool(_ context.Context, _ *mcp.CallToolRequest, in getAgentIn) (*mc
 // ---------------------------------------------------------------------------
 
 type sendAgentIn struct {
+	Host    string `json:"host,omitempty" jsonschema:"Host the agent is on; omit for the local box."`
 	AgentID string `json:"agent_id" jsonschema:"The agent's id."`
 	Text    string `json:"text" jsonschema:"Message to send; it is typed into the agent's pane and submitted with Enter."`
 }
@@ -372,11 +472,11 @@ func sendAgentTool(_ context.Context, _ *mcp.CallToolRequest, in sendAgentIn) (*
 	if strings.TrimSpace(in.Text) == "" {
 		return nil, sendAgentOut{}, fmt.Errorf("text is required")
 	}
-	rec, err := findAgentRecord(in.AgentID)
+	rec, err := findAgentRecord(in.Host, in.AgentID)
 	if err != nil {
 		return nil, sendAgentOut{}, err
 	}
-	session := agentSession(rec)
+	session := recSession(rec)
 	if !tmuxHasSession(session) {
 		return nil, sendAgentOut{}, fmt.Errorf("agent %q has no live terminal to send to", in.AgentID)
 	}
@@ -389,6 +489,7 @@ func sendAgentTool(_ context.Context, _ *mcp.CallToolRequest, in sendAgentIn) (*
 // ---------------------------------------------------------------------------
 
 type readAgentIn struct {
+	Host    string `json:"host,omitempty" jsonschema:"Host the agent is on; omit for the local box."`
 	AgentID string `json:"agent_id" jsonschema:"The agent's id."`
 	Source  string `json:"source,omitempty" jsonschema:"\"recent\" (scrollback, default) or \"visible\" (current screen)."`
 	Lines   int    `json:"lines,omitempty" jsonschema:"How many lines of scrollback to return (default 1000, capped at 50000). Pass -1 to return the full available scrollback. Ignored when source is \"visible\"."`
@@ -399,7 +500,7 @@ type readAgentOut struct {
 }
 
 func readAgentTool(_ context.Context, _ *mcp.CallToolRequest, in readAgentIn) (*mcp.CallToolResult, readAgentOut, error) {
-	rec, err := findAgentRecord(in.AgentID)
+	rec, err := findAgentRecord(in.Host, in.AgentID)
 	if err != nil {
 		return nil, readAgentOut{}, err
 	}
@@ -423,6 +524,7 @@ func readAgentTool(_ context.Context, _ *mcp.CallToolRequest, in readAgentIn) (*
 // ---------------------------------------------------------------------------
 
 type waitAgentIn struct {
+	Host      string `json:"host,omitempty" jsonschema:"Host the agent is on; omit for the local box."`
 	AgentID   string `json:"agent_id" jsonschema:"The agent's id."`
 	Status    string `json:"status,omitempty" jsonschema:"Status to wait for: idle (default), working, blocked, or unknown."`
 	TimeoutMs int    `json:"timeout_ms,omitempty" jsonschema:"Max time to wait in milliseconds (default 120000)."`
@@ -434,7 +536,7 @@ type waitAgentOut struct {
 }
 
 func waitAgentTool(ctx context.Context, _ *mcp.CallToolRequest, in waitAgentIn) (*mcp.CallToolResult, waitAgentOut, error) {
-	rec, err := findAgentRecord(in.AgentID)
+	rec, err := findAgentRecord(in.Host, in.AgentID)
 	if err != nil {
 		return nil, waitAgentOut{}, err
 	}
@@ -467,6 +569,7 @@ func waitAgentTool(ctx context.Context, _ *mcp.CallToolRequest, in waitAgentIn) 
 // ---------------------------------------------------------------------------
 
 type closeAgentIn struct {
+	Host           string `json:"host,omitempty" jsonschema:"Host the agent is on; omit for the local box."`
 	AgentID        string `json:"agent_id" jsonschema:"The agent's id."`
 	ClosePane      *bool  `json:"close_pane,omitempty" jsonschema:"Close the agent's tab (its tmux session) after killing the process. Defaults to true; set false to leave the terminal open as a bare shell."`
 	RemoveWorktree bool   `json:"remove_worktree,omitempty" jsonschema:"For a git agent, also delete its git worktree (discards uncommitted work). Defaults to false. Implies closing the pane."`
@@ -479,12 +582,15 @@ type closeAgentOut struct {
 }
 
 func closeAgentTool(_ context.Context, _ *mcp.CallToolRequest, in closeAgentIn) (*mcp.CallToolResult, closeAgentOut, error) {
-	rec, err := findAgentRecord(in.AgentID)
+	rec, err := findAgentRecord(in.Host, in.AgentID)
 	if err != nil {
 		return nil, closeAgentOut{}, err
 	}
-	b := curBackend()
-	session := agentSession(rec)
+	b, err := resolveBackend(in.Host)
+	if err != nil {
+		return nil, closeAgentOut{}, err
+	}
+	session := recSession(rec)
 
 	// 1. Always kill the agent process first (Ctrl-C), so it dies even if the
 	//    tab/shell is kept.

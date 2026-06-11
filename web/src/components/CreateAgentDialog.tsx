@@ -15,6 +15,7 @@ import {
 } from "@/components/ui/dialog"
 import { Input } from "@/components/ui/input"
 import { api, type CreateAgentPayload } from "@/lib/api"
+import { useApp } from "@/lib/app-store"
 import { qk, treeAddScratchWorkspace, treeAddWorktree } from "@/lib/query"
 import { cn } from "@/lib/utils"
 
@@ -153,15 +154,34 @@ export function CreateAgentDialog({
     setPlaceholderIdx(Math.floor(Math.random() * PROMPT_PLACEHOLDERS.length))
   }, [open])
 
-  // Server state via TanStack Query, fetched while the dialog is open.
+  // Target host for the new agent. Seeded from the active host each open; the
+  // host picker (shown only when reachable remote hosts exist) can override it.
+  const { host: activeHost } = useApp()
+  const [host, setHost] = React.useState("local")
+  React.useEffect(() => {
+    if (open) setHost(activeHost || "local")
+  }, [open, activeHost])
+
+  const hostsQuery = useQuery({
+    queryKey: qk.hosts,
+    queryFn: () => api.hosts(),
+    enabled: open,
+    staleTime: 20_000,
+  })
+  const remoteHosts = (hostsQuery.data?.hosts ?? []).filter(
+    (h) => h.reachable && h.has_tmux
+  )
+
+  // Server state via TanStack Query, fetched while the dialog is open — re-keyed
+  // by the selected host so the repo/branch pickers reflect that host's fs.
   const configQuery = useQuery({
-    queryKey: qk.agentConfig(),
-    queryFn: () => api.agentConfig(),
+    queryKey: qk.agentConfig(host),
+    queryFn: () => api.agentConfig(host),
     enabled: open,
   })
   const reposQuery = useQuery({
-    queryKey: qk.repos(),
-    queryFn: () => api.repos(),
+    queryKey: qk.repos(host),
+    queryFn: () => api.repos(host),
     enabled: open,
   })
   const config = configQuery.data ?? null
@@ -182,8 +202,8 @@ export function CreateAgentDialog({
   const promptRef = React.useRef<HTMLTextAreaElement>(null)
 
   const branchesQuery = useQuery({
-    queryKey: qk.repoBranches(repo),
-    queryFn: () => api.repoBranches(repo),
+    queryKey: qk.repoBranches(host, repo),
+    queryFn: () => api.repoBranches(repo, host),
     enabled: open && type === "git" && !!repo,
   })
   const branches = React.useMemo(() => {
@@ -272,7 +292,7 @@ export function CreateAgentDialog({
     e.preventDefault()
     setPastingImage(true)
     try {
-      const { path } = await api.pasteImage(file)
+      const { path } = await api.pasteImage(file, host)
       const textarea = promptRef.current
       if (!textarea) {
         onPromptChange(prompt + (prompt ? "\n" : "") + path)
@@ -317,11 +337,12 @@ export function CreateAgentDialog({
       let uploadDir: string | undefined
       let attachments: string[] | undefined
       if (files.length > 0) {
-        const up = await api.uploadAgentFiles(files)
+        const up = await api.uploadAgentFiles(files, host)
         uploadDir = up.upload_dir
         attachments = up.files
       }
       const payload: CreateAgentPayload = {
+        host,
         type,
         prompt: prompt.trim(),
         agent,
@@ -339,9 +360,14 @@ export function CreateAgentDialog({
     },
     onSuccess: (rec) => {
       toast.success(`Created agent “${rec.title}”`)
-      // Surface the new agent's workspace in the tree immediately so the tab
-      // strip + sidebar render it before the refetch lands.
-      if (rec.workspace_id && rec.tab_id) {
+      // If the agent was created on a different host than the active one, switch
+      // to it so the sidebar tree re-scopes and the new tab resolves (the focus
+      // dispatch below then lands on it once the re-scoped tree arrives).
+      const created = rec.host || host
+      if (created !== (activeHost || "local")) {
+        void api.switchHost(created)
+      } else if (rec.workspace_id && rec.tab_id) {
+        // Same host: surface the new workspace optimistically before the refetch.
         const tab = {
           id: rec.tab_id,
           title: rec.title,
@@ -566,6 +592,26 @@ export function CreateAgentDialog({
               >
                 Start in plan mode
               </label>
+              {/* Host picker — only when reachable remote hosts exist. The new
+                  agent's worktree/session is created on the chosen host. */}
+              {remoteHosts.length > 0 && (
+                <select
+                  id="agent-host"
+                  aria-label="Host"
+                  className={cn(fieldClass, "ml-auto w-auto py-1")}
+                  value={host}
+                  onChange={(e) => setHost(e.target.value)}
+                >
+                  <option value="local">
+                    {hostsQuery.data?.hostname ?? "local"}
+                  </option>
+                  {remoteHosts.map((h) => (
+                    <option key={h.alias} value={h.alias}>
+                      {h.alias}
+                    </option>
+                  ))}
+                </select>
+              )}
             </div>
 
             {type === "git" && (

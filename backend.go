@@ -7,11 +7,15 @@ import (
 	"sync"
 )
 
-// Backend abstracts the filesystem + git surface the handlers operate on. lasso
-// is local-only, so there is a single implementation (localBackend) that hits
-// os.* / git directly; the interface remains as a seam handlers route through
-// (curBackend()) and tests can substitute.
+// Backend abstracts the filesystem + git surface the handlers operate on. The
+// local implementation (localBackend) hits os.* / git directly; remoteBackend
+// drives another host over SSH (SFTP for files, `ssh host git …`, and per-command
+// tmux over the SSH control master). Handlers route through curBackend() (the
+// active host); tmux/grid code can target any host via hostBackend()/resolveBackend().
 type Backend interface {
+	// Name is the host identity — "local" or an ssh-config alias.
+	Name() string
+
 	// Filesystem ops mirror the os.* calls the file handlers make.
 	ReadDir(path string) ([]fileEntry, error)
 	Stat(path string) (fs.FileInfo, error)
@@ -27,10 +31,27 @@ type Backend interface {
 	// GitOut runs `git -C dir args...` and returns stdout.
 	GitOut(dir string, args ...string) (string, error)
 
+	// TmuxArgv builds the full argv that runs a tmux command against THIS host's
+	// dedicated lasso tmux server. Local: `tmux -S <sock> -f /dev/null args…`.
+	// Remote: `ssh <ctlOpts> <alias> 'tmux -S <remoteSock> -f /dev/null <quoted args…>'`,
+	// multiplexed over the host's SSH control master. The tmux command-sequence
+	// separator ";" passes through as its own (quoted) argv token either way.
+	TmuxArgv(args []string) []string
+
+	// TmuxAttachArgv is the argv ttyd runs to attach a browser terminal to a tmux
+	// session interactively. Local: `tmux … attach -t <session>`. Remote: an
+	// `ssh -tt … 'tmux … attach -t <session>'` that forces a remote PTY (over the
+	// control master) so the TUI renders. Distinct from TmuxArgv (non-interactive).
+	TmuxAttachArgv(session string) []string
+
 	// HomeDir is the home directory, for ~-expansion in path inputs.
 	HomeDir() (string, error)
 	// PasteImageDir is where a pasted clipboard image is written.
 	PasteImageDir() string
+
+	// Close tears down any resources (the SSH control master for a remote
+	// backend). The local backend is a no-op.
+	Close() error
 }
 
 // active holds the backend every handler currently routes through.
@@ -56,6 +77,8 @@ func setBackend(b Backend) {
 // ---------------------------------------------------------------------------
 
 type localBackend struct{}
+
+func (b *localBackend) Name() string { return "local" }
 
 func (b *localBackend) ReadDir(path string) ([]fileEntry, error) {
 	ents, err := os.ReadDir(path)
@@ -96,4 +119,20 @@ func (b *localBackend) GitOut(dir string, args ...string) (string, error) {
 func (b *localBackend) HomeDir() (string, error) { return os.UserHomeDir() }
 func (b *localBackend) PasteImageDir() string    { return pasteImageDir() }
 
+// TmuxArgv runs tmux locally on lasso's private socket (the historical path).
+func (b *localBackend) TmuxArgv(args []string) []string {
+	return append([]string{"tmux"}, append(tmuxPrefix(), args...)...)
+}
+
+// TmuxAttachArgv attaches ttyd to a local session (the historical viewport path).
+func (b *localBackend) TmuxAttachArgv(session string) []string {
+	return b.TmuxArgv([]string{"attach", "-t", session})
+}
+
+func (b *localBackend) Close() error { return nil }
+
 var _ Backend = (*localBackend)(nil)
+
+// localBE is the shared local backend singleton, so tmux/file routing for the
+// local host never allocates or holds a connection.
+var localBE Backend = &localBackend{}

@@ -6,21 +6,14 @@ export interface ActiveState {
   cwd?: string
   pane_id?: string
   panes_rev?: number
-  // A counter that bumps when terminals must reload.
+  // The local host label and a counter that bumps when terminals must reload.
+  host?: string
   term_rev?: number
   // A counter that bumps when /api/ui-state is written, so other clients
   // re-pull and apply the new layout.
   ui_rev?: number
   // tab id → agent status (idle|working|blocked), pushed by the status poller.
   agent_statuses?: Record<string, string>
-}
-
-// Server-persisted UI layout prefs — the side panels' last-open widths (% of
-// the panel group), shared across browsers/tabs (last write wins). Zero/absent
-// means "never saved".
-export interface UIState {
-  left_width?: number
-  right_width?: number
 }
 
 export interface Pane {
@@ -33,6 +26,62 @@ export interface Pane {
   focused?: boolean
   agent?: string
   agent_status?: string
+}
+
+// ---------------------------------------------------------------------------
+// Multi-host: ssh-config hosts lasso can drive, and the cross-host grid.
+// ---------------------------------------------------------------------------
+
+// One ssh-config host. Usable (selectable, a valid agent/grid target) when
+// reachable && has_tmux; otherwise the UI greys it out and shows `err`.
+export interface HostInfo {
+  alias: string
+  reachable: boolean
+  has_tmux: boolean
+  tmux_version?: string
+  home?: string
+  err?: string
+}
+
+export interface HostsPayload {
+  active: string // the host lasso currently drives ("local" or an alias)
+  hostname: string // local machine label, shown for the local host
+  hosts: HostInfo[]
+}
+
+// One live tab on one host, as rendered by the grid. A "pane" maps 1:1 to a tab
+// (lasso's terminal granularity is the tab's tmux session).
+export interface GridPane {
+  host: string
+  host_label: string
+  tab_id: string
+  workspace_id: string
+  workspace_label: string
+  tab_label: string
+  cwd: string
+  agent?: string
+  agent_status?: AgentStatus
+  has_agent: boolean
+  prompt?: string
+}
+
+export interface GridPayload {
+  panes: GridPane[]
+  errors?: Record<string, string> // host → why it couldn't be reached
+}
+
+// Server-persisted, global UI preferences (the grid's filters, sidebar state,
+// and the side panels' last-open widths as % of the panel group — zero/absent
+// width means "never saved"). One blob shared across browsers/tabs, last write
+// wins; write through patchUIState (lib/ui-state.ts) so partial updates never
+// clobber the other fields.
+export interface UIState {
+  grid_agents_only: boolean
+  grid_hidden_hosts: string[]
+  grid_selected: string[] // "host|tab_id" keys of multi-selected cells
+  sidebar_collapsed: boolean
+  left_width?: number
+  right_width?: number
 }
 
 export interface FileEntry {
@@ -192,6 +241,7 @@ export interface RepoConfig {
 // One agent lasso has spawned.
 export interface AgentRecord {
   id: string
+  host?: string
   title: string
   type: "git" | "scratch"
   repo?: string
@@ -241,6 +291,8 @@ export interface RepoBranches {
 
 // The body POSTed to /api/create-agent.
 export interface CreateAgentPayload {
+  // Target host ("" / "local" = the local box, else an ssh alias).
+  host?: string
   type: "git" | "scratch"
   // The agent's instruction; its first line becomes the title (branch/dir name,
   // workspace label, list/toast headline).
@@ -272,16 +324,19 @@ async function postJSON<T>(url: string, body: unknown): Promise<T> {
   return (await r.json()) as T
 }
 
+// withHost appends ?host=/&host= to a config endpoint. The backend is
+// local-only now, so callers pass "local"; omitted = the backend default.
+function withHost(url: string, host?: string): string {
+  if (!host) return url
+  return `${url}${url.includes("?") ? "&" : "?"}host=${encodeURIComponent(host)}`
+}
+
 export const api = {
   active: () => getJSON<ActiveState>("/api/active"),
 
   panes: () => getJSON<{ panes?: Pane[] }>("/api/panes"),
 
   version: () => getJSON<VersionInfo>("/api/version"),
-
-  // --- persisted UI layout (shared across clients; last write wins) ---
-  uiState: () => getJSON<UIState>("/api/ui-state"),
-  saveUIState: (s: UIState) => postJSON<UIState>("/api/ui-state", s),
 
   // --- sidebar tree + workspace/tab/repo mutations ---
   tree: () => getJSON<TreePayload>("/api/tree"),
@@ -457,8 +512,8 @@ export const api = {
 
   // Write a pasted image to disk and return its path to insert into the
   // description.
-  pasteImage: async (file: Blob): Promise<{ path: string }> => {
-    const r = await fetch("/api/paste-image", {
+  pasteImage: async (file: Blob, host?: string): Promise<{ path: string }> => {
+    const r = await fetch(withHost("/api/paste-image", host), {
       method: "POST",
       headers: { "Content-Type": file.type || "image/png" },
       body: file,
@@ -470,7 +525,8 @@ export const api = {
   // --- Agent creation ---
 
   // The creator's settings + agent log (~/.lasso/lasso.db).
-  agentConfig: () => getJSON<AgentConfig>("/api/agent-config"),
+  agentConfig: (host?: string) =>
+    getJSON<AgentConfig>(withHost("/api/agent-config", host)),
 
   // Update the global creator defaults (repos_root, branch_prefix,
   // default_agent, scratch_setup); omitted fields are left unchanged.
@@ -480,36 +536,41 @@ export const api = {
         AgentConfig,
         "repos_root" | "branch_prefix" | "default_agent" | "scratch_setup"
       >
-    >
-  ) => postJSON<AgentConfig>("/api/agent-config", cfg),
+    >,
+    host?: string
+  ) => postJSON<AgentConfig>(withHost("/api/agent-config", host), cfg),
 
   // Save a repo's per-repo creator settings (copy-files globs + setup script).
   // These live with the repo, not the agent, so they're edited in Settings.
-  saveRepoConfig: (cfg: {
-    path: string
-    copy_files?: string
-    setup?: string
-  }) => postJSON<RepoConfig>("/api/repo-config", cfg),
+  saveRepoConfig: (
+    cfg: {
+      path: string
+      copy_files?: string
+      setup?: string
+    },
+    host?: string
+  ) => postJSON<RepoConfig>(withHost("/api/repo-config", host), cfg),
 
   // Git repos discovered under repos_root, each with its remembered state.
-  repos: () =>
-    getJSON<{ root: string; repos: RepoEntry[] }>("/api/repos"),
+  repos: (host?: string) =>
+    getJSON<{ root: string; repos: RepoEntry[] }>(withHost("/api/repos", host)),
 
   // Local + remote branches of a repo, plus its detected default branch.
-  repoBranches: (path: string) =>
+  repoBranches: (path: string, host?: string) =>
     getJSON<RepoBranches>(
-      `/api/repo-branches?path=${encodeURIComponent(path)}`
+      withHost(`/api/repo-branches?path=${encodeURIComponent(path)}`, host)
     ),
 
   // Stage attachment files before creating the agent; returns the staging dir
   // id + stored filenames to pass to createAgent, which moves them into the
   // work dir.
   uploadAgentFiles: async (
-    files: File[]
+    files: File[],
+    host?: string
   ): Promise<{ upload_dir: string; files: string[] }> => {
     const form = new FormData()
     for (const f of files) form.append("files", f, f.name)
-    const r = await fetch("/api/agent-upload", {
+    const r = await fetch(withHost("/api/agent-upload", host), {
       method: "POST",
       body: form,
     })
@@ -520,4 +581,52 @@ export const api = {
   // Create + launch an agent (git worktree or scratch workspace).
   createAgent: (payload: CreateAgentPayload) =>
     postJSON<AgentRecord>("/api/create-agent", payload),
+
+  // --- Multi-host + grid ---
+
+  // List ssh-config hosts lasso can drive (refresh forces a re-probe).
+  hosts: (refresh = false) =>
+    getJSON<HostsPayload>(`/api/hosts${refresh ? "?refresh=1" : ""}`),
+
+  // Switch the active host (the file browser, diff, repo picker, sidebar tree
+  // and new-agent target follow it). Bumps term_rev so iframes reload.
+  switchHost: (host: string) =>
+    postJSON<{ active: string }>("/api/host", { host }),
+
+  // The cross-host pane list (every host's live tabs).
+  gridPanes: () => getJSON<GridPayload>("/api/grid"),
+
+  // Ensure a ttyd attached to a grid pane and get its iframe base path.
+  gridTerm: (host: string, tab_id: string) =>
+    postJSON<{ base: string }>("/api/grid/term", { host, tab_id }),
+
+  // Keepalive so a visible cell's ttyd isn't reaped.
+  gridTermTouch: (host: string, tab_id: string) =>
+    postJSON<{ alive: boolean }>("/api/grid/term-touch", { host, tab_id }),
+
+  // Tear down a cell's ttyd when it scrolls out of view / the grid is left.
+  // keepalive:true so it still fires during page unload.
+  gridTermRelease: (host: string, tab_id: string) =>
+    fetch("/api/grid/term-release", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ host, tab_id }),
+      keepalive: true,
+    }).then(() => undefined),
+
+  // Rename a workspace from the grid.
+  gridRename: (host: string, workspace_id: string, label: string) =>
+    postJSON<{ ok: boolean }>("/api/grid/rename", {
+      host,
+      workspace_id,
+      label,
+    }),
+
+  // Close one or more panes (kills their sessions, host-aware).
+  gridClose: (panes: { host: string; tab_id: string }[]) =>
+    postJSON<{ ok: boolean }>("/api/grid/close", { panes }),
+
+  // Server-persisted UI prefs (grid filters + sidebar collapsed).
+  uiState: () => getJSON<UIState>("/api/ui-state"),
+  saveUIState: (s: UIState) => postJSON<UIState>("/api/ui-state", s),
 }

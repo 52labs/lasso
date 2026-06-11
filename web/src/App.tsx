@@ -4,6 +4,7 @@ import {
   ChevronRight,
   Files,
   Globe,
+  LayoutGrid,
   type LucideIcon,
   NotebookPen,
   PanelLeft,
@@ -15,6 +16,8 @@ import { BrowserTab } from "@/components/BrowserTab"
 import { CreateAgentDialog } from "@/components/CreateAgentDialog"
 import { FilesPanel } from "@/components/FilesPanel"
 import { GitStatusBadge } from "@/components/GitStatusBadge"
+import { GridTab } from "@/components/GridTab"
+import { HostSwitcher } from "@/components/HostSwitcher"
 import { PaneSwitcher } from "@/components/PaneSwitcher"
 import { ScratchTab } from "@/components/ScratchTab"
 import { SettingsTab, ShortcutsDialog } from "@/components/SettingsTab"
@@ -34,6 +37,8 @@ import { useDiff } from "@/lib/git"
 import { installHistoryToggle } from "@/lib/history-toggle"
 import { qk, queryClient } from "@/lib/query"
 import { matchShortcut } from "@/lib/shortcuts"
+import { kickTerminalSize, VIEWPORT_TERM_ID } from "@/lib/terminal"
+import { patchUIState } from "@/lib/ui-state"
 import { cn } from "@/lib/utils"
 
 type RightView = "files" | "scratch" | "browser" | "settings"
@@ -44,6 +49,7 @@ const LEFT_COLLAPSED_KEY = "lasso-left-collapsed"
 const RIGHT_COLLAPSED_KEY = "lasso-right-collapsed"
 const LEFT_WIDTH_KEY = "lasso-left-width"
 const RIGHT_WIDTH_KEY = "lasso-right-width"
+const GRID_MODE_KEY = "lasso-grid-mode"
 
 // Read a persisted panel width (percentage), falling back to a default when
 // it's missing or unparseable.
@@ -210,6 +216,9 @@ function Shell() {
   )
   const [paletteOpen, setPaletteOpen] = React.useState(false)
   const [shortcutsOpen, setShortcutsOpen] = React.useState(false)
+  const [gridMode, setGridMode] = React.useState(
+    () => lsGet(GRID_MODE_KEY) === "true"
+  )
   const [selectedTabId, setSelectedTabId] = React.useState<string | null>(() =>
     lsGet("lasso-selected-tab")
   )
@@ -248,9 +257,9 @@ function Shell() {
         a !== undefined && Math.abs(a - b) < 0.5
       if (same(s.left, left) && same(s.right, right)) return
       serverWidths.current = { left, right }
-      api.saveUIState({ left_width: left, right_width: right }).catch(() => {
-        /* offline / transient — localStorage still has the widths */
-      })
+      // patchUIState merges into the shared ui_state blob, so the width push
+      // can't clobber the grid filters (and vice versa).
+      patchUIState({ left_width: left, right_width: right })
     }, 400)
   }, [])
   React.useEffect(
@@ -376,7 +385,7 @@ function Shell() {
           if (!cancelled) emit(r.cwd)
         })
         .catch(() => {
-          /* session not live yet / transient blip — keep last cwd */
+          /* session not live yet / transient host blip — keep last cwd */
         })
     void poll()
     // Backgrounded tabs don't change cwd visibly; skip polling while hidden.
@@ -402,6 +411,53 @@ function Shell() {
     else p.collapse()
   }, [])
 
+  // The Grid is a full main view: it replaces the spaces sidebar AND the center
+  // terminal (the wall of live terminals IS the workspace overview). Entering it
+  // collapses the left panel so the grid spans both; leaving restores the
+  // sidebar unless the user had collapsed it themselves before entering. The
+  // terminal viewport underneath stays mounted (just hidden) so flipping back
+  // is instant — no xterm re-handshake.
+  const preGridLeftCollapsed = React.useRef(false)
+  const wasGridMode = React.useRef(false)
+  const toggleGrid = React.useCallback(() => {
+    setGridMode((on) => {
+      lsSet(GRID_MODE_KEY, String(!on))
+      return !on
+    })
+  }, [])
+  React.useEffect(() => {
+    const p = leftPanel.current
+    if (!p) return
+    if (gridMode) {
+      // Entering (or loading straight into) grid mode: remember whether the
+      // user had the sidebar collapsed themselves, then take its space.
+      if (!wasGridMode.current) preGridLeftCollapsed.current = p.isCollapsed()
+      p.collapse()
+    } else if (wasGridMode.current) {
+      if (!preGridLeftCollapsed.current) p.resize(`${leftWidth.current}%`)
+      // The grid's per-cell tmux clients shrank the shared windows (tmux sizes
+      // to the latest active client). Their release alone may not restore the
+      // viewport's width — tmux falls back to whichever remaining client was
+      // active last, which can be a stale co-viewer. Assert the visible
+      // viewport as the latest client so the window snaps back now, not on the
+      // user's next keystroke. Delayed a beat so the iframe is unhidden first.
+      const t = setTimeout(() => kickTerminalSize(VIEWPORT_TERM_ID), 150)
+      wasGridMode.current = gridMode
+      return () => clearTimeout(t)
+    }
+    wasGridMode.current = gridMode
+  }, [gridMode])
+
+  // Focusing a grid pane drops back to the normal view on that pane (the grid
+  // is the overview; focus means "take me to this terminal").
+  const selectTabFromGrid = React.useCallback(
+    (tabId: string) => {
+      if (gridMode) toggleGrid()
+      selectTab(tabId)
+    },
+    [gridMode, toggleGrid, selectTab]
+  )
+
   // ⌘K opens the switcher, ⌘I the new-workspace modal. Cmd-only so terminal
   // control keys (Ctrl-*) are never clobbered; the terminal iframes re-dispatch
   // Cmd shortcuts to this document so they work with focus inside. (⌘[/⌘] are
@@ -415,6 +471,7 @@ function Shell() {
       e.stopPropagation()
       if (action === "palette") setPaletteOpen(true)
       else if (action === "shortcuts") setShortcutsOpen(true)
+      else if (action === "grid") toggleGrid()
       else if (action === "new-workspace")
         window.dispatchEvent(new CustomEvent("lasso:new-workspace"))
       else if (action === "new-tab")
@@ -422,7 +479,7 @@ function Shell() {
     }
     document.addEventListener("keydown", onKey, true)
     return () => document.removeEventListener("keydown", onKey, true)
-  }, [])
+  }, [toggleGrid])
 
   // ⌘[ / ⌘] (and the Back/Forward buttons / swipe) toggle the side panels via a
   // history trap, since macOS browsers won't deliver those keys to the page.
@@ -432,8 +489,77 @@ function Shell() {
   )
 
   return (
-    <div className="relative h-full w-full">
-      <ResizablePanelGroup orientation="horizontal" className="h-full w-full">
+    <div className="relative flex h-full w-full flex-col">
+      {/* Full-width header: the app-level controls live here — never inside a
+          panel — so their placement is identical whether the sidebar is open,
+          collapsed, or replaced by the grid. */}
+      <div className="flex shrink-0 items-center border-border border-b">
+        <button
+          type="button"
+          title={
+            gridMode
+              ? "exit grid to the sidebar"
+              : leftCollapsed
+                ? "show sidebar (⌘[)"
+                : "hide sidebar (⌘[)"
+          }
+          aria-pressed={!gridMode && !leftCollapsed}
+          className="px-2 py-1.5 text-muted-foreground hover:text-primary"
+          onClick={() => {
+            // In grid mode the sidebar's space belongs to the grid; asking for
+            // the sidebar means leaving the grid (and restoring it expanded).
+            if (gridMode) {
+              preGridLeftCollapsed.current = false
+              toggleGrid()
+              return
+            }
+            toggleLeft()
+          }}
+        >
+          <PanelLeft className="size-4" />
+        </button>
+        <button
+          type="button"
+          aria-pressed={gridMode}
+          title={gridMode ? "back to terminal (⌘G)" : "grid view (⌘G)"}
+          className={cn(
+            "mr-1 flex size-6 shrink-0 items-center justify-center self-center rounded border",
+            gridMode
+              ? "border-primary/50 bg-accent text-primary"
+              : "border-border text-muted-foreground hover:border-primary hover:text-primary"
+          )}
+          onClick={toggleGrid}
+        >
+          <LayoutGrid className="size-3.5" />
+        </button>
+        <HostSwitcher />
+        <div className="min-w-0 flex-1" />
+        <div className="ml-2 flex shrink-0 items-center gap-1.5">
+          <CreateAgentDialog variant="header" />
+          {rightCollapsed && (
+            <>
+              <GitStatusBadge
+                dirty={diffDirty}
+                ready={gitReady}
+                textClassName="self-center text-[13px]"
+              />
+              <button
+                type="button"
+                className="my-1 mr-1.5 flex size-6 shrink-0 items-center justify-center self-center rounded border border-border text-muted-foreground hover:border-primary hover:text-primary"
+                title="show file viewer (⌘])"
+                onClick={toggleRight}
+              >
+                <ChevronLeft className="size-4" />
+              </button>
+            </>
+          )}
+        </div>
+      </div>
+
+      <ResizablePanelGroup
+        orientation="horizontal"
+        className="min-h-0 w-full flex-1"
+      >
         {/* Left: spaces tree + agents pane */}
         <ResizablePanel
           id="sidebar"
@@ -463,7 +589,7 @@ function Shell() {
 
         <ResizableHandle withHandle className={cn(leftCollapsed && "hidden")} />
 
-        {/* Center: tab strip + the selected tab's terminal */}
+        {/* Center: the selected workspace's tabs + terminal (or the grid) */}
         <ResizablePanel
           id="center"
           defaultSize={50}
@@ -471,55 +597,42 @@ function Shell() {
           className="min-h-0"
         >
           <div className="flex h-full min-h-0 flex-col">
-            <div className="flex items-center">
-              {leftCollapsed && (
-                <button
-                  type="button"
-                  title="show sidebar (⌘[)"
-                  className="px-2 py-1.5 text-muted-foreground hover:text-primary"
-                  onClick={toggleLeft}
-                >
-                  <PanelLeft className="size-4" />
-                </button>
-              )}
-              <div className="min-w-0 flex-1">
-                <TabStrip
-                  workspace={activeWorkspace}
-                  selectedTabId={selectedTabId}
-                  onSelectTab={selectTab}
-                />
-              </div>
-              {/* New Agent at the far right; when the file viewer is collapsed the
-                  git status + an expand control follow it (mirrors main, so git
-                  state is visible and the panel reachable without ⌘]). */}
-              <div className="ml-2 flex shrink-0 items-center gap-1.5">
-                <CreateAgentDialog variant="header" />
-                {rightCollapsed && (
-                  <>
-                    <GitStatusBadge
-                      dirty={diffDirty}
-                      ready={gitReady}
-                      textClassName="self-center text-[13px]"
-                    />
-                    <button
-                      type="button"
-                      className="my-1 mr-1.5 flex size-6 shrink-0 items-center justify-center self-center rounded border border-border text-muted-foreground hover:border-primary hover:text-primary"
-                      title="show file viewer (⌘])"
-                      onClick={toggleRight}
-                    >
-                      <ChevronLeft className="size-4" />
-                    </button>
-                  </>
-                )}
-              </div>
-            </div>
+            {/* The active workspace's tab strip, its own row under the global
+                header (which holds the app-level controls). Hidden in grid
+                mode — the grid spans every workspace. */}
+            {!gridMode && (
+              <TabStrip
+                workspace={activeWorkspace}
+                selectedTabId={selectedTabId}
+                onSelectTab={selectTab}
+              />
+            )}
             <div className="relative flex min-h-0 flex-1 flex-col">
               {/* One persistent viewport, mounted once and pointed at the
                   selected tab — never remounted per tab (see TabTerminal). Pass
                   null when the selection doesn't resolve to a workspace (matches
                   the strip's "no workspace selected") so TabTerminal hides the
-                  iframe and shows the empty state instead of a stray session. */}
-              <TabTerminal tabId={activeWorkspace ? selectedTabId : null} />
+                  iframe and shows the empty state instead of a stray session.
+                  In grid mode it stays mounted underneath (hidden) so leaving
+                  the grid doesn't re-handshake xterm. */}
+              <div
+                className={cn(
+                  "flex min-h-0 flex-1 flex-col",
+                  gridMode && "hidden"
+                )}
+              >
+                <TabTerminal tabId={activeWorkspace ? selectedTabId : null} />
+              </div>
+              {/* The grid view — the cross-host wall of live terminals that
+                  replaces the sidebar + terminal while active. */}
+              <div
+                className={cn(
+                  "absolute inset-0 flex-col",
+                  gridMode ? "flex" : "hidden"
+                )}
+              >
+                <GridTab active={gridMode} selectTab={selectTabFromGrid} />
+              </div>
             </div>
           </div>
         </ResizablePanel>

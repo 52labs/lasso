@@ -41,10 +41,12 @@ func newMCPHandler() *mcp.StreamableHTTPHandler {
 	})
 }
 
-// findAgentRecord looks up an agent by its lasso id, so the interaction tools
-// can recover its tmux session from the persisted record.
-func findAgentRecord(id string) (AgentRecord, error) {
-	recs, err := listAgents()
+// findAgentRecord looks up an agent created on host by its lasso id, so the
+// interaction tools can recover its tmux session from the persisted record.
+// resolveBackend (hostpool.go) maps the `host` argument to a Backend.
+func findAgentRecord(host, id string) (AgentRecord, error) {
+	host = hostOrLocal(host)
+	recs, err := listAgents(host)
 	if err != nil {
 		return AgentRecord{}, err
 	}
@@ -53,5 +55,5 @@ func findAgentRecord(id string) (AgentRecord, error) {
 			return r, nil
 		}
 	}
-	return AgentRecord{}, fmt.Errorf("no agent %q", id)
+	return AgentRecord{}, fmt.Errorf("no agent %q on host %q", id, host)
 }

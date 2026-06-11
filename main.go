@@ -64,7 +64,7 @@ func runServer() {
 	// All filesystem/git operations route through the local backend.
 	setBackend(&localBackend{})
 
-	// Open the local state DB (~/.lasso/lasso.db), migrating a legacy
+	// Open the host-local state DB (~/.lasso/lasso.db), migrating a legacy
 	// config.yaml on first run. Fatal if it can't open — the creator depends on it.
 	if err := openDB(); err != nil {
 		log.Fatalf("open state db: %v", err)
@@ -159,6 +159,17 @@ func runServer() {
 	mux.HandleFunc("/api/repo-config", serveRepoConfig)
 	mux.HandleFunc("/api/repos", serveRepos)
 	mux.HandleFunc("/api/repo-branches", serveRepoBranches)
+	// multi-host: list ssh-config hosts + switch the active one.
+	mux.HandleFunc("/api/hosts", serveHosts)
+	mux.HandleFunc("/api/host", serveHostSwitch)
+	// grid: the cross-host terminal wall + its per-pane ttyd proxy.
+	mux.HandleFunc("/api/grid", serveGrid)
+	mux.HandleFunc("/api/grid/term", serveGridTerm)
+	mux.HandleFunc("/api/grid/term-touch", serveGridTermTouch)
+	mux.HandleFunc("/api/grid/term-release", serveGridTermRelease)
+	mux.HandleFunc("/api/grid/rename", serveGridRename)
+	mux.HandleFunc("/api/grid/close", serveGridClose)
+	mux.HandleFunc("/grid-term/", serveGridTermProxy)
 	mux.HandleFunc("/api/create-agent", serveCreateAgent)
 	mux.HandleFunc("/api/agent-upload", serveAgentUpload)
 	mux.HandleFunc("/api/self-update", serveSelfUpdate)
@@ -351,6 +362,7 @@ type Active struct {
 	WorkspaceID string `json:"workspace_id"`
 	TabID       string `json:"tab_id"`
 	PanesRev    int    `json:"panes_rev"` // bumps when the workspace/tab tree changes
+	Host        string `json:"host"`      // active host: always "local"
 	TermRev     int    `json:"term_rev"`  // bumps so the browser reloads terminal iframes
 	UIRev       int    `json:"ui_rev"`    // bumps when /api/ui-state is written, so other clients re-pull the layout
 	// AgentStatuses maps each live agent tab id to its status (idle|working|
@@ -481,8 +493,8 @@ const (
 	maxUntracked = 256 << 10 // 256 KiB per synthesized untracked-file diff
 )
 
-// gitOut runs `git -C dir args...` through the backend and returns stdout. The
-// implementation is gitOutLocal.
+// gitOut runs `git -C dir args...` on the active host and returns stdout. The
+// local implementation is gitOutLocal; remoteBackend runs git over SSH.
 func gitOut(dir string, args ...string) (string, error) {
 	return curBackend().GitOut(dir, args...)
 }
@@ -880,7 +892,7 @@ type hub struct {
 }
 
 func newHub() *hub {
-	return &hub{cur: Active{}, clients: map[chan Active]struct{}{}}
+	return &hub{cur: Active{Host: "local"}, clients: map[chan Active]struct{}{}}
 }
 
 // kick forces a near-immediate refresh (non-blocking). The status poller and the
@@ -913,6 +925,16 @@ func (h *hub) clientCount() int {
 
 func (h *hub) snapshot() Active { h.mu.RLock(); defer h.mu.RUnlock(); return h.cur }
 
+// bumpTermRev increments the terminal-reload revision and kicks a refresh, so
+// every browser reloads its terminal iframes onto the newly active host (see
+// serveHostSwitch + the frontend's HOST_CHANGED_EVENT).
+func (h *hub) bumpTermRev() {
+	h.mu.Lock()
+	h.termRev++
+	h.mu.Unlock()
+	h.kick()
+}
+
 func (h *hub) run(ctx context.Context) {
 	h.rootCtx = ctx
 	h.trigger = make(chan struct{}, 1)
@@ -942,6 +964,7 @@ func (h *hub) run(ctx context.Context) {
 			h.rev++
 		}
 		a := Active{
+			Host:          curBackend().Name(),
 			PanesRev:      h.rev,
 			TermRev:       h.termRev,
 			UIRev:         h.uiRev,
@@ -981,7 +1004,7 @@ func (h *hub) run(ctx context.Context) {
 // is no longer comparable with == because it carries a map).
 func sameActive(a, b Active) bool {
 	if a.PanesRev != b.PanesRev || a.TermRev != b.TermRev ||
-		a.UIRev != b.UIRev ||
+		a.Host != b.Host || a.UIRev != b.UIRev ||
 		len(a.AgentStatuses) != len(b.AgentStatuses) {
 		return false
 	}
@@ -1047,7 +1070,9 @@ type fileEntry struct {
 // ~user, which we don't resolve) is returned unchanged.
 func expandTilde(p string) string { return expandTildeOn(curBackend(), p) }
 
-// expandTildeOn expands a leading ~ against the backend's home dir.
+// expandTildeOn expands a leading ~ against a specific backend's home dir, so a
+// path can be resolved on a host other than the active one (e.g. listing a
+// remote host's repos for its Settings).
 func expandTildeOn(be Backend, p string) string {
 	if p != "~" && !strings.HasPrefix(p, "~/") {
 		return p
@@ -1254,8 +1279,9 @@ func serveFileUpload(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, map[string]any{"ok": true, "files": written})
 }
 
-// saveUpload streams one multipart file to dst through the backend, truncating
-// any existing file.
+// saveUpload streams one multipart file to dst on the active host, truncating
+// any existing file. Routes through the backend so an upload while a remote host
+// is active lands on that host (over SFTP), not the machine running lasso.
 func saveUpload(fh *multipart.FileHeader, dst string) error {
 	src, err := fh.Open()
 	if err != nil {
