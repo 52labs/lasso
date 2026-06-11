@@ -454,9 +454,7 @@ function Shell() {
           <LayoutGrid className="size-3.5" />
         </button>
         <HostSwitcher />
-        <span className="block min-w-0 flex-1 truncate px-2 py-1.5 text-[13px] text-muted-foreground">
-          {gridMode ? "" : (activeWorkspace?.title ?? "no workspace selected")}
-        </span>
+        <div className="min-w-0 flex-1" />
         <div className="ml-2 flex shrink-0 items-center gap-1.5">
           <CreateAgentDialog variant="header" />
           {rightCollapsed && (
