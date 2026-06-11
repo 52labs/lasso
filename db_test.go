@@ -57,6 +57,38 @@ func TestDefaultAgentEmptyRoundTrip(t *testing.T) {
 	}
 }
 
+// TestPerHostSettings verifies the creator defaults are independent per host:
+// writes to one host never leak into another, the local host keeps the bare
+// legacy keys, and an unconfigured host gets fresh-install defaults.
+func TestPerHostSettings(t *testing.T) {
+	openTestDB(t)
+	if err := applyDefaults("", defaultsPatch{ReposRoot: strPtr("~/projects\n~/work"), BranchPrefix: strPtr("feat/")}); err != nil {
+		t.Fatal(err)
+	}
+	if err := applyDefaults("52labs", defaultsPatch{ReposRoot: strPtr("~/srv"), ScratchSetup: strPtr("mise install")}); err != nil {
+		t.Fatal(err)
+	}
+	local, _ := getSettingsFor("")
+	if local.ReposRoot != "~/projects\n~/work" || local.BranchPrefix != "feat/" || local.ScratchSetup != "" {
+		t.Errorf("local settings = %+v", local)
+	}
+	// The local host writes the bare legacy key.
+	if v := getSettingValue("repos_root"); v != "~/projects\n~/work" {
+		t.Errorf("bare repos_root = %q", v)
+	}
+	remote, _ := getSettingsFor("52labs")
+	if remote.ReposRoot != "~/srv" || remote.ScratchSetup != "mise install" || remote.BranchPrefix != "" {
+		t.Errorf("52labs settings = %+v", remote)
+	}
+	// An unconfigured host sees fresh-install defaults, not another host's values.
+	other, _ := getSettingsFor("minime")
+	if other.ReposRoot != "~/projects" || other.BranchPrefix != "" || other.ScratchSetup != "" {
+		t.Errorf("minime settings = %+v", other)
+	}
+}
+
+func strPtr(s string) *string { return &s }
+
 func TestPerHostIsolation(t *testing.T) {
 	openTestDB(t)
 	if err := setLastRepo("local", "/a"); err != nil {
@@ -120,10 +152,11 @@ func TestLoadLassoConfigPerHost(t *testing.T) {
 	if len(c.Agents) != 1 || c.Agents[0].ID != "1" {
 		t.Errorf("agents = %+v", c.Agents)
 	}
-	// Another host shares global settings but not the per-host memory/log.
+	// Another host shares NOTHING — creator defaults, memory, and the agent log
+	// are all per-host.
 	other, _ := loadLassoConfig("other")
-	if other.BranchPrefix != "feat/" {
-		t.Errorf("other branch_prefix = %q, want feat/", other.BranchPrefix)
+	if other.BranchPrefix != "" {
+		t.Errorf("other branch_prefix = %q, want empty (defaults are per-host)", other.BranchPrefix)
 	}
 	if other.LastRepo != "" || len(other.Agents) != 0 || len(other.Repos) != 0 {
 		t.Errorf("other host leaked state: %+v", other)

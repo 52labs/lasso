@@ -19,11 +19,12 @@ import (
 // database at ~/.lasso/lasso.db. It replaces the earlier config.yaml; an
 // existing config.yaml is imported once on first open (see migrateFromYAML).
 //
-// The database is host-LOCAL: it belongs to the machine lasso runs on, the same
-// way the old config.yaml did. Host-scoped rows (repo/branch/path) are keyed by
-// host "local"; pure user settings (branch prefix, default agent, …) stay global.
+// The database is CENTRAL: it belongs to the machine lasso runs on, and it
+// holds the state for every host lasso drives (remote hosts run no lasso and
+// keep no db). Host-scoped rows are keyed by host alias ("local" for this box);
+// the creator defaults are per-host settings keys (see hostSettingKey).
 //
-//	settings    key/value, global, host-agnostic user settings
+//	settings    key/value; creator defaults are per-host ("<key>:<host>")
 //	host_state  per-host remembered selections (last repo/agent/type)
 //	repo_state  per-host, per-repo settings + memory (copy-files/setup/base)
 //	agents      append-only log, each row tagged with the host it ran on
@@ -141,7 +142,7 @@ func openDB() error {
 }
 
 // ---------------------------------------------------------------------------
-// settings — global, host-agnostic user settings
+// settings — key/value user settings (creator defaults are per-host)
 // ---------------------------------------------------------------------------
 
 // appSettings is the typed view of the four settings keys the creator uses.
@@ -153,34 +154,32 @@ type appSettings struct {
 	ScratchSetup string
 }
 
-// getSettings reads the settings keys, applying the same default repos_root the
-// old applyConfigDefaults did. DefaultAgent is intentionally NOT defaulted.
-func getSettings() (appSettings, error) {
+// hostSettingKey scopes a creator-settings key to host. Each host keeps its own
+// New Agent defaults — repos live under different roots, setup scripts run in
+// different environments. The local host keeps the bare legacy keys so existing
+// values survive; a remote host h stores "<key>:h".
+func hostSettingKey(host, key string) string {
+	if isLocalHost(host) {
+		return key
+	}
+	return key + ":" + host
+}
+
+// getSettings reads the LOCAL host's creator settings.
+func getSettings() (appSettings, error) { return getSettingsFor("") }
+
+// getSettingsFor reads host's creator settings, applying the same fresh-install
+// defaults to every host (repos_root ~/projects, expanded on that host).
+// DefaultAgent is intentionally NOT defaulted.
+func getSettingsFor(host string) (appSettings, error) {
 	s := appSettings{ReposRoot: "~/projects"}
-	rows, err := db.Query("SELECT key, value FROM settings")
-	if err != nil {
-		return s, err
+	if v := getSettingValue(hostSettingKey(host, "repos_root")); v != "" {
+		s.ReposRoot = v
 	}
-	defer rows.Close()
-	for rows.Next() {
-		var k, v string
-		if err := rows.Scan(&k, &v); err != nil {
-			return s, err
-		}
-		switch k {
-		case "repos_root":
-			if v != "" {
-				s.ReposRoot = v
-			}
-		case "branch_prefix":
-			s.BranchPrefix = v
-		case "default_agent":
-			s.DefaultAgent = v
-		case "scratch_setup":
-			s.ScratchSetup = v
-		}
-	}
-	return s, rows.Err()
+	s.BranchPrefix = getSettingValue(hostSettingKey(host, "branch_prefix"))
+	s.DefaultAgent = getSettingValue(hostSettingKey(host, "default_agent"))
+	s.ScratchSetup = getSettingValue(hostSettingKey(host, "scratch_setup"))
+	return s, nil
 }
 
 // getSettingValue reads one raw settings value ("" if absent).

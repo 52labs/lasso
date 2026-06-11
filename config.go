@@ -160,10 +160,10 @@ func lassoUploadsDirFor(b Backend) string {
 }
 
 // loadLassoConfig assembles the creator config for one host from the database:
-// global settings plus that host's remembered selections, per-repo state, and
-// agent log.
+// that host's creator defaults plus its remembered selections, per-repo state,
+// and agent log.
 func loadLassoConfig(host string) (*LassoConfig, error) {
-	s, err := getSettings()
+	s, err := getSettingsFor(host)
 	if err != nil {
 		return nil, err
 	}
