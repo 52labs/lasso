@@ -127,6 +127,23 @@ function setTermFontWhenReady(
     } catch {
       /* private/locked options: never break the terminal */
     }
+    // The swap changes xterm's cell metrics but not its rows/cols, so a fit
+    // computed against the fallback font leaves the bottom rows drawn past the
+    // iframe (Claude Code's input box clipped below the terminal on reload).
+    // Nudge ttyd's own resize→fit handler so rows/cols are re-derived from the
+    // real metrics — again a beat later in case the re-measure was deferred a
+    // frame. Skip hidden frames (zero-size fit is garbage); they refit when
+    // shown.
+    try {
+      const win = doc.defaultView
+      if (win && win.innerWidth > 0 && win.innerHeight > 0) {
+        const refit = () => win.dispatchEvent(new win.Event("resize"))
+        refit()
+        win.setTimeout(refit, 100)
+      }
+    } catch {
+      /* never break the terminal */
+    }
   }
   const fonts = (doc as Document & { fonts?: FontFaceSet }).fonts
   if (fonts && typeof fonts.load === "function") {
