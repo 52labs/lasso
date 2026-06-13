@@ -152,6 +152,25 @@ func tmuxEnsureServerOn(host string) error {
 		args = append(args, ";",
 			"set-hook", "-g", "session-closed",
 			`run-shell "echo #{hook_session_name} >> `+sessionClosedFIFO()+`"`)
+	} else {
+		// Mouse-wheel scrolling on remote hosts. An agent TUI (Claude Code) comes
+		// up here in its inline, mouse-OFF rendering mode (pane flags
+		// mouse_any=0, alternate_on=0) instead of the alternate-screen + mouse
+		// mode it negotiates locally (mouse_any=1, alternate_on=1) — its
+		// startup terminal-capability probe doesn't complete over the ssh-driven
+		// attach, so it falls back to the conservative inline UI. With the app
+		// NOT grabbing the wheel, the browser xterm — sitting on tmux's alternate
+		// buffer — turns scroll into Up/Down arrows, which Claude's composer reads
+		// as input-history navigation ("scroll moves through prompt history, not
+		// the terminal content"). Letting tmux own the mouse fixes it: a wheel on
+		// a non-mouse pane enters copy-mode over the pane's scrollback (the
+		// agent's output) instead of arrowing through history. Apps that DO grab
+		// the mouse (vim, a full-mode Claude) still get events forwarded, so
+		// nothing regresses for them; copy-mode selections still reach the
+		// clipboard via the OSC 52 handler the frontend installs. Local sessions
+		// don't need this — Claude enables its own mouse there — so it's scoped to
+		// remote, matching where the symptom appears.
+		args = append(args, ";", "set", "-g", "mouse", "on")
 	}
 	return tmuxH(host, args...)
 }
