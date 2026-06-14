@@ -36,12 +36,13 @@ import (
 	"time"
 )
 
-// distFS holds the built React + shadcn/ui frontend (web/dist), embedded into
-// the binary so a single executable still serves the whole UI. The `all:`
-// prefix includes files whose names begin with "_" or "." Build the frontend
-// (`bun run build` in web/) before `go build` — `mise run build` enforces that
-// order. Favicons live in the build (copied from web/public), so there's no
-// separate /static/ route anymore.
+// distFS holds the built React + shadcn/ui frontend, embedded into the binary
+// so a single executable still serves the whole UI. The `all:` prefix includes
+// files whose names begin with "_" or "." The frontend source lives in the
+// repo-root web/, but Vite builds it into server/web/dist so this embed (which
+// can't reach a sibling dir) resolves. Build it (`bun run build` in web/) before
+// `go build` — `mise run build` enforces that order. Favicons live in the build
+// (copied from web/public), so there's no separate /static/ route anymore.
 //
 //go:embed all:web/dist
 var distFS embed.FS
