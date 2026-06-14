@@ -795,7 +795,11 @@ function Shell() {
                   gridMode ? "flex" : "hidden"
                 )}
               >
-                <GridTab active={gridMode} selectTab={selectTabFromGrid} />
+                <GridTab
+                  active={gridMode}
+                  selectTab={selectTabFromGrid}
+                  selectTabInGrid={selectTab}
+                />
               </div>
             </div>
             {/* The on-screen keys the soft keyboard lacks — mobile only, and

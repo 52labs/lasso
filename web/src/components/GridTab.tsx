@@ -67,9 +67,14 @@ const cellKey = (p: GridPane) => `${p.host}|${p.tab_id}`
 export function GridTab({
   active,
   selectTab,
+  selectTabInGrid,
 }: {
   active: boolean
+  // Header-click focus: drop out of the grid onto the pane in the main viewport.
   selectTab: (tabId: string) => void
+  // Select a tab WITHOUT leaving the grid — used to point the right sidebar at
+  // the active cell (the Shell's cwd poller follows the selected tab).
+  selectTabInGrid: (tabId: string) => void
 }) {
   const { activePaneID, host: activeHost } = useApp()
   const ui = useUIState()
@@ -315,6 +320,33 @@ export function GridTab({
     ? (panes?.find((p) => p.tab_id === expandedTab) ?? null)
     : null
   const expanding = expandedTab != null && expandedPane == null
+
+  const focusedPane = focusedTab
+    ? (panes?.find((p) => p.tab_id === focusedTab) ?? null)
+    : null
+
+  // Point the right sidebar (Files/Diff) at the active cell — the one the user
+  // fullscreened or last clicked into. Switch the active host to it so /api/file
+  // & /api/diff read the right filesystem, and select its tab (without leaving
+  // the grid) so the Shell's cwd poller tracks its live directory. Without this
+  // the sidebar keeps following whatever tab was selected before the grid opened
+  // — often a tab on another host, whose path then 404s on the active host.
+  const activeCell = expandedPane ?? focusedPane
+  const activeCellTab = activeCell?.tab_id ?? null
+  const activeCellHost = activeCell?.host ?? null
+  const switchedHost = React.useRef<string | null>(null)
+  React.useEffect(() => {
+    if (!active || !activeCellTab) return
+    if (
+      activeCellHost &&
+      activeCellHost !== (activeHost ?? "local") &&
+      switchedHost.current !== activeCellHost
+    ) {
+      switchedHost.current = activeCellHost
+      void api.switchHost(activeCellHost)
+    }
+    selectTabInGrid(activeCellTab)
+  }, [active, activeCellTab, activeCellHost, activeHost, selectTabInGrid])
 
   return (
     <div className="flex min-h-0 flex-1 flex-col">
