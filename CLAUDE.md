@@ -4,14 +4,14 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## What this is
 
-Lasso is a Go backend (`main.go` and friends) that serves a React/TypeScript SPA. The frontend in `web/` is **built and embedded into the Go binary** — `go build` embeds `web/dist/`, so it must exist locally (run `mise run build`) but is **not** committed (it's gitignored). CI builds the frontend and produces release binaries.
+Lasso is a Go backend (in `server/` — `server/main.go` and friends, `package main`, built as `./server`) that serves a React/TypeScript SPA. The frontend source lives in `web/`; `bun run build` compiles it **into `server/web/dist/`**, which the Go binary **embeds** via `//go:embed all:web/dist` (relative to `server/` — `go:embed` can't reach a sibling dir, hence the output goes under `server/`). The bundle must exist locally for `go build` (run `mise run build`) but is **not** committed (gitignored). `go.mod`/`go.sum` stay at the repo root (module `lasso`); the binary is built from `./server`. CI builds the frontend and produces release binaries.
 
 ## Commands
 
 Backend (root, via [mise](https://mise.jdx.dev)):
-- `mise run build` — builds the frontend (`bun run build` in `web/`) then `go build -o lasso .`
+- `mise run build` — builds the frontend (`bun run build` in `web/`, output → `server/web/dist`) then `go build -o lasso ./server`
 - `mise run dev` — Vite dev server with HMR, proxying to the Go backend (requires tailscale up; auto-bumps the dev port from 8190 if busy)
-- `mise run test` — `go test .`
+- `mise run test` — `go test ./server`
 
 Frontend (`web/`, package manager is **bun**):
 - `bun run dev` / `bun run build` (`tsc -b && vite build`)
@@ -32,7 +32,7 @@ Frontend (`web/`, package manager is **bun**):
 ## Frontend workflow
 
 - Run `bun run typecheck` and `bun run lint` before considering frontend work done.
-- `web/dist/` is the embedded bundle — gitignored and not committed. Run `mise run build` to regenerate it locally; CI builds it for releases.
+- `server/web/dist/` is the embedded bundle (built from `web/` source) — gitignored and not committed. Run `mise run build` to regenerate it locally; CI builds it for releases.
 
 ## Formatting & linting
 

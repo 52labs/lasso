@@ -11,18 +11,18 @@ pitchfork = "latest"
 "aqua:tsl0922/ttyd" = "latest"
 
 [tasks."build:web"]
-description = "Build the React/shadcn frontend into web/dist (embedded by Go)"
+description = "Build the React/shadcn frontend into server/web/dist (embedded by Go)"
 dir = "web"
 run = "bun install && bun run build"
 
 [tasks.build]
 description = "Build the frontend then the lasso binary"
 depends = ["build:web"]
-run = "go build -o lasso ."
+run = "go build -o lasso ./server"
 
 [tasks.test]
 description = "Run the Go test suite"
-run = "go test ."
+run = "go test ./server"
 
 [tasks.bump]
 description = "Bump lassoSemver (major, minor, or patch)"
@@ -34,9 +34,9 @@ run = """
 #!/usr/bin/env bash
 set -e
 
-# version.go holds the single source of truth: const lassoSemver = "X.Y.Z".
-current=$(perl -ne 'print $1 if /lassoSemver = "([0-9]+\\.[0-9]+\\.[0-9]+)"/' version.go)
-[ -n "$current" ] || { echo "couldn't read lassoSemver from version.go" >&2; exit 1; }
+# server/version.go holds the single source of truth: const lassoSemver = "X.Y.Z".
+current=$(perl -ne 'print $1 if /lassoSemver = "([0-9]+\\.[0-9]+\\.[0-9]+)"/' server/version.go)
+[ -n "$current" ] || { echo "couldn't read lassoSemver from server/version.go" >&2; exit 1; }
 IFS='.' read -r major minor patch <<< "$current"
 
 case "${usage_type}" in
@@ -48,12 +48,12 @@ esac
 
 new_version="$major.$minor.$patch"
 
-perl -i -pe "s/lassoSemver = \\"[0-9]+\\.[0-9]+\\.[0-9]+\\"/lassoSemver = \\"$new_version\\"/" version.go
+perl -i -pe "s/lassoSemver = \\"[0-9]+\\.[0-9]+\\.[0-9]+\\"/lassoSemver = \\"$new_version\\"/" server/version.go
 echo "Bumped lassoSemver: $current → $new_version"
 
 # Auto-commit if --commit flag is set
 if [ "$usage_commit" = "true" ]; then
-  git add version.go
+  git add server/version.go
   git commit -m "chore: bump version to $new_version"
   echo "Committed version bump"
 fi
