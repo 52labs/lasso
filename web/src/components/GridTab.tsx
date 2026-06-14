@@ -725,11 +725,6 @@ function GridCell({
               title={`${tip}\n\nclick to focus · ⌘/Ctrl-click to select`}
               onClick={onClick}
             >
-              <span className="termcell-host">{p.host_label}</span>
-              <span className="termcell-title">
-                {title}
-                {tabLabel ? ` · ${tabLabel}` : ""}
-              </span>
               {p.git && (
                 <span
                   className={cn("termcell-git", p.dirty ? "dirty" : "clean")}
@@ -744,6 +739,11 @@ function GridCell({
                   ● {p.dirty || ""}
                 </span>
               )}
+              <span className="termcell-host">{p.host_label}</span>
+              <span className="termcell-title">
+                {title}
+                {tabLabel ? ` · ${tabLabel}` : ""}
+              </span>
               {p.has_agent && (
                 <span className={cn("termcell-agent", p.agent_status)}>
                   ● {p.agent || "agent"}
