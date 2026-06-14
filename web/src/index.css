@@ -715,7 +715,8 @@
   overflow: hidden;
   background: var(--color-background);
 }
-/* Grow to fill the empty slot below: span the second-to-last and last rows. */
+/* A short column's top cell grows to fill the empty slot a partial last row
+   leaves: span two rows from the top so the taller terminal sits up high. */
 .termcell-tall {
   grid-row: span 2;
 }

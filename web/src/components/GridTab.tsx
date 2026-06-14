@@ -160,12 +160,15 @@ export function GridTab({
       : GRID_MIN_CELL_H
 
   // When the last row is partial it leaves empty slots at the bottom of the
-  // right-most columns. Rather than leave that vertical space blank, the cell
-  // directly above each empty slot (a second-to-last-row cell with no cell
-  // below it) grows to span two rows. (Only the last row is ever partial, so a
-  // single extra row is all that's ever needed.)
-  const tallIndex = (i: number) =>
-    rows >= 2 && Math.floor(i / cols) === rows - 2 && i + cols >= n
+  // right-most columns. Rather than leave that vertical space blank, give the
+  // extra height to the *top* cell of each short column: a first-row cell whose
+  // column has no cell in the partial last row spans two rows. Row-major
+  // auto-flow then packs the remaining cells below it with no gaps, so the
+  // taller terminals sit at the top of the wall instead of the bottom. (Only
+  // the last row is ever partial, so a single extra row per short column is all
+  // that's ever needed.)
+  const lastRowCount = n - (rows - 1) * cols
+  const tallIndex = (i: number) => rows >= 2 && i < cols && i >= lastRowCount
 
   const toggleAgentsOnly = () => patchUIState({ grid_agents_only: !agentsOnly })
 
