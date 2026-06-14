@@ -51,8 +51,9 @@ const KEEPALIVE_MS = 18_000
 // the same width via 1fr grid columns; the column count is "as many
 // GRID_MIN_CELL-wide cells as fit across the measured width".
 const GRID_MIN_CELL = 360
-// Floor for a cell's height. Rows grow to fill the grid's vertical space; once
-// there are enough rows that they'd shrink past this, the grid scrolls instead.
+// Floor for one row-unit (a shell tile's height; an agent tile is two units, so
+// twice as tall). Tracks grow to fill the grid's vertical space; once there are
+// enough row-units that they'd shrink past this, the grid scrolls instead.
 const GRID_MIN_CELL_H = 260
 
 // cellKey uniquely identifies a pane across hosts (tab ids are globally unique,
@@ -146,29 +147,27 @@ export function GridTab({
 
   // Column count: as many min-width cells as fit across the measured width. The
   // grid's 1fr columns then make every cell the same width.
-  const n = panes?.length ?? 0
   const cols = gridW > 0 ? Math.max(1, Math.floor(gridW / GRID_MIN_CELL)) : 1
 
-  // Grow rows to fill the grid's vertical space: divide the measured height by
-  // the row count, but never shrink a cell below GRID_MIN_CELL_H (past that the
-  // grid scrolls). Falls back to the floor until the first measure lands. Spare
-  // vertical space becomes cell *height*; cells never grow wider than a column.
-  const rows = n ? Math.ceil(n / cols) : 1
+  // Agent panes are twice as tall as shell panes: the wall is a dense masonry of
+  // single-column tiles — two row-units for an agent, one for a shell — packed so
+  // a tall tile's neighbours fill in beside it. packGrid returns each pane's
+  // explicit grid placement (the layout is fully deterministic — it doesn't lean
+  // on browser auto-flow) plus the total row-unit count.
+  const layout = React.useMemo(() => {
+    const spans = (panes ?? []).map((p) => (p.has_agent ? 2 : 1))
+    return packGrid(spans, cols)
+  }, [panes, cols])
+
+  // Grow the row tracks to fill the grid's vertical space: divide the measured
+  // height by the row-unit count, but never shrink a unit below GRID_MIN_CELL_H
+  // (past that the grid scrolls). Falls back to the floor until the first measure
+  // lands. Spare vertical space becomes tile height; an agent tile, spanning two
+  // tracks, stays exactly twice a shell tile.
   const cellH =
     gridH > 0
-      ? Math.max(GRID_MIN_CELL_H, Math.floor(gridH / rows))
+      ? Math.max(GRID_MIN_CELL_H, Math.floor(gridH / layout.rows))
       : GRID_MIN_CELL_H
-
-  // When the last row is partial it leaves empty slots at the bottom of the
-  // right-most columns. Rather than leave that vertical space blank, give the
-  // extra height to the *top* cell of each short column: a first-row cell whose
-  // column has no cell in the partial last row spans two rows. Row-major
-  // auto-flow then packs the remaining cells below it with no gaps, so the
-  // taller terminals sit at the top of the wall instead of the bottom. (Only
-  // the last row is ever partial, so a single extra row per short column is all
-  // that's ever needed.)
-  const lastRowCount = n - (rows - 1) * cols
-  const tallIndex = (i: number) => rows >= 2 && i < cols && i >= lastRowCount
 
   const toggleAgentsOnly = () => patchUIState({ grid_agents_only: !agentsOnly })
 
@@ -496,7 +495,7 @@ export function GridTab({
                 selectionCount={selected.size}
                 focused={p.host === activeHost && p.tab_id === activePaneID}
                 expanded={p.tab_id === expandedTab}
-                tall={tallIndex(i)}
+                placement={expandedTab ? null : layout.cells[i]}
                 onClick={(e) => onCellClick(e, p)}
                 onToggleExpand={() => toggleExpand(p.tab_id)}
                 onRename={() => requestRename(p)}
@@ -591,6 +590,64 @@ function frameId(host: string, tabID: string) {
   return `gridterm-${host.replace(/[^a-zA-Z0-9_-]/g, "_")}-${tabID}`
 }
 
+// One pane's explicit grid position: a single column, starting at `row`, spanning
+// `span` row-units (1 for a shell, 2 for an agent). Columns/rows are 0-based here;
+// the style maps them to 1-based grid lines.
+type GridCellPlacement = { col: number; row: number; span: number }
+
+// packGrid lays the panes out as a dense masonry of single-column tiles —
+// `spans[i]` row-units tall (2 for an agent, 1 for a shell) — by placing each at
+// the first free slot scanning row-major, so a tall tile's gaps fill with later
+// tiles. It then grows any shell tile sitting directly above a blank bottom slot
+// to cover it, so a short last row doesn't leave a blank rectangle. Returns each
+// pane's explicit placement (so the layout is deterministic and never depends on
+// the browser's auto-placement) plus the total row-unit count for track sizing.
+function packGrid(
+  spans: number[],
+  cols: number
+): { cells: GridCellPlacement[]; rows: number } {
+  const occ: (number | undefined)[][] = [] // occ[row][col] = pane index, or undefined
+  const ensure = (r: number) => {
+    while (occ.length <= r) occ.push(new Array(cols).fill(undefined))
+  }
+  const cells: GridCellPlacement[] = []
+  for (let i = 0; i < spans.length; i++) {
+    const s = spans[i]
+    let done = false
+    for (let r = 0; !done; r++) {
+      ensure(r + s - 1)
+      for (let c = 0; c < cols; c++) {
+        let free = true
+        for (let k = 0; k < s; k++)
+          if (occ[r + k][c] !== undefined) {
+            free = false
+            break
+          }
+        if (!free) continue
+        for (let k = 0; k < s; k++) occ[r + k][c] = i
+        cells[i] = { col: c, row: r, span: s }
+        done = true
+        break
+      }
+    }
+  }
+  const rows = Math.max(1, occ.length)
+  // Grow a shell tile down into a blank slot directly beneath it (only when the
+  // tile starts in the row above, so it can't stretch past two units).
+  for (let c = 0; c < cols; c++)
+    for (let r = 1; r < rows; r++) {
+      const above = occ[r - 1][c]
+      if (occ[r][c] === undefined && above !== undefined) {
+        const cell = cells[above]
+        if (cell.span === 1 && cell.row === r - 1) {
+          cell.span = 2
+          occ[r][c] = above
+        }
+      }
+    }
+  return { cells, rows }
+}
+
 // GridCell renders one pane: a clickable header (right-click for actions) plus a
 // lazily-mounted terminal. The iframe is created once the cell scrolls into view
 // (so a long grid doesn't spawn dozens of ttyds at once) and only while the Grid
@@ -602,7 +659,7 @@ function GridCell({
   selectionCount,
   focused,
   expanded,
-  tall,
+  placement,
   onClick,
   onToggleExpand,
   onRename,
@@ -614,8 +671,9 @@ function GridCell({
   selectionCount: number
   focused: boolean
   expanded: boolean
-  // Span two grid rows to fill the empty slot a partial last row would leave.
-  tall: boolean
+  // Explicit grid position (column + row span) from the masonry packer, or null
+  // when a cell is expanded to fill the grid (CSS owns the layout then).
+  placement: GridCellPlacement | null
   onClick: (e: React.MouseEvent) => void
   onToggleExpand: () => void
   onRename: () => void
@@ -712,9 +770,16 @@ function GridCell({
         "termcell",
         focused && "focused",
         selected && "selected",
-        expanded && "termcell-expanded",
-        tall && "termcell-tall"
+        expanded && "termcell-expanded"
       )}
+      style={
+        placement
+          ? {
+              gridColumn: placement.col + 1,
+              gridRow: `${placement.row + 1} / span ${placement.span}`,
+            }
+          : undefined
+      }
     >
       <div className="termcell-head">
         <ContextMenu>
