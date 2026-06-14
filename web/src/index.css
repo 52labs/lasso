@@ -694,8 +694,9 @@
      wireTerminalIframe in lib/terminal.ts). */
   padding: 0;
   /* CSS grid: --grid-cols equal-width columns (so every cell is the same width)
-     and uniform --termcell-h rows. A cell can span two rows (.termcell-tall) to
-     fill the empty slot a partial last row would otherwise leave blank. */
+     and uniform --termcell-h row-units. GridTab places each cell explicitly (an
+     agent cell spans two row-units, a shell cell one — a dense masonry), so the
+     grid never auto-flows; the inline grid-column / grid-row do the layout. */
   display: grid;
   grid-template-columns: repeat(var(--grid-cols, 1), minmax(0, 1fr));
   grid-auto-rows: var(--termcell-h, 260px);
@@ -704,9 +705,9 @@
 .termcell {
   display: flex;
   flex-direction: column;
-  /* One grid row tall by default; .termcell-tall spans two (see below). The row
-     height itself (grid-auto-rows) is driven by GridTab: rows grow to fill the
-     vertical space, floored at 260px (then the grid scrolls). */
+  /* Height comes from the cell's row span (1 unit for a shell, 2 for an agent)
+     times --termcell-h, which GridTab grows to fill the vertical space, floored
+     at 260px per unit (past that the grid scrolls). */
   min-height: 0;
   /* Blend the (subtle) border toward muted so each cell reads as a distinct
      tile rather than dissolving into the background. */
@@ -714,10 +715,6 @@
     color-mix(in srgb, var(--color-border) 45%, var(--color-muted-foreground));
   overflow: hidden;
   background: var(--color-background);
-}
-/* Grow to fill the empty slot below: span the second-to-last and last rows. */
-.termcell-tall {
-  grid-row: span 2;
 }
 .termcell.focused {
   border-color: var(--color-primary);
@@ -814,6 +811,19 @@
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
+}
+/* Git working-tree status dot: green when clean, amber (with a change count)
+   when dirty. Only rendered for panes in a git checkout. */
+.termcell-git {
+  flex: 0 0 auto;
+  white-space: nowrap;
+  font-variant-numeric: tabular-nums;
+}
+.termcell-git.clean {
+  color: var(--color-good);
+}
+.termcell-git.dirty {
+  color: var(--color-warn);
 }
 .termcell-agent {
   flex: 0 0 auto;
