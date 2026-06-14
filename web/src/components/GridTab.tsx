@@ -1,4 +1,5 @@
 import { useQuery } from "@tanstack/react-query"
+import { Maximize2, Minimize2, X } from "lucide-react"
 import * as React from "react"
 import { toast } from "sonner"
 
@@ -45,8 +46,10 @@ const POLL_MS = 2500
 // alive (reaped after ~60s idle). Comfortably under that.
 const KEEPALIVE_MS = 18_000
 
-// Grid layout constants — must match .termgrid (gap) and .termcell (flex-basis).
-const GRID_GAP = 0
+// Grid layout constants — must match .termgrid. The wall spans the full width
+// (no right strip: hold Shift to scroll the grid past a terminal). Every cell is
+// the same width via 1fr grid columns; the column count is "as many
+// GRID_MIN_CELL-wide cells as fit across the measured width".
 const GRID_MIN_CELL = 360
 // Floor for a cell's height. Rows grow to fill the grid's vertical space; once
 // there are enough rows that they'd shrink past this, the grid scrolls instead.
@@ -64,9 +67,14 @@ const cellKey = (p: GridPane) => `${p.host}|${p.tab_id}`
 export function GridTab({
   active,
   selectTab,
+  selectTabInGrid,
 }: {
   active: boolean
+  // Header-click focus: drop out of the grid onto the pane in the main viewport.
   selectTab: (tabId: string) => void
+  // Select a tab WITHOUT leaving the grid — used to point the right sidebar at
+  // the active cell (the Shell's cwd poller follows the selected tab).
+  selectTabInGrid: (tabId: string) => void
 }) {
   const { activePaneID, host: activeHost } = useApp()
   const ui = useUIState()
@@ -77,19 +85,13 @@ export function GridTab({
   )
 
   const gridRef = React.useRef<HTMLDivElement>(null)
-  const [cols, setCols] = React.useState(1)
+  const [gridW, setGridW] = React.useState(0)
   const [gridH, setGridH] = React.useState(0)
   React.useLayoutEffect(() => {
     const el = gridRef.current
     if (!el) return
     const measure = () => {
-      const content = el.clientWidth
-      setCols(
-        Math.max(
-          1,
-          Math.floor((content + GRID_GAP) / (GRID_MIN_CELL + GRID_GAP))
-        )
-      )
+      setGridW(el.clientWidth)
       setGridH(el.clientHeight)
     }
     measure()
@@ -107,6 +109,13 @@ export function GridTab({
   const [closeTargets, setCloseTargets] = React.useState<GridPane[] | null>(
     null
   )
+  // Which pane (by tab id — globally unique) is expanded to fill the whole grid,
+  // and which cell's terminal the user last focused (the ⌘⇧U expand target).
+  // Keyed by tab id rather than host|tab so a freshly-created agent can be
+  // expanded from its select-tab event (which carries only the tab id) before
+  // the grid poll has even listed it.
+  const [expandedTab, setExpandedTab] = React.useState<string | null>(null)
+  const [focusedTab, setFocusedTab] = React.useState<string | null>(null)
 
   const gridQuery = useQuery({
     queryKey: qk.grid,
@@ -135,14 +144,28 @@ export function GridTab({
     [all, agentsOnly, hidden]
   )
 
+  // Column count: as many min-width cells as fit across the measured width. The
+  // grid's 1fr columns then make every cell the same width.
+  const n = panes?.length ?? 0
+  const cols = gridW > 0 ? Math.max(1, Math.floor(gridW / GRID_MIN_CELL)) : 1
+
   // Grow rows to fill the grid's vertical space: divide the measured height by
   // the row count, but never shrink a cell below GRID_MIN_CELL_H (past that the
-  // grid scrolls). Falls back to the floor until the first measure lands.
-  const rows = panes && panes.length ? Math.ceil(panes.length / cols) : 1
+  // grid scrolls). Falls back to the floor until the first measure lands. Spare
+  // vertical space becomes cell *height*; cells never grow wider than a column.
+  const rows = n ? Math.ceil(n / cols) : 1
   const cellH =
     gridH > 0
       ? Math.max(GRID_MIN_CELL_H, Math.floor(gridH / rows))
       : GRID_MIN_CELL_H
+
+  // When the last row is partial it leaves empty slots at the bottom of the
+  // right-most columns. Rather than leave that vertical space blank, the cell
+  // directly above each empty slot (a second-to-last-row cell with no cell
+  // below it) grows to span two rows. (Only the last row is ever partial, so a
+  // single extra row is all that's ever needed.)
+  const tallIndex = (i: number) =>
+    rows >= 2 && Math.floor(i / cols) === rows - 2 && i + cols >= n
 
   const toggleAgentsOnly = () => patchUIState({ grid_agents_only: !agentsOnly })
 
@@ -219,6 +242,119 @@ export function GridTab({
       toast.error(`close failed: ${(e as Error).message}`)
     }
   }
+
+  // Expand a cell to fill the whole grid (a header button or ⌘⇧U toggles it).
+  const toggleExpand = (tabId: string) =>
+    setExpandedTab((cur) => (cur === tabId ? null : tabId))
+
+  // The cell the main viewport is pointed at — the visually-focused (.focused)
+  // cell — used as the ⌘⇧U target when the user hasn't clicked into a grid
+  // terminal yet.
+  const activeMatchTab = React.useMemo(
+    () =>
+      (panes ?? []).find(
+        (p) => p.host === activeHost && p.tab_id === activePaneID
+      )?.tab_id ?? null,
+    [panes, activeHost, activePaneID]
+  )
+
+  // ⌘⇧U in grid mode toggles expand/restore: collapse if a cell is expanded,
+  // else expand the focused cell (the terminal the user last clicked into, or
+  // the .focused cell). App routes the key here as this event while in grid.
+  React.useEffect(() => {
+    if (!active) return
+    const onToggle = () => {
+      // Target the focused cell (the terminal the user last clicked into), else
+      // the .focused cell the main viewport points at, else the first pane — so
+      // the key always does something even before any cell has been focused.
+      const target = focusedTab ?? activeMatchTab ?? panes?.[0]?.tab_id ?? null
+      setExpandedTab((cur) => (cur ? null : target))
+    }
+    window.addEventListener("lasso:grid-expand-toggle", onToggle)
+    return () =>
+      window.removeEventListener("lasso:grid-expand-toggle", onToggle)
+  }, [active, focusedTab, activeMatchTab, panes])
+
+  // A new agent created while the grid is up opens fullscreen in the grid (App
+  // forwards its tab id here instead of leaving the grid). Reload so the just
+  // -created pane lands in the wall as promptly as the backend can list it.
+  React.useEffect(() => {
+    if (!active) return
+    const onExpandTab = (e: Event) => {
+      const tabId = (e as CustomEvent).detail as string
+      if (!tabId) return
+      setExpandedTab(tabId)
+      reload()
+    }
+    window.addEventListener("lasso:grid-expand-tab", onExpandTab)
+    return () =>
+      window.removeEventListener("lasso:grid-expand-tab", onExpandTab)
+  }, [active, reload])
+
+  // Track which cell's terminal holds focus: when the window blurs to one of the
+  // grid iframes, record its pane as the focused cell.
+  React.useEffect(() => {
+    if (!active) return
+    const onBlur = () => {
+      const el = document.activeElement
+      if (!(el instanceof HTMLIFrameElement) || !el.id.startsWith("gridterm-"))
+        return
+      const hit = (panes ?? []).find((p) => frameId(p.host, p.tab_id) === el.id)
+      if (hit) setFocusedTab(hit.tab_id)
+    }
+    window.addEventListener("blur", onBlur)
+    return () => window.removeEventListener("blur", onBlur)
+  }, [active, panes])
+
+  // Tab ids we've actually seen in the wall, so the cleanup below can tell a
+  // pane that's *gone* (was listed, now closed → drop the expand) from one that
+  // merely *hasn't arrived yet* (a freshly-created agent the poll hasn't listed
+  // → keep it expanded so it lands fullscreen once it appears).
+  const seenTabs = React.useRef<Set<string>>(new Set())
+  React.useEffect(() => {
+    if (!panes) return
+    const live = new Set(panes.map((p) => p.tab_id))
+    for (const id of live) seenTabs.current.add(id)
+    if (
+      expandedTab &&
+      seenTabs.current.has(expandedTab) &&
+      !live.has(expandedTab)
+    )
+      setExpandedTab(null)
+    if (focusedTab && !live.has(focusedTab)) setFocusedTab(null)
+  }, [panes, expandedTab, focusedTab])
+
+  const expandedPane = expandedTab
+    ? (panes?.find((p) => p.tab_id === expandedTab) ?? null)
+    : null
+  const expanding = expandedTab != null && expandedPane == null
+
+  const focusedPane = focusedTab
+    ? (panes?.find((p) => p.tab_id === focusedTab) ?? null)
+    : null
+
+  // Point the right sidebar (Files/Diff) at the active cell — the one the user
+  // fullscreened or last clicked into. Switch the active host to it so /api/file
+  // & /api/diff read the right filesystem, and select its tab (without leaving
+  // the grid) so the Shell's cwd poller tracks its live directory. Without this
+  // the sidebar keeps following whatever tab was selected before the grid opened
+  // — often a tab on another host, whose path then 404s on the active host.
+  const activeCell = expandedPane ?? focusedPane
+  const activeCellTab = activeCell?.tab_id ?? null
+  const activeCellHost = activeCell?.host ?? null
+  const switchedHost = React.useRef<string | null>(null)
+  React.useEffect(() => {
+    if (!active || !activeCellTab) return
+    if (
+      activeCellHost &&
+      activeCellHost !== (activeHost ?? "local") &&
+      switchedHost.current !== activeCellHost
+    ) {
+      switchedHost.current = activeCellHost
+      void api.switchHost(activeCellHost)
+    }
+    selectTabInGrid(activeCellTab)
+  }, [active, activeCellTab, activeCellHost, activeHost, selectTabInGrid])
 
   return (
     <div className="flex min-h-0 flex-1 flex-col">
@@ -324,8 +460,13 @@ export function GridTab({
 
       <div
         ref={gridRef}
-        className="termgrid"
-        style={{ "--termcell-h": `${cellH}px` } as React.CSSProperties}
+        className={cn("termgrid", expandedTab && "termgrid-expanded")}
+        style={
+          {
+            "--termcell-h": `${cellH}px`,
+            "--grid-cols": cols,
+          } as React.CSSProperties
+        }
       >
         {error ? (
           <div className="empty">
@@ -342,32 +483,39 @@ export function GridTab({
               : "no panes"}
           </div>
         ) : (
-          panes.map((p, i) => {
-            const remainder = cols > 0 ? panes.length % cols : 0
-            const breakHere =
-              remainder > 0 && remainder < panes.length && i === remainder - 1
-            return (
-              <React.Fragment key={cellKey(p)}>
-                <GridCell
-                  pane={p}
-                  active={active}
-                  selected={selected.has(cellKey(p))}
-                  selectionCount={selected.size}
-                  focused={p.host === activeHost && p.tab_id === activePaneID}
-                  onClick={(e) => onCellClick(e, p)}
-                  onRename={() => requestRename(p)}
-                  onClose={() => requestClose(p)}
-                />
-                {breakHere && <div className="termbreak" aria-hidden="true" />}
-              </React.Fragment>
-            )
-          })
+          <>
+            {panes.map((p, i) => (
+              <GridCell
+                key={cellKey(p)}
+                pane={p}
+                active={active}
+                selected={selected.has(cellKey(p))}
+                selectionCount={selected.size}
+                focused={p.host === activeHost && p.tab_id === activePaneID}
+                expanded={p.tab_id === expandedTab}
+                tall={tallIndex(i)}
+                onClick={(e) => onCellClick(e, p)}
+                onToggleExpand={() => toggleExpand(p.tab_id)}
+                onRename={() => requestRename(p)}
+                onClose={() => requestClose(p)}
+              />
+            ))}
+            {/* The expand target isn't in the wall yet (a just-created agent the
+                poll hasn't listed) — hold the fullscreen space rather than
+                flashing the whole grid blank. */}
+            {expanding && (
+              <div className="termcell termcell-expanded">
+                <div className="termcell-placeholder">opening terminal…</div>
+              </div>
+            )}
+          </>
         )}
       </div>
 
       <div className="hint">
-        click a header to focus in the main terminal · ⌘/Ctrl-click to select ·
-        right-click for rename / close
+        {expandedTab
+          ? "⤢ or ⌘⇧U restores the cell to the grid · click a header to focus in the main terminal"
+          : "click a header to focus in the main terminal · ⌘/Ctrl-click to select · ⤢ expands a cell (⌘⇧U)"}
       </div>
 
       <Dialog
@@ -450,7 +598,10 @@ function GridCell({
   selected,
   selectionCount,
   focused,
+  expanded,
+  tall,
   onClick,
+  onToggleExpand,
   onRename,
   onClose,
 }: {
@@ -459,7 +610,11 @@ function GridCell({
   selected: boolean
   selectionCount: number
   focused: boolean
+  expanded: boolean
+  // Span two grid rows to fill the empty slot a partial last row would leave.
+  tall: boolean
   onClick: (e: React.MouseEvent) => void
+  onToggleExpand: () => void
   onRename: () => void
   onClose: () => void
 }) {
@@ -550,37 +705,69 @@ function GridCell({
 
   return (
     <div
-      className={cn("termcell", focused && "focused", selected && "selected")}
+      className={cn(
+        "termcell",
+        focused && "focused",
+        selected && "selected",
+        expanded && "termcell-expanded",
+        tall && "termcell-tall"
+      )}
     >
-      <ContextMenu>
-        <ContextMenuTrigger asChild>
-          <button
-            type="button"
-            className="termcell-head"
-            title={`${tip}\n\nclick to focus · ⌘/Ctrl-click to select`}
-            onClick={onClick}
-          >
-            <span className="termcell-host">{p.host_label}</span>
-            <span className="termcell-title">
-              {title}
-              {tabLabel ? ` · ${tabLabel}` : ""}
-            </span>
-            {p.has_agent && (
-              <span className={cn("termcell-agent", p.agent_status)}>
-                ● {p.agent || "agent"}
+      <div className="termcell-head">
+        <ContextMenu>
+          <ContextMenuTrigger asChild>
+            <button
+              type="button"
+              className="termcell-head-main"
+              title={`${tip}\n\nclick to focus · ⌘/Ctrl-click to select`}
+              onClick={onClick}
+            >
+              <span className="termcell-host">{p.host_label}</span>
+              <span className="termcell-title">
+                {title}
+                {tabLabel ? ` · ${tabLabel}` : ""}
               </span>
-            )}
-          </button>
-        </ContextMenuTrigger>
-        <ContextMenuContent>
-          <ContextMenuItem onSelect={onRename}>
-            Rename workspace…
-          </ContextMenuItem>
-          <ContextMenuItem variant="destructive" onSelect={onClose}>
-            {closeLabel}
-          </ContextMenuItem>
-        </ContextMenuContent>
-      </ContextMenu>
+              {p.has_agent && (
+                <span className={cn("termcell-agent", p.agent_status)}>
+                  ● {p.agent || "agent"}
+                </span>
+              )}
+            </button>
+          </ContextMenuTrigger>
+          <ContextMenuContent>
+            <ContextMenuItem onSelect={onRename}>
+              Rename workspace…
+            </ContextMenuItem>
+            <ContextMenuItem variant="destructive" onSelect={onClose}>
+              {closeLabel}
+            </ContextMenuItem>
+          </ContextMenuContent>
+        </ContextMenu>
+        <button
+          type="button"
+          className="termcell-btn"
+          title={
+            expanded ? "Restore to grid (⌘⇧U)" : "Expand to fill grid (⌘⇧U)"
+          }
+          aria-label={expanded ? "restore to grid" : "expand to fill grid"}
+          onClick={onToggleExpand}
+        >
+          {expanded ? (
+            <Minimize2 className="size-3.5" />
+          ) : (
+            <Maximize2 className="size-3.5" />
+          )}
+        </button>
+        <button
+          type="button"
+          className="termcell-btn termcell-btn-close"
+          title={closeLabel}
+          aria-label={closeLabel}
+          onClick={onClose}
+        >
+          <X className="size-3.5" />
+        </button>
+      </div>
       <div ref={bodyRef} className="termcell-body">
         {src && (
           <iframe
