@@ -687,12 +687,12 @@
 .termgrid {
   flex: 1 1 auto;
   overflow: auto;
-  /* No padding or gap between cells: the grid is a wall of terminals and every
-     pixel goes to terminal content; the cells' own 1px borders are the only
-     seams. The one exception is a thin strip on the right (matching GRID_PAD_RIGHT
-     in GridTab.tsx) — a place to park the cursor where the wheel scrolls the
-     grid itself rather than a terminal's scrollback. */
-  padding: 0 16px 0 0;
+  /* No padding or gap between cells: the grid is a wall of terminals that spans
+     the full available width, and every pixel goes to terminal content; the
+     cells' own 1px borders are the only seams. To scroll the grid itself while
+     the cursor is over a terminal, hold Shift (the iframe forwards Shift+wheel
+     to the grid — see wireTerminalIframe in lib/terminal.ts). */
+  padding: 0;
   /* Flex wrap (not CSS grid) so the cells in each row grow to fill the row's
      full width — a CSS grid leaves empty tracks, stranding a lone last-row cell
      at its min width. align-content: start packs rows to the top. */
