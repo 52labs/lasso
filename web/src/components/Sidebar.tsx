@@ -191,6 +191,17 @@ export function Sidebar({
     refetchInterval: allHosts ? 4000 : false,
   })
 
+  // How many purely-numeric scratch agents ("1", "2"…) each workspace holds. A
+  // lone one needs no number to disambiguate (just the workspace name); two or
+  // more do ("52 Labs 1" / "52 Labs 2"). Keyed by workspace id. See AgentRowItem.
+  const numericByWorkspace = React.useMemo(() => {
+    const m = new Map<string, number>()
+    for (const a of agents.data?.agents ?? [])
+      if (!a.repo && /^\d+$/.test(a.title))
+        m.set(a.workspace_id, (m.get(a.workspace_id) ?? 0) + 1)
+    return m
+  }, [agents.data])
+
   // Refetch the tree + agents whenever the workspace/tab layout changes (SSE).
   React.useEffect(() => {
     if (panesRev >= 0) refreshTree()
@@ -422,7 +433,9 @@ export function Sidebar({
                 // host's first row is wherever its host differs from the prior).
                 const header =
                   allHosts && item.host !== items[idx - 1]?.host ? (
-                    <HostHeader label={item.hostLabel ?? item.host ?? "local"} />
+                    <HostHeader
+                      label={item.hostLabel ?? item.host ?? "local"}
+                    />
                   ) : null
                 return (
                   <React.Fragment key={rowId(item)}>
@@ -546,6 +559,7 @@ export function Sidebar({
                 agent={a}
                 selected={a.tab_id === selectedTabId}
                 status={agentStatuses[a.tab_id] ?? a.status}
+                siblingNumeric={numericByWorkspace.get(a.workspace_id) ?? 0}
                 onSelect={() => onSelectTab(a.tab_id)}
               />
             </React.Fragment>
@@ -580,11 +594,7 @@ function HostHeader({ label }: { label: string }) {
   const local = label === "local"
   return (
     <div className="flex items-center gap-1.5 px-3 pt-2 pb-1 font-semibold text-[10px] text-muted-foreground/80 uppercase tracking-wider">
-      {local ? (
-        <Laptop className="size-3" />
-      ) : (
-        <Server className="size-3" />
-      )}
+      {local ? <Laptop className="size-3" /> : <Server className="size-3" />}
       <span className="truncate">{label}</span>
       <span className="ml-1 h-px flex-1 bg-border" />
     </div>
@@ -1120,11 +1130,13 @@ function AgentRowItem({
   agent,
   selected,
   status,
+  siblingNumeric,
   onSelect,
 }: {
   agent: AgentRow
   selected: boolean
   status: string
+  siblingNumeric: number
   onSelect: () => void
 }) {
   const [renameOpen, setRenameOpen] = React.useState(false)
@@ -1134,6 +1146,20 @@ function AgentRowItem({
       .catch((e) => toast.error(String(e)))
     refreshTree()
   }
+  // Scratch-task agents live in a numbered tab ("1", "2"…) whose title alone is
+  // meaningless out of context, so surface the workspace name. With a single
+  // numeric tab in the workspace the number adds nothing — just show "52 Labs";
+  // with two or more, keep the number to disambiguate ("52 Labs 1" / "52 Labs
+  // 2"). Repo agents and lasso-created scratch agents (whose title already IS the
+  // workspace name) are left as-is — no doubled "52 Labs 52 Labs".
+  const displayTitle =
+    !agent.repo &&
+    agent.workspace_title &&
+    agent.title !== agent.workspace_title
+      ? siblingNumeric === 1 && /^\d+$/.test(agent.title)
+        ? agent.workspace_title
+        : `${agent.workspace_title} ${agent.title}`
+      : agent.title
   return (
     <>
       <ContextMenu>
@@ -1149,7 +1175,7 @@ function AgentRowItem({
             <span
               className={cn("size-2 shrink-0 rounded-full", STATUS_DOT[status])}
             />
-            <span className="truncate">{agent.title}</span>
+            <span className="truncate">{displayTitle}</span>
             <span className="ml-auto shrink-0 text-[10px] text-muted-foreground">
               {status} · {agent.agent}
             </span>
