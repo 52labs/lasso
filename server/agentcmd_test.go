@@ -47,8 +47,8 @@ func TestAgentPromptLeadsWithTitle(t *testing.T) {
 }
 
 // The self-identity hint must NOT pollute the user-visible prompt: agentPrompt
-// returns the verbatim body only, and the id rides in agentIdentityNote (a
-// system-prompt append) instead.
+// returns the verbatim body only. The agent learns its id from the LASSO_* env
+// vars (agentIdentityEnv) surfaced by the bundled lasso skill instead.
 func TestAgentPromptOmitsIdentity(t *testing.T) {
 	rec := AgentRecord{
 		ID:          "dj8hus0qiduh",
@@ -62,39 +62,6 @@ func TestAgentPromptOmitsIdentity(t *testing.T) {
 	}
 	if strings.Contains(got, "dj8hus0qiduh") || strings.Contains(got, "$LASSO_TAB_ID") {
 		t.Errorf("prompt must not carry the identity note, got %q", got)
-	}
-}
-
-// agentIdentityNote carries the agent's own id and points it at $LASSO_TAB_ID;
-// it's empty for records without a TabID (bare/title-only) so they get no note.
-func TestAgentIdentityNote(t *testing.T) {
-	got := agentIdentityNote(AgentRecord{TabID: "dj8hus0qiduh"})
-	if !strings.Contains(got, "dj8hus0qiduh") {
-		t.Errorf("note must name the agent's own id, got %q", got)
-	}
-	if !strings.Contains(got, "$LASSO_TAB_ID") {
-		t.Errorf("note should point the agent at $LASSO_TAB_ID, got %q", got)
-	}
-	if note := agentIdentityNote(AgentRecord{Title: "no tab"}); note != "" {
-		t.Errorf("title-only record should get no identity note, got %q", note)
-	}
-}
-
-// The identity note must reach the agent through the *system* prompt, never the
-// user prompt: claude gets --append-system-prompt carrying the id, while the
-// user prompt argument stays free of it.
-func TestAgentCommandIdentityRidesSystemPrompt(t *testing.T) {
-	identity := agentIdentityNote(AgentRecord{TabID: "dj8hus0qiduh"})
-	cmd := agentCommand("claude", false, "do it", identity)
-	if !strings.Contains(cmd, "--append-system-prompt") {
-		t.Errorf("identity must ride --append-system-prompt: %q", cmd)
-	}
-	if !strings.Contains(cmd, "dj8hus0qiduh") {
-		t.Errorf("system prompt must carry the agent id: %q", cmd)
-	}
-	// No identity → no flag.
-	if bare := agentCommand("claude", false, "do it", ""); strings.Contains(bare, "--append-system-prompt") {
-		t.Errorf("empty identity must not add the flag: %q", bare)
 	}
 }
 
@@ -131,7 +98,7 @@ func contains(s []string, v string) bool {
 // plain --dangerously-skip-permissions: the latter forces bypass mode and
 // silently overrides --permission-mode plan, so the agent never plans.
 func TestAgentCommandPlanModeFlags(t *testing.T) {
-	plan := agentCommand("claude", true, "do it", "")
+	plan := agentCommand("claude", true, "do it")
 	if !strings.Contains(plan, "--permission-mode plan") {
 		t.Errorf("plan command missing --permission-mode plan: %q", plan)
 	}
@@ -144,7 +111,7 @@ func TestAgentCommandPlanModeFlags(t *testing.T) {
 		t.Errorf("plan command must not force bypass mode: %q", plan)
 	}
 
-	def := agentCommand("claude", false, "do it", "")
+	def := agentCommand("claude", false, "do it")
 	if !strings.Contains(def, "--dangerously-skip-permissions") ||
 		strings.Contains(def, "--permission-mode") {
 		t.Errorf("default command should bypass permissions without plan: %q", def)
@@ -155,22 +122,9 @@ func TestAgentCommandPlanModeFlags(t *testing.T) {
 // so it runs autonomously. Its boot-time trust dialog is handled separately by
 // the trust goroutine, not a launch flag.
 func TestAgentCommandCodexBypassesApprovals(t *testing.T) {
-	cmd := agentCommand("codex", false, "do it", "")
+	cmd := agentCommand("codex", false, "do it")
 	if !strings.Contains(cmd, "--dangerously-bypass-approvals-and-sandbox") {
 		t.Errorf("codex command missing bypass flag: %q", cmd)
-	}
-}
-
-// codex has no --append-system-prompt, so the identity note falls back to a
-// fenced prompt footer rather than being dropped.
-func TestAgentCommandCodexIdentityFooter(t *testing.T) {
-	identity := agentIdentityNote(AgentRecord{TabID: "dj8hus0qiduh"})
-	cmd := agentCommand("codex", false, "do it", identity)
-	if strings.Contains(cmd, "--append-system-prompt") {
-		t.Errorf("codex has no system-prompt flag: %q", cmd)
-	}
-	if !strings.Contains(cmd, "dj8hus0qiduh") {
-		t.Errorf("codex must still carry the agent id in the prompt: %q", cmd)
 	}
 }
 

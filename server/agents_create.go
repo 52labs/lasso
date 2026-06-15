@@ -462,7 +462,7 @@ func createAgent(b Backend, req createAgentReq) (AgentRecord, error) {
 	// slow over SSH on a remote host) and types sent into it before it's ready get
 	// their leading characters eaten. The backend is captured so the launch always
 	// targets the host the agent was created on, even if the active host changes.
-	go launchAgentInSession(session, setup, agentCommand(req.Agent, rec.PlanMode, agentPrompt(rec), agentIdentityNote(rec)))
+	go launchAgentInSession(session, setup, agentCommand(req.Agent, rec.PlanMode, agentPrompt(rec)))
 
 	// Persist this host's remembered selections, then append the record. Errors
 	// here are non-fatal: the agent is already running, so we still return it.
@@ -644,8 +644,9 @@ func agentIdentityEnv(rec AgentRecord) []string {
 // (stored in Description; its first line is also the title), plus a pointer to
 // any notes/attachments that landed in the work dir. Falls back to the title
 // when no prompt body was stored (e.g. a title-only record). The agent's own
-// lasso identity is NOT folded in here — it rides in the system prompt via
-// agentIdentityNote so it never pollutes the user-visible prompt.
+// lasso identity is NOT folded in here — it's exported as LASSO_* env vars
+// (agentIdentityEnv) and surfaced to the agent by the bundled lasso skill
+// (SKILL.md), so it never pollutes the user-visible prompt.
 func agentPrompt(rec AgentRecord) string {
 	var b strings.Builder
 	body := rec.Description
@@ -662,28 +663,10 @@ func agentPrompt(rec AgentRecord) string {
 	return b.String()
 }
 
-// agentIdentityNote is the one-line self-identity hint telling the agent its own
-// lasso id up front, so it never has to spend tokens enumerating repos/agents to
-// find itself. lasso knows the id at spawn time. It's delivered as a *system
-// prompt* append (see agentCommand) rather than mixed into the user prompt, so
-// the agent's visible turn-1 message stays exactly what the user typed. Empty
-// for bare/title-only records (and unit tests) so they get no note.
-func agentIdentityNote(rec AgentRecord) string {
-	if rec.TabID == "" {
-		return ""
-	}
-	return "lasso: you are agent `" + rec.TabID +
-		"` (also exported as $LASSO_TAB_ID). To act on yourself via the lasso MCP tools" +
-		" — e.g. close_agent once your work is done, or whoami to fetch your own record —" +
-		" pass that id; you don't need list_repos/list_agents to find yourself."
-}
-
 // agentCommand builds the shell command that launches the chosen agent. A
 // non-empty prompt is passed as the agent's initial instruction; plan mode is
-// requested when supported. A non-empty identity (agentIdentityNote) is injected
-// into the agent's *system* prompt where the CLI supports it, so it never shows
-// up in the user-visible prompt.
-func agentCommand(agent string, planMode bool, prompt, identity string) string {
+// requested when supported.
+func agentCommand(agent string, planMode bool, prompt string) string {
 	switch agent {
 	case "codex":
 		// --dangerously-bypass-approvals-and-sandbox is codex's analog of claude's
@@ -694,16 +677,6 @@ func agentCommand(agent string, planMode bool, prompt, identity string) string {
 		// config-file/-c pre-trust is fragile across the pane's shell). No
 		// documented plan-mode flag, so plan agents launch in the default mode.
 		cmd := "codex --dangerously-bypass-approvals-and-sandbox"
-		// codex has no --append-system-prompt (or stable config equivalent), so the
-		// identity note has to ride along in the prompt as a footer. Kept minimal
-		// and fenced off with a separator so it reads as metadata, not task.
-		if identity != "" {
-			if prompt != "" {
-				prompt += "\n\n---\n" + identity
-			} else {
-				prompt = identity
-			}
-		}
 		if prompt != "" {
 			cmd += " " + shellSingleQuote(prompt)
 		}
@@ -716,11 +689,6 @@ func agentCommand(agent string, planMode bool, prompt, identity string) string {
 		cmd := "claude --dangerously-skip-permissions"
 		if planMode {
 			cmd = "claude --allow-dangerously-skip-permissions --permission-mode plan"
-		}
-		// Deliver the self-identity hint via the system prompt so it stays out of
-		// the user-visible turn-1 message (which is exactly what the user typed).
-		if identity != "" {
-			cmd += " --append-system-prompt " + shellSingleQuote(identity)
 		}
 		if prompt != "" {
 			cmd += " " + shellSingleQuote(prompt)
