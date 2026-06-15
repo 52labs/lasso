@@ -8,11 +8,14 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog"
 import { fetchAgents, fetchTree, qk } from "@/lib/query"
+import { useUIState } from "@/lib/ui-state"
 import { cn } from "@/lib/utils"
 
 // One searchable entry: a tab (shell or agent), enriched with its workspace +
 // repo context and (for agents) the initial prompt, so ⌘K matches renamed
-// titles, the workspace, the repo, and the prompt text.
+// titles, the workspace, the repo, and the prompt text. In all-hosts mode the
+// host label rides along too, so the search spans every host and each result
+// shows where it lives.
 interface Entry {
   tabId: string
   title: string
@@ -22,6 +25,7 @@ interface Entry {
   agent: string
   status: string
   prompt: string
+  hostLabel: string
 }
 
 const STATUS_DOT: Record<string, string> = {
@@ -31,8 +35,11 @@ const STATUS_DOT: Record<string, string> = {
   unknown: "bg-muted-foreground/40",
 }
 
-const haystack = (e: Entry) =>
-  [e.title, e.workspace, e.repo, e.agent, e.prompt]
+// The searchable text for one entry. In all-hosts mode the host label is folded
+// in so typing a host name narrows the (now cross-host) results; in single-host
+// mode it's left out — every entry shares the one host, so it'd just be noise.
+const haystack = (e: Entry, allHosts: boolean) =>
+  [e.title, e.workspace, e.repo, e.agent, e.prompt, allHosts && e.hostLabel]
     .filter(Boolean)
     .join(" ")
     .toLowerCase()
@@ -52,6 +59,10 @@ export function PaneSwitcher({
   const [query, setQuery] = React.useState("")
   const [active, setActive] = React.useState(0)
   const listRef = React.useRef<HTMLDivElement>(null)
+  // When the sidebar is in all-hosts mode the shared tree/agents queries already
+  // span every host, so ⌘K searches across hosts — surface the host on each row
+  // (and fold it into the search) so cross-host matches are disambiguated.
+  const allHosts = useUIState().sidebar_all_hosts ?? false
 
   const treeQ = useQuery({
     queryKey: qk.tree,
@@ -101,6 +112,7 @@ export function PaneSwitcher({
           agent: t.agent ?? "",
           status: t.status ?? "",
           prompt: promptByTab.get(t.id) ?? "",
+          hostLabel: w.host_label ?? "",
         })
       }
     }
@@ -111,10 +123,10 @@ export function PaneSwitcher({
     const tokens = query.trim().toLowerCase().split(/\s+/).filter(Boolean)
     if (tokens.length === 0) return entries
     return entries.filter((e) => {
-      const h = haystack(e)
+      const h = haystack(e, allHosts)
       return tokens.every((t) => h.includes(t))
     })
-  }, [entries, query])
+  }, [entries, query, allHosts])
 
   // biome-ignore lint/correctness/useExhaustiveDependencies: reset on query change
   React.useEffect(() => setActive(0), [query])
@@ -154,7 +166,11 @@ export function PaneSwitcher({
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent
         showCloseButton={false}
-        className="top-2 translate-y-0 gap-0 p-0 max-md:max-w-[calc(100%-1rem)] sm:top-[15%] sm:max-w-lg"
+        // flex column + bounded height + overflow-hidden so the results list
+        // below is the real scroll area: without a height cap on the content
+        // itself, a long list on mobile chained its scroll to the page instead
+        // of staying inside the modal. (Same pattern as CreateAgentDialog.)
+        className="top-2 flex max-h-[85dvh] translate-y-0 flex-col gap-0 overflow-hidden p-0 max-md:max-w-[calc(100%-1rem)] sm:top-[15%] sm:max-w-lg"
         onOpenAutoFocus={(e) => {
           e.preventDefault()
           ;(e.currentTarget as HTMLElement | null)
@@ -172,11 +188,11 @@ export function PaneSwitcher({
           placeholder="Search tabs/agents by name, workspace, repo, agent, or prompt…"
           // text-base on mobile keeps iOS from zooming the viewport on focus;
           // shrink to text-sm once there's room.
-          className="w-full border-border border-b bg-transparent px-4 py-3 text-base outline-none placeholder:text-muted-foreground sm:text-sm"
+          className="w-full shrink-0 border-border border-b bg-transparent px-4 py-3 text-base outline-none placeholder:text-muted-foreground sm:text-sm"
         />
         <div
           ref={listRef}
-          className="max-h-[70dvh] overflow-y-auto overscroll-contain p-1 sm:max-h-80"
+          className="min-h-0 flex-1 overflow-y-auto overscroll-contain p-1 sm:max-h-80 sm:flex-none"
         >
           {filtered.length === 0 ? (
             <div className="px-3 py-6 text-center text-muted-foreground text-sm">
@@ -240,6 +256,20 @@ export function PaneSwitcher({
                       : "text-muted-foreground"
                   )}
                 >
+                  {allHosts && e.hostLabel && (
+                    <span
+                      className={cn(
+                        "shrink-0 rounded px-1.5 py-0.5 font-medium text-[11px]",
+                        // Mirror the agent badge's selected-row contrast flip so
+                        // the host chip stays legible on `bg-primary`.
+                        i === active
+                          ? "bg-primary-foreground/20 text-primary-foreground"
+                          : "bg-muted text-muted-foreground"
+                      )}
+                    >
+                      {e.hostLabel}
+                    </span>
+                  )}
                   {e.repo && <span className="shrink-0">{e.repo}</span>}
                   <span className="truncate">{e.workspace}</span>
                 </span>
