@@ -54,6 +54,7 @@ interface WiredDoc extends Document {
   __terminalWired?: boolean
   __gridScrollWired?: boolean
   __gridFocusWired?: boolean
+  __touchScrollWired?: boolean
 }
 
 function frameWindow(id: string): TermWindow | null {
@@ -283,6 +284,81 @@ function wireGridFocus(doc: WiredDoc, win: Window) {
   doc.addEventListener("focusin", notify, { capture: true })
 }
 
+// wireTouchScroll gives terminals a finger-drag scroll on touch devices. Two
+// things conspire to make the obvious approaches fail:
+//   1. Our terminals are `tmux attach`, and tmux lives in xterm's ALTERNATE
+//      screen — so `.xterm-viewport` holds no scrollback to move (scrollTop is a
+//      no-op). The scrollable content belongs to the app inside tmux.
+//   2. xterm has its own touch-scroll, but disables it whenever the app has mouse
+//      tracking on (Claude Code does), forwarding the touch as a mouse drag.
+// Both the alt-screen case and the scrollback case ARE reachable the same way the
+// desktop reaches them: the wheel. xterm turns a wheel into scrollback movement
+// (normal buffer), alternate-scroll arrow keys, or app mouse-wheel forwarding
+// (mouse mode) — whichever applies. So we translate the drag into synthetic wheel
+// events aimed at xterm, emitting one "line" per row-height of travel, and always
+// preventDefault so the page itself never scrolls underneath. A bare tap (no
+// move) is left alone, so taps still reach the terminal as clicks. Idempotent.
+function wireTouchScroll(doc: WiredDoc, win: TermWindow) {
+  if (doc.__touchScrollWired) return
+  doc.__touchScrollWired = true
+  let lastY = 0
+  let accum = 0
+  let tracking = false
+  const rowHeight = (): number => {
+    const screen = doc.querySelector(".xterm-screen") as HTMLElement | null
+    const rows = win.term?.rows ?? 24
+    const h = screen?.clientHeight ?? 0
+    return h && rows ? h / rows : 18
+  }
+  doc.addEventListener(
+    "touchstart",
+    (e: TouchEvent) => {
+      tracking = e.touches.length === 1
+      if (tracking) {
+        lastY = e.touches[0].clientY
+        accum = 0
+      }
+    },
+    { capture: true, passive: true }
+  )
+  doc.addEventListener(
+    "touchmove",
+    (e: TouchEvent) => {
+      if (!tracking || e.touches.length !== 1) return
+      const t = e.touches[0]
+      // Finger DOWN (clientY grows) reveals older content above → negative
+      // deltaY (wheel up), matching natural touch scrolling.
+      accum += lastY - t.clientY
+      lastY = t.clientY
+      const target =
+        (doc.querySelector(".xterm-viewport") as HTMLElement | null) ??
+        (doc.querySelector(".xterm") as HTMLElement | null)
+      const rh = rowHeight()
+      // The iframe realm's WheelEvent ctor, so the event belongs to xterm's window.
+      const WheelEventCtor = (
+        win as unknown as { WheelEvent: typeof WheelEvent }
+      ).WheelEvent
+      while (target && Math.abs(accum) >= rh) {
+        const dir = accum > 0 ? 1 : -1
+        accum -= dir * rh
+        target.dispatchEvent(
+          new WheelEventCtor("wheel", {
+            deltaY: dir * rh,
+            deltaMode: 0, // pixels
+            bubbles: true,
+            cancelable: true,
+            clientX: t.clientX,
+            clientY: t.clientY,
+          })
+        )
+      }
+      e.preventDefault()
+      e.stopPropagation()
+    },
+    { capture: true, passive: false }
+  )
+}
+
 // wireTerminalIframe: (1) optionally suppress the native context menu so
 // right-click only triggers the terminal's handling; (2) intercept image paste
 // — save it server-side and insert its path at the cursor (xterm only pastes
@@ -302,6 +378,7 @@ export function wireTerminalIframe(
     return
   }
   if (!doc) return
+  if (win) wireTouchScroll(doc, win)
   if (gridScroll && win) {
     wireGridScroll(doc, win)
     wireGridFocus(doc, win)
@@ -443,7 +520,10 @@ function startAutoReconnect(id: string): () => void {
       const ov = win ? ttydOverlay(win) : null
       if (!ov || ov.style.opacity === "0") {
         attempts = 0 // connected (or overlay faded) — ready for the next episode
-      } else if (ov.textContent === RECONNECT_PROMPT && attempts < MAX_AUTO_RECONNECTS) {
+      } else if (
+        ov.textContent === RECONNECT_PROMPT &&
+        attempts < MAX_AUTO_RECONNECTS
+      ) {
         attempts++
         pressTerminalEnter(win as TermWindow)
       }
