@@ -1198,15 +1198,18 @@ function AgentRowItem({
   }
   // Scratch-task agents live in a numbered tab ("1", "2"…) whose title alone is
   // meaningless out of context, so surface the workspace name. With a single
-  // numeric tab in the workspace the number adds nothing — just show "52 Labs";
-  // with two or more, keep the number to disambiguate ("52 Labs 1" / "52 Labs
-  // 2"). Repo agents and lasso-created scratch agents (whose title already IS the
-  // workspace name) are left as-is — no doubled "52 Labs 52 Labs".
+  // numeric tab in the workspace the number adds nothing — just show the
+  // workspace name; with two or more, keep the number to disambiguate ("Foo 1" /
+  // "Foo 2"). A tab with an explicit name (not a bare number) is already
+  // meaningful on its own, so it's shown as-is — never prefixed with the
+  // workspace ("Triage", not "Foo Triage"). Repo agents and lasso-created scratch
+  // agents (whose title already IS the workspace name) are likewise left as-is.
   const displayTitle =
     !agent.repo &&
     agent.workspace_title &&
-    agent.title !== agent.workspace_title
-      ? siblingNumeric === 1 && /^\d+$/.test(agent.title)
+    agent.title !== agent.workspace_title &&
+    /^\d+$/.test(agent.title)
+      ? siblingNumeric === 1
         ? agent.workspace_title
         : `${agent.workspace_title} ${agent.title}`
       : agent.title
