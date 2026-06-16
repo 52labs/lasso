@@ -206,11 +206,11 @@ func gridHostPanes(host, label string) ([]gridPane, error) {
 
 // workspaceGitStatus reports whether a workspace is a git checkout and, if so,
 // how many entries its working tree shows dirty (count of `git status --porcelain`
-// lines; 0 = clean). A non-git (scratch) workspace returns isGit=false so the UI
-// shows no status dot. A git workspace whose status errors is reported as git +
-// clean rather than dropped, so a transient git hiccup doesn't blink the dot off.
+// lines; 0 = clean). A repo-less workspace returns isGit=false so the UI shows no
+// status dot. A git workspace whose status errors is reported as git + clean
+// rather than dropped, so a transient git hiccup doesn't blink the dot off.
 func workspaceGitStatus(be Backend, ws Workspace) (dirty int, isGit bool) {
-	if ws.Kind != "git" || ws.WorkDir == "" {
+	if ws.Repo == "" || ws.WorkDir == "" {
 		return 0, false
 	}
 	out, err := be.GitOut(ws.WorkDir, "status", "--porcelain")

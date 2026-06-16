@@ -53,9 +53,8 @@ type treeTab struct {
 type treeWorkspace struct {
 	ID      string    `json:"id"`
 	Title   string    `json:"title"`
-	Repo    string    `json:"repo,omitempty"`
+	Repo    string    `json:"repo,omitempty"` // "" = repo-less (no git)
 	WorkDir string    `json:"work_dir"`
-	Kind    string    `json:"kind"`
 	Branch  string    `json:"branch,omitempty"`
 	Tabs    []treeTab `json:"tabs"`
 	// Host this workspace lives on ("local" or an ssh alias) and its display
@@ -167,10 +166,10 @@ func buildHostTree(host, label string) ([]treeRepo, []treeWorkspace) {
 		tw.Host = hk
 		tw.HostLabel = label
 		switch {
-		case ws.Kind == "git" && ws.Repo != "" && ws.WorkDir == ws.Repo:
+		case ws.Repo != "" && ws.WorkDir == ws.Repo:
 			// The main checkout (work_dir == repo root) IS the repo row, not a child.
 			mainByRepo[ws.Repo] = tw
-		case ws.Kind == "git" && ws.Repo != "":
+		case ws.Repo != "":
 			byRepo[ws.Repo] = append(byRepo[ws.Repo], tw) // linked worktree
 		default:
 			scratch = append(scratch, tw)
@@ -284,9 +283,9 @@ func spacesOrder(host string, scratch []treeWorkspace, repos []treeRepo) []strin
 func buildTreeWorkspace(be Backend, ws Workspace, statuses, kinds map[string]string, host string) treeWorkspace {
 	tw := treeWorkspace{
 		ID: ws.ID, Title: ws.Title, Repo: ws.Repo, WorkDir: ws.WorkDir,
-		Kind: ws.Kind, Tabs: []treeTab{},
+		Tabs: []treeTab{},
 	}
-	if ws.Kind == "git" && ws.WorkDir != "" {
+	if ws.Repo != "" && ws.WorkDir != "" {
 		if out, err := be.GitOut(ws.WorkDir, "rev-parse", "--abbrev-ref", "HEAD"); err == nil {
 			tw.Branch = strings.TrimSpace(out)
 		}
@@ -690,7 +689,7 @@ func serveRepoClose(w http.ResponseWriter, r *http.Request) {
 	}
 	wss, _ := listWorkspaces(host)
 	for _, ws := range wss {
-		if ws.Kind != "git" || ws.Repo != repo {
+		if ws.Repo != repo {
 			continue
 		}
 		tabs, _ := listTabs(ws.ID)
@@ -768,7 +767,7 @@ func serveOpenRepo(w http.ResponseWriter, r *http.Request) {
 	// Reuse the existing main-checkout workspace if there is one.
 	if wss, err := listWorkspaces(host); err == nil {
 		for _, ws := range wss {
-			if ws.Kind == "git" && ws.WorkDir == repo {
+			if ws.Repo != "" && ws.WorkDir == repo {
 				if tabs, _ := listTabs(ws.ID); len(tabs) > 0 {
 					writeJSON(w, map[string]any{"tab_id": tabs[0].ID, "workspace_id": ws.ID})
 					return
@@ -798,7 +797,7 @@ func serveOpenRepo(w http.ResponseWriter, r *http.Request) {
 	if rc, err := getRepoState(host, repo); err == nil && rc.DisplayName != "" {
 		title = rc.DisplayName
 	}
-	_ = insertWorkspace(Workspace{ID: wsID, Host: host, Title: title, Repo: repo, WorkDir: repo, Kind: "git", CreatedAt: now})
+	_ = insertWorkspace(Workspace{ID: wsID, Host: host, Title: title, Repo: repo, WorkDir: repo, CreatedAt: now})
 	_ = insertTab(Tab{ID: tabID, WorkspaceID: wsID, Title: nextTabName(wsID), Cwd: repo, Kind: "shell", CreatedAt: now})
 	kickHub()
 	writeJSON(w, map[string]any{"tab_id": tabID, "workspace_id": wsID})
@@ -906,7 +905,7 @@ func serveCreateWorktreeOnly(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	now := time.Now()
-	_ = insertWorkspace(Workspace{ID: wsID, Host: host, Title: title, Repo: repo, WorkDir: workDir, Kind: "git", CreatedAt: now})
+	_ = insertWorkspace(Workspace{ID: wsID, Host: host, Title: title, Repo: repo, WorkDir: workDir, CreatedAt: now})
 	_ = insertTab(Tab{ID: tabID, WorkspaceID: wsID, Title: nextTabName(wsID), Cwd: workDir, Kind: "shell", CreatedAt: now})
 	_ = setLastBaseBranch(host, repo, base)
 	kickHub()
@@ -949,7 +948,7 @@ func serveCreateWorkspace(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	now := time.Now()
-	if err := insertWorkspace(Workspace{ID: wsID, Host: sbHost(), Title: title, WorkDir: workDir, Kind: "scratch", CreatedAt: now}); err != nil {
+	if err := insertWorkspace(Workspace{ID: wsID, Host: sbHost(), Title: title, WorkDir: workDir, CreatedAt: now}); err != nil {
 		_ = tmuxKillSession(session)
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return

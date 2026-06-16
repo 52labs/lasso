@@ -32,11 +32,8 @@ type LassoConfig struct {
 	// LastAgent is the AI agent chosen last time on this host (the fallback when
 	// DefaultAgent is empty).
 	LastAgent string `json:"last_agent,omitempty"`
-	// LastAgentType is the agent type chosen last time ("git"|"scratch"),
-	// preselected next time.
-	LastAgentType string `json:"last_agent_type,omitempty"`
-	// ScratchSetup is the default setup script run before the agent in scratch
-	// (non-git) agents.
+	// ScratchSetup is the default setup script run before the agent in repo-less
+	// (non-git) workspaces.
 	ScratchSetup string `json:"scratch_setup,omitempty"`
 	// Repos holds per-repo memory + settings for this host, keyed by repo path.
 	Repos map[string]*RepoConfig `json:"repos,omitempty"`
@@ -70,7 +67,6 @@ type AgentRecord struct {
 	// selects the tmux server its session lives on (agentStatusNow, send/read/close).
 	Host        string   `yaml:"-" json:"host,omitempty"`
 	Title       string   `yaml:"title" json:"title"`
-	Type        string   `yaml:"type" json:"type"` // "git" | "scratch"
 	Repo        string   `yaml:"repo,omitempty" json:"repo,omitempty"`
 	BaseBranch  string   `yaml:"base_branch,omitempty" json:"base_branch,omitempty"`
 	Branch      string   `yaml:"branch,omitempty" json:"branch,omitempty"`
@@ -180,14 +176,13 @@ func loadLassoConfig(host string) (*LassoConfig, error) {
 		return nil, err
 	}
 	return &LassoConfig{
-		ReposRoot:     s.ReposRoot,
-		BranchPrefix:  s.BranchPrefix,
-		DefaultAgent:  s.DefaultAgent,
-		ScratchSetup:  s.ScratchSetup,
-		LastRepo:      hs.LastRepo,
-		LastAgent:     hs.LastAgent,
-		LastAgentType: hs.LastAgentType,
-		Repos:         repos,
-		Agents:        agents,
+		ReposRoot:    s.ReposRoot,
+		BranchPrefix: s.BranchPrefix,
+		DefaultAgent: s.DefaultAgent,
+		ScratchSetup: s.ScratchSetup,
+		LastRepo:     hs.LastRepo,
+		LastAgent:    hs.LastAgent,
+		Repos:        repos,
+		Agents:       agents,
 	}, nil
 }

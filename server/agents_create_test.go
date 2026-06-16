@@ -65,7 +65,7 @@ func TestCreateScratchAgentPersists(t *testing.T) {
 	t.Cleanup(func() { setBackend(prev) })
 
 	rec, err := createAgent(curBackend(), createAgentReq{
-		Type: "scratch", Title: "Hey boss", Prompt: "do a thing", Agent: "claude", NoFocus: true,
+		Title: "Hey boss", Prompt: "do a thing", Agent: "claude", NoFocus: true,
 	})
 	if err != nil {
 		t.Fatalf("createAgent: %v", err)
@@ -76,7 +76,7 @@ func TestCreateScratchAgentPersists(t *testing.T) {
 	if !tmuxHasSession(tabSession(rec.TabID)) {
 		t.Fatalf("tmux session %s not created", tabSession(rec.TabID))
 	}
-	if ws, err := getWorkspace(rec.WorkspaceID); err != nil || ws.Kind != "scratch" {
+	if ws, err := getWorkspace(rec.WorkspaceID); err != nil || ws.Repo != "" {
 		t.Fatalf("workspace = %+v err=%v", ws, err)
 	}
 	tab, err := getTab(rec.TabID)

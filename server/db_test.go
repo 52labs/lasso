@@ -109,24 +109,21 @@ func TestPerHostIsolation(t *testing.T) {
 	}
 }
 
-func TestLastAgentAndType(t *testing.T) {
+func TestLastAgent(t *testing.T) {
 	openTestDB(t)
 	if err := setLastAgent("local", "codex"); err != nil {
 		t.Fatal(err)
 	}
-	if err := setLastAgentType("local", "scratch"); err != nil {
-		t.Fatal(err)
-	}
 	hs, _ := getHostState("local")
-	if hs.LastAgent != "codex" || hs.LastAgentType != "scratch" {
-		t.Errorf("got agent=%q type=%q, want codex/scratch", hs.LastAgent, hs.LastAgentType)
+	if hs.LastAgent != "codex" {
+		t.Errorf("got agent=%q, want codex", hs.LastAgent)
 	}
 	// Updating one field leaves the others intact (per-column upsert).
 	if err := setLastRepo("local", "/repo"); err != nil {
 		t.Fatal(err)
 	}
 	hs, _ = getHostState("local")
-	if hs.LastAgent != "codex" || hs.LastAgentType != "scratch" || hs.LastRepo != "/repo" {
+	if hs.LastAgent != "codex" || hs.LastRepo != "/repo" {
 		t.Errorf("after setLastRepo: %+v", hs)
 	}
 }
@@ -137,7 +134,7 @@ func TestLoadLassoConfigPerHost(t *testing.T) {
 	_ = setLastRepo("local", "/repo")
 	_ = setRepoCopyFiles("local", "/repo", ".env")
 	_ = setLastBaseBranch("local", "/repo", "main")
-	_ = appendAgent("local", AgentRecord{ID: "1", Title: "t", Type: "git", CreatedAt: time.Now()})
+	_ = appendAgent("local", AgentRecord{ID: "1", Title: "t", Repo: "/repo", CreatedAt: time.Now()})
 
 	c, err := loadLassoConfig("local")
 	if err != nil {
@@ -165,7 +162,7 @@ func TestLoadLassoConfigPerHost(t *testing.T) {
 
 func TestWorkspaceTabCRUD(t *testing.T) {
 	openTestDB(t)
-	ws := Workspace{ID: "w1", Host: "local", Title: "feature x", Repo: "/r", WorkDir: "/wt", Kind: "git"}
+	ws := Workspace{ID: "w1", Host: "local", Title: "feature x", Repo: "/r", WorkDir: "/wt"}
 	if err := insertWorkspace(ws); err != nil {
 		t.Fatalf("insertWorkspace: %v", err)
 	}
@@ -177,7 +174,7 @@ func TestWorkspaceTabCRUD(t *testing.T) {
 	}
 
 	got, err := getWorkspace("w1")
-	if err != nil || got.Title != "feature x" || got.Kind != "git" {
+	if err != nil || got.Title != "feature x" || got.Repo != "/r" {
 		t.Fatalf("getWorkspace = %+v err=%v", got, err)
 	}
 	wss, _ := listWorkspaces("local")
@@ -245,7 +242,7 @@ func TestRepoDisplayName(t *testing.T) {
 func TestBackfillFromLegacyAgents(t *testing.T) {
 	openTestDB(t)
 	if err := appendAgent("local", AgentRecord{
-		ID: "ag1", Title: "Legacy", Type: "git", Repo: "/r", WorkDir: "/wt", Agent: "claude", CreatedAt: time.Now(),
+		ID: "ag1", Title: "Legacy", Repo: "/r", WorkDir: "/wt", Agent: "claude", CreatedAt: time.Now(),
 	}); err != nil {
 		t.Fatal(err)
 	}
@@ -261,7 +258,7 @@ func TestBackfillFromLegacyAgents(t *testing.T) {
 		t.Fatalf("migrateSchema: %v", err)
 	}
 	ws, err := getWorkspace("wag1")
-	if err != nil || ws.Repo != "/r" || ws.Kind != "git" {
+	if err != nil || ws.Repo != "/r" {
 		t.Fatalf("backfilled workspace = %+v err=%v", ws, err)
 	}
 	tab, err := getTab("ag1")

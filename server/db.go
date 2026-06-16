@@ -45,8 +45,7 @@ CREATE TABLE IF NOT EXISTS settings (
 CREATE TABLE IF NOT EXISTS host_state (
   host            TEXT PRIMARY KEY,
   last_repo       TEXT NOT NULL DEFAULT '',
-  last_agent      TEXT NOT NULL DEFAULT '',
-  last_agent_type TEXT NOT NULL DEFAULT ''
+  last_agent      TEXT NOT NULL DEFAULT ''
 );
 CREATE TABLE IF NOT EXISTS repo_state (
   host             TEXT NOT NULL,
@@ -62,7 +61,6 @@ CREATE TABLE IF NOT EXISTS agents (
   id           TEXT PRIMARY KEY,
   host         TEXT NOT NULL DEFAULT 'local',
   title        TEXT NOT NULL DEFAULT '',
-  type         TEXT NOT NULL DEFAULT '',
   repo         TEXT NOT NULL DEFAULT '',
   base_branch  TEXT NOT NULL DEFAULT '',
   branch       TEXT NOT NULL DEFAULT '',
@@ -77,15 +75,14 @@ CREATE TABLE IF NOT EXISTS agents (
   tab_id       TEXT NOT NULL DEFAULT '',
   created_at   TEXT NOT NULL DEFAULT ''
 );
--- workspaces: a directory context (git worktree or scratch dir) holding 1..N
--- tabs.
+-- workspaces: a directory context (git worktree or a repo-less dir) holding
+-- 1..N tabs. A workspace is git-backed iff repo != '' (no separate type flag).
 CREATE TABLE IF NOT EXISTS workspaces (
   id         TEXT PRIMARY KEY,
   host       TEXT NOT NULL DEFAULT 'local',
   title      TEXT NOT NULL DEFAULT '',
-  repo       TEXT NOT NULL DEFAULT '',     -- '' for scratch
+  repo       TEXT NOT NULL DEFAULT '',     -- '' = repo-less (no git)
   work_dir   TEXT NOT NULL DEFAULT '',
-  kind       TEXT NOT NULL DEFAULT '',     -- 'git' | 'scratch'
   pinned     INTEGER NOT NULL DEFAULT 0,
   created_at TEXT NOT NULL DEFAULT '',
   closed_at  TEXT NOT NULL DEFAULT ''      -- '' = live (soft close)
@@ -292,16 +289,15 @@ func setSpacesOrder(host string, order []string) error {
 // ---------------------------------------------------------------------------
 
 type hostState struct {
-	LastRepo      string
-	LastAgent     string
-	LastAgentType string
+	LastRepo  string
+	LastAgent string
 }
 
 func getHostState(host string) (hostState, error) {
 	var hs hostState
 	err := db.QueryRow(
-		`SELECT last_repo, last_agent, last_agent_type FROM host_state WHERE host=?`, hostOrLocal(host)).
-		Scan(&hs.LastRepo, &hs.LastAgent, &hs.LastAgentType)
+		`SELECT last_repo, last_agent FROM host_state WHERE host=?`, hostOrLocal(host)).
+		Scan(&hs.LastRepo, &hs.LastAgent)
 	if err == sql.ErrNoRows {
 		return hostState{}, nil
 	}
@@ -318,9 +314,8 @@ func upsertHostField(host, column, value string) error {
 	return err
 }
 
-func setLastRepo(host, repo string) error     { return upsertHostField(host, "last_repo", repo) }
-func setLastAgent(host, agent string) error   { return upsertHostField(host, "last_agent", agent) }
-func setLastAgentType(host, typ string) error { return upsertHostField(host, "last_agent_type", typ) }
+func setLastRepo(host, repo string) error   { return upsertHostField(host, "last_repo", repo) }
+func setLastAgent(host, agent string) error { return upsertHostField(host, "last_agent", agent) }
 
 // ---------------------------------------------------------------------------
 // repo_state — per-host, per-repo settings + memory
@@ -394,10 +389,10 @@ func appendAgent(host string, rec AgentRecord) error {
 		att = []byte("[]")
 	}
 	_, err := db.Exec(
-		`INSERT INTO agents(id, host, title, type, repo, base_branch, branch, agent,
+		`INSERT INTO agents(id, host, title, repo, base_branch, branch, agent,
 			description, notes, attachments, plan_mode, work_dir, workspace_id, root_pane, tab_id, created_at)
-		 VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
-		rec.ID, host, rec.Title, rec.Type, rec.Repo, rec.BaseBranch, rec.Branch, rec.Agent,
+		 VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+		rec.ID, host, rec.Title, rec.Repo, rec.BaseBranch, rec.Branch, rec.Agent,
 		rec.Description, rec.Notes, string(att), boolToInt(rec.PlanMode), rec.WorkDir,
 		rec.WorkspaceID, rec.RootPane, rec.TabID, rec.CreatedAt.Format(time.RFC3339Nano))
 	return err
@@ -406,7 +401,7 @@ func appendAgent(host string, rec AgentRecord) error {
 // listAgents returns the agents created on a host, oldest first (append order).
 func listAgents(host string) ([]AgentRecord, error) {
 	rows, err := db.Query(
-		`SELECT id, host, title, type, repo, base_branch, branch, agent, description, notes,
+		`SELECT id, host, title, repo, base_branch, branch, agent, description, notes,
 			attachments, plan_mode, work_dir, workspace_id, root_pane, tab_id, created_at
 		 FROM agents WHERE host=? ORDER BY created_at`, hostOrLocal(host))
 	if err != nil {
@@ -418,7 +413,7 @@ func listAgents(host string) ([]AgentRecord, error) {
 		var rec AgentRecord
 		var att, created string
 		var plan int
-		if err := rows.Scan(&rec.ID, &rec.Host, &rec.Title, &rec.Type, &rec.Repo, &rec.BaseBranch,
+		if err := rows.Scan(&rec.ID, &rec.Host, &rec.Title, &rec.Repo, &rec.BaseBranch,
 			&rec.Branch, &rec.Agent, &rec.Description, &rec.Notes, &att, &plan,
 			&rec.WorkDir, &rec.WorkspaceID, &rec.RootPane, &rec.TabID, &created); err != nil {
 			return nil, err
@@ -450,17 +445,17 @@ func agentKind(agentID string) string {
 // workspaces & tabs — the sidebar's tree
 // ---------------------------------------------------------------------------
 
-// Workspace is a directory context (a git worktree or a scratch dir) that holds
-// one or more tabs. Repos themselves are NOT workspaces — they're derived from
-// repos_root at request time (sidebar.go); a workspace is one worktree under a
-// repo, or a standalone scratch dir.
+// Workspace is a directory context (a git worktree or a plain, repo-less dir)
+// that holds one or more tabs. Repos themselves are NOT workspaces — they're
+// derived from repos_root at request time (sidebar.go); a workspace is one
+// worktree under a repo, or a standalone repo-less dir. Git-backing is derived
+// from Repo (Repo != "" ⇒ git-backed) — there is no separate type/kind flag.
 type Workspace struct {
 	ID        string    `json:"id"`
 	Host      string    `json:"host"`
 	Title     string    `json:"title"`
-	Repo      string    `json:"repo,omitempty"` // "" for scratch
+	Repo      string    `json:"repo,omitempty"` // "" = repo-less (no git)
 	WorkDir   string    `json:"work_dir"`
-	Kind      string    `json:"kind"` // "git" | "scratch"
 	Pinned    bool      `json:"pinned"`
 	CreatedAt time.Time `json:"created_at"`
 	ClosedAt  time.Time `json:"closed_at,omitempty"` // zero = live
@@ -502,9 +497,9 @@ func insertWorkspace(ws Workspace) error {
 		ws.CreatedAt = time.Now()
 	}
 	_, err := db.Exec(
-		`INSERT INTO workspaces(id, host, title, repo, work_dir, kind, pinned, created_at, closed_at)
-		 VALUES(?,?,?,?,?,?,?,?,?)`,
-		ws.ID, hostOrLocal(ws.Host), ws.Title, ws.Repo, ws.WorkDir, ws.Kind,
+		`INSERT INTO workspaces(id, host, title, repo, work_dir, pinned, created_at, closed_at)
+		 VALUES(?,?,?,?,?,?,?,?)`,
+		ws.ID, hostOrLocal(ws.Host), ws.Title, ws.Repo, ws.WorkDir,
 		boolToInt(ws.Pinned), ws.CreatedAt.Format(time.RFC3339Nano), tsOrEmpty(ws.ClosedAt))
 	return err
 }
@@ -538,7 +533,7 @@ func scanWorkspace(rows *sql.Rows) (Workspace, error) {
 	var ws Workspace
 	var pinned int
 	var created, closed string
-	err := rows.Scan(&ws.ID, &ws.Host, &ws.Title, &ws.Repo, &ws.WorkDir, &ws.Kind,
+	err := rows.Scan(&ws.ID, &ws.Host, &ws.Title, &ws.Repo, &ws.WorkDir,
 		&pinned, &created, &closed)
 	ws.Pinned = pinned != 0
 	ws.CreatedAt = parseTS(created)
@@ -546,7 +541,7 @@ func scanWorkspace(rows *sql.Rows) (Workspace, error) {
 	return ws, err
 }
 
-const workspaceCols = `id, host, title, repo, work_dir, kind, pinned, created_at, closed_at`
+const workspaceCols = `id, host, title, repo, work_dir, pinned, created_at, closed_at`
 
 // getWorkspace returns one workspace by id (sql.ErrNoRows if absent).
 func getWorkspace(id string) (Workspace, error) {
@@ -728,6 +723,30 @@ func migrateSchema() error {
 			return err
 		}
 	}
+	// Drop the legacy git/scratch type discriminants. Deliberately NOT
+	// user_version-gated: some pre-existing prod DBs are already past the version
+	// number we'd use (from earlier migration churn) yet still carry these
+	// columns, so a version gate would silently skip them forever. Each drop
+	// self-guards via pragma_table_info, so running it every startup is a cheap
+	// no-op once the columns are gone.
+	return dropLegacyTypeColumns()
+}
+
+// dropLegacyTypeColumns removes the now-unused git/scratch discriminants.
+// Git-backing is derived from repo (repo != "" ⇒ git) and the per-host last-used
+// type toggle is gone, so workspaces.kind, agents.type, and
+// host_state.last_agent_type are removed. Each drop is guarded (no-op if absent),
+// so it's idempotent and safe on fresh DBs.
+func dropLegacyTypeColumns() error {
+	for _, c := range []struct{ table, col string }{
+		{"workspaces", "kind"},
+		{"agents", "type"},
+		{"host_state", "last_agent_type"},
+	} {
+		if err := dropColumnIfPresent(c.table, c.col); err != nil {
+			return err
+		}
+	}
 	return nil
 }
 
@@ -778,21 +797,50 @@ func addColumnIfMissing(table, col, def string) error {
 	return err
 }
 
+// dropColumnIfPresent runs `ALTER TABLE … DROP COLUMN` only when the column is
+// still present, so it's a no-op on fresh DBs (where the column never existed)
+// and idempotent on re-run. SQLite 3.35+ supports DROP COLUMN.
+func dropColumnIfPresent(table, col string) error {
+	rows, err := db.Query(`SELECT name FROM pragma_table_info(?)`, table)
+	if err != nil {
+		return err
+	}
+	defer rows.Close()
+	found := false
+	for rows.Next() {
+		var name string
+		if err := rows.Scan(&name); err != nil {
+			return err
+		}
+		if name == col {
+			found = true
+		}
+	}
+	if err := rows.Err(); err != nil {
+		return err
+	}
+	if !found {
+		return nil // already gone
+	}
+	_, err = db.Exec(fmt.Sprintf(`ALTER TABLE %s DROP COLUMN %s`, table, col))
+	return err
+}
+
 // backfillWorkspacesFromAgents synthesizes one workspace + one agent-tab for each
 // agent that doesn't yet have a tab, mapping the old 1-agent-per-worktree model
 // into the new workspace/tab tree. The agent's row is updated to point at them.
 // Their tmux sessions don't exist yet — startup reconciliation recreates fresh
 // shells lazily on first attach.
 func backfillWorkspacesFromAgents() error {
-	rows, err := db.Query(`SELECT id, host, title, type, repo, work_dir, created_at, tab_id FROM agents`)
+	rows, err := db.Query(`SELECT id, host, title, repo, work_dir, created_at, tab_id FROM agents`)
 	if err != nil {
 		return err
 	}
-	type row struct{ id, host, title, typ, repo, workDir, created, tabID string }
+	type row struct{ id, host, title, repo, workDir, created, tabID string }
 	var todo []row
 	for rows.Next() {
 		var r row
-		if err := rows.Scan(&r.id, &r.host, &r.title, &r.typ, &r.repo, &r.workDir, &r.created, &r.tabID); err != nil {
+		if err := rows.Scan(&r.id, &r.host, &r.title, &r.repo, &r.workDir, &r.created, &r.tabID); err != nil {
 			rows.Close()
 			return err
 		}
@@ -808,13 +856,9 @@ func backfillWorkspacesFromAgents() error {
 		}
 		wsID := "w" + r.id
 		created := parseTS(r.created)
-		kind := r.typ
-		if kind == "" {
-			kind = "scratch"
-		}
 		if err := insertWorkspace(Workspace{
 			ID: wsID, Host: hostOrLocal(r.host), Title: r.title, Repo: r.repo,
-			WorkDir: r.workDir, Kind: kind, CreatedAt: created,
+			WorkDir: r.workDir, CreatedAt: created,
 		}); err != nil {
 			return err
 		}

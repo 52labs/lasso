@@ -16,14 +16,14 @@ import (
 	"time"
 )
 
-// Agent creation: a streamlined "New Agent" flow. Two flavors, mirroring
-// fulcrum's git/scratch tasks:
+// Agent creation: a streamlined "New Agent" flow. The creation mode is derived
+// from whether a repo is given (no separate type flag):
 //
-//   - git agent     → a git worktree off a chosen repo/base branch. We create the
-//                     worktree, copy any configured files in, run the repo's setup
-//                     script, and launch the agent in its tmux session.
-//   - scratch agent → a plain workspace rooted at a fresh ~/.lasso/scratch dir,
-//                     then the scratch setup script + agent.
+//   - with a repo → a git worktree off the chosen repo/base branch. We create the
+//                   worktree, copy any configured files in, run the repo's setup
+//                   script, and launch the agent in its tmux session.
+//   - no repo     → a plain workspace rooted at a fresh ~/.lasso/scratch dir,
+//                   then the scratch setup script + agent.
 //
 // Everything routes through curBackend(); settings + records persist locally via
 // config.go.
@@ -264,10 +264,12 @@ func gitDefaultBranch(cur Backend, repo string) string {
 // ---------------------------------------------------------------------------
 
 type createAgentReq struct {
-	Host         string   `json:"host"`   // target host ("" / "local" = local box, else ssh alias)
-	Type         string   `json:"type"`   // "git" | "scratch"
-	Prompt       string   `json:"prompt"` // the agent's instruction; its first line is the title
-	Title        string   `json:"title"`  // optional explicit title override; defaults to the prompt's first line
+	Host   string `json:"host"`   // target host ("" / "local" = local box, else ssh alias)
+	Prompt string `json:"prompt"` // the agent's instruction; its first line is the title
+	Title  string `json:"title"`  // optional explicit title override; defaults to the prompt's first line
+	// Repo is the git repo to branch a worktree off. Empty ⇒ a repo-less workspace
+	// (a fresh dir under ~/.lasso/scratch); this derives the creation mode — there
+	// is no separate type flag.
 	Repo         string   `json:"repo"`
 	BaseBranch   string   `json:"base_branch"`
 	BranchPrefix string   `json:"branch_prefix"`
@@ -356,7 +358,6 @@ func createAgent(b Backend, req createAgentReq) (AgentRecord, error) {
 		ID:          strconv.FormatInt(time.Now().UnixNano(), 36),
 		Host:        host,
 		Title:       req.Title,
-		Type:        req.Type,
 		Agent:       req.Agent,
 		Description: req.Prompt,
 		Notes:       strings.TrimSpace(req.Notes),
@@ -367,12 +368,9 @@ func createAgent(b Backend, req createAgentReq) (AgentRecord, error) {
 
 	var setup string
 
-	switch req.Type {
-	case "git":
-		repo := expandTildeOn(b, req.Repo)
-		if repo == "" {
-			return AgentRecord{}, &createErr{http.StatusBadRequest, errors.New("repo required for a git agent")}
-		}
+	// The creation mode is derived from repo: a repo ⇒ a git worktree; no repo ⇒
+	// a fresh repo-less dir under ~/.lasso/scratch. There is no separate type flag.
+	if repo := expandTildeOn(b, req.Repo); repo != "" {
 		// Compose the branch from prefix + name (auto-slug fallback), then make it
 		// unique against existing branches in the repo.
 		name := strings.TrimSpace(req.BranchName)
@@ -403,10 +401,9 @@ func createAgent(b Backend, req createAgentReq) (AgentRecord, error) {
 		rc, _ := hostRepoConfig(host, repo)
 		copyRepoFiles(b, repo, workDir, rc.CopyFiles)
 		setup = rc.Setup
-
-	case "scratch":
-		// A scratch agent has no branch to carry a random suffix, so append one to
-		// the dir itself — two same-titled scratch agents then get distinct dirs
+	} else {
+		// A repo-less agent has no branch to carry a random suffix, so append one to
+		// the dir itself — two same-titled repo-less agents then get distinct dirs
 		// (e.g. hey-boss-a3f9), the way worktrees stay distinct via their branch.
 		// uniqueChildDir still guards the (astronomically unlikely) suffix clash.
 		workDir := uniqueChildDir(lassoScratchDirFor(b), slug+"-"+randSuffix())
@@ -415,9 +412,6 @@ func createAgent(b Backend, req createAgentReq) (AgentRecord, error) {
 		}
 		rec.WorkDir = workDir
 		setup = defaults.ScratchSetup
-
-	default:
-		return AgentRecord{}, &createErr{http.StatusBadRequest, errors.New(`type must be "git" or "scratch"`)}
 	}
 
 	// Create the workspace + its initial agent tab, and the tmux session backing
@@ -436,7 +430,7 @@ func createAgent(b Backend, req createAgentReq) (AgentRecord, error) {
 	}
 	if err := insertWorkspace(Workspace{
 		ID: rec.WorkspaceID, Host: host, Title: rec.Title, Repo: rec.Repo,
-		WorkDir: rec.WorkDir, Kind: req.Type, CreatedAt: rec.CreatedAt,
+		WorkDir: rec.WorkDir, CreatedAt: rec.CreatedAt,
 	}); err != nil {
 		_ = tmuxKillSession(session)
 		return AgentRecord{}, &createErr{http.StatusInternalServerError, fmt.Errorf("save workspace: %w", err)}
@@ -466,12 +460,11 @@ func createAgent(b Backend, req createAgentReq) (AgentRecord, error) {
 
 	// Persist this host's remembered selections, then append the record. Errors
 	// here are non-fatal: the agent is already running, so we still return it.
-	if req.Type == "git" {
+	if rec.Repo != "" {
 		_ = setLastRepo(host, rec.Repo)
 		_ = setLastBaseBranch(host, rec.Repo, rec.BaseBranch)
 	}
 	_ = setLastAgent(host, rec.Agent)
-	_ = setLastAgentType(host, rec.Type)
 	if err := appendAgent(host, rec); err != nil {
 		return AgentRecord{}, &createErr{http.StatusInternalServerError, fmt.Errorf("save agent: %w", err)}
 	}

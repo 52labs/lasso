@@ -238,7 +238,7 @@ export function CreateAgentDialog({
     seeded.current = true
     const pf = pendingPrefill.current
     pendingPrefill.current = null
-    setType(pf?.repo ? "git" : config.last_agent_type || "git")
+    setType("git")
     setPrefix(config.branch_prefix || "")
     setAgent(config.default_agent || config.last_agent || "claude")
     if (pf?.repo) {
@@ -352,13 +352,14 @@ export function CreateAgentDialog({
       }
       const payload: CreateAgentPayload = {
         host,
-        type,
         prompt: prompt.trim(),
         agent,
         plan_mode: planMode,
         attachments,
         upload_dir: uploadDir,
       }
+      // The creation mode is derived from repo: send it (+ branch fields) for a
+      // git worktree; omit it for a repo-less workspace.
       if (type === "git") {
         payload.repo = repo
         payload.base_branch = baseBranch || undefined
@@ -384,13 +385,12 @@ export function CreateAgentDialog({
           agent: rec.agent,
           status: "idle" as const,
         }
-        if (rec.type === "git" && rec.repo) {
+        if (rec.repo) {
           treeAddWorktree(rec.repo, {
             id: rec.workspace_id,
             title: rec.title,
             repo: rec.repo,
             work_dir: rec.work_dir,
-            kind: "git",
             branch: rec.branch,
             tabs: [tab],
           })
@@ -399,7 +399,6 @@ export function CreateAgentDialog({
             id: rec.workspace_id,
             title: rec.title,
             work_dir: rec.work_dir,
-            kind: "scratch",
             tabs: [tab],
           })
         }

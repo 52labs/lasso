@@ -157,9 +157,10 @@ export interface TreeTab {
 export interface TreeWorkspace {
   id: string
   title: string
+  // Git-backed iff repo is set (no separate kind flag); repo-less workspaces
+  // (formerly "scratch") have repo undefined and arrive in `TreePayload.scratch`.
   repo?: string
   work_dir: string
-  kind: "git" | "scratch"
   branch?: string
   tabs: TreeTab[]
   // Host this workspace lives on ("local" or an ssh alias) + its display label,
@@ -260,7 +261,7 @@ export interface AgentRecord {
   id: string
   host?: string
   title: string
-  type: "git" | "scratch"
+  // Git-backed iff repo is set (no separate type flag).
   repo?: string
   base_branch?: string
   branch?: string
@@ -285,7 +286,6 @@ export interface AgentConfig {
   default_agent: string
   last_repo?: string
   last_agent?: string
-  last_agent_type?: "git" | "scratch"
   scratch_setup?: string
   repos?: Record<string, RepoConfig>
   agents?: AgentRecord[]
@@ -310,10 +310,11 @@ export interface RepoBranches {
 export interface CreateAgentPayload {
   // Target host ("" / "local" = the local box, else an ssh alias).
   host?: string
-  type: "git" | "scratch"
   // The agent's instruction; its first line becomes the title (branch/dir name,
   // workspace label, list/toast headline).
   prompt: string
+  // Provide repo for a git worktree; omit it for a repo-less workspace. The
+  // creation mode is derived from this — there is no separate type field.
   repo?: string
   base_branch?: string
   branch_prefix?: string

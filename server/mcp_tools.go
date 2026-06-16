@@ -39,7 +39,7 @@ func registerMCPTools(s *mcp.Server) {
 
 	mcp.AddTool(s, &mcp.Tool{
 		Name:        "create_agent",
-		Description: "Spawn a coding agent (claude or codex) in its own lasso workspace (a tmux session). type=git creates a fresh git worktree off base_branch (default the repo's HEAD) under a new branch; type=scratch creates an empty workspace. The optional prompt becomes the agent's initial task. Returns immediately with the agent's id and workspace; the agent boots asynchronously. To bring many repos up to date, call this once per repo.",
+		Description: "Spawn a coding agent (claude or codex) in its own lasso workspace (a tmux session). Provide repo to create a fresh git worktree off base_branch (default the repo's HEAD) under a new branch; omit repo to create an empty, repo-less workspace. The optional prompt becomes the agent's initial task. Returns immediately with the agent's id and workspace; the agent boots asynchronously. To bring many repos up to date, call this once per repo.",
 	}, createAgentTool)
 
 	mcp.AddTool(s, &mcp.Tool{
@@ -88,7 +88,6 @@ type agentInfo struct {
 	ID          string `json:"id"`
 	Host        string `json:"host"`
 	Title       string `json:"title"`
-	Type        string `json:"type"`
 	Agent       string `json:"agent"`
 	Repo        string `json:"repo,omitempty"`
 	Branch      string `json:"branch,omitempty"`
@@ -102,7 +101,7 @@ type agentInfo struct {
 
 func agentInfoFrom(host string, rec AgentRecord, status string) agentInfo {
 	return agentInfo{
-		ID: rec.ID, Host: host, Title: rec.Title, Type: rec.Type, Agent: rec.Agent,
+		ID: rec.ID, Host: host, Title: rec.Title, Agent: rec.Agent,
 		Repo: rec.Repo, Branch: rec.Branch, BaseBranch: rec.BaseBranch,
 		WorkDir: rec.WorkDir, WorkspaceID: rec.WorkspaceID, RootPane: agentSession(rec),
 		Status: status, CreatedAt: rec.CreatedAt.Format(time.RFC3339),
@@ -304,9 +303,8 @@ func listBranchesTool(_ context.Context, _ *mcp.CallToolRequest, in listBranches
 
 type createAgentIn struct {
 	Host         string `json:"host,omitempty" jsonschema:"Host to create the agent on; omit for the local box."`
-	Type         string `json:"type" jsonschema:"\"git\" (a new worktree off base_branch) or \"scratch\" (an empty workspace)."`
 	Title        string `json:"title,omitempty" jsonschema:"Optional short title for the agent/worktree; defaults to the prompt's first line."`
-	Repo         string `json:"repo,omitempty" jsonschema:"Absolute path to the git repository. Required when type is \"git\"."`
+	Repo         string `json:"repo,omitempty" jsonschema:"Absolute path to the git repository to branch a worktree off. Omit for an empty, repo-less workspace."`
 	BaseBranch   string `json:"base_branch,omitempty" jsonschema:"Branch (or ref) to branch the new worktree off. Defaults to the repo's HEAD. Use list_branches to choose one."`
 	BranchName   string `json:"branch_name,omitempty" jsonschema:"Name for the new branch. Defaults to a slug of the title."`
 	BranchPrefix string `json:"branch_prefix,omitempty" jsonschema:"Optional prefix for the new branch, e.g. \"worktree\" -> worktree/<name>."`
@@ -322,7 +320,6 @@ func createAgentTool(_ context.Context, _ *mcp.CallToolRequest, in createAgentIn
 		return nil, agentInfo{}, err
 	}
 	rec, err := createAgent(b, createAgentReq{
-		Type:         in.Type,
 		Title:        in.Title,
 		Repo:         in.Repo,
 		BaseBranch:   in.BaseBranch,
@@ -606,7 +603,7 @@ func closeAgentTool(_ context.Context, _ *mcp.CallToolRequest, in closeAgentIn) 
 
 	// 2. remove_worktree (git only) tears down the whole workspace + git worktree,
 	//    which supersedes the close_pane choice.
-	if in.RemoveWorktree && rec.Type == "git" {
+	if in.RemoveWorktree && rec.Repo != "" {
 		if rec.WorkspaceID != "" {
 			for _, t := range mustTabs(rec.WorkspaceID) {
 				closeOneTab(t.ID)

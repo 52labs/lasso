@@ -8,7 +8,7 @@ import (
 func whoamiRecs() []AgentRecord {
 	return []AgentRecord{
 		{ID: "other", TabID: "other", CreatedAt: time.Now()},
-		{ID: "self", Title: "whoami", Type: "scratch", TabID: "self", Agent: "claude", CreatedAt: time.Now()},
+		{ID: "self", Title: "whoami", TabID: "self", Agent: "claude", CreatedAt: time.Now()},
 	}
 }
 
