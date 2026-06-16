@@ -377,6 +377,22 @@
   border: 0;
   background: #fff;
 }
+/* Inline audio/video player: center the controls in the viewer body. Video is
+   capped to the viewport; audio gets a sensible minimum width. */
+.vmedia {
+  padding: 16px;
+  display: flex;
+  align-items: flex-start;
+  justify-content: center;
+}
+.vmedia audio {
+  width: 100%;
+  max-width: 640px;
+}
+.vmedia video {
+  max-width: 100%;
+  max-height: 100%;
+}
 /* CodeMirror 6 host: fill the scrollable .vbody (the editor itself is themed in
    lib/codemirror.ts; the .cm-scroller does the scrolling). */
 .cm-host {
