@@ -1235,6 +1235,10 @@ function AgentRowItem({
         ? agent.workspace_title
         : `${agent.workspace_title} ${agent.title}`
       : agent.title
+  // The status dot already conveys idle/working, so the trailing meta shows just
+  // the repo name (basename of the repo path) for git-backed agents; repo-less
+  // agents show nothing there.
+  const repoName = agent.repo?.replace(/\/+$/, "").split("/").pop()
   return (
     <>
       <ContextMenu>
@@ -1251,9 +1255,11 @@ function AgentRowItem({
               className={cn("size-2 shrink-0 rounded-full", STATUS_DOT[status])}
             />
             <span className="truncate">{displayTitle}</span>
-            <span className="ml-auto shrink-0 text-[10px] text-muted-foreground">
-              {status} · {agent.agent}
-            </span>
+            {repoName && (
+              <span className="ml-auto shrink-0 text-[10px] text-muted-foreground">
+                {repoName}
+              </span>
+            )}
           </button>
         </ContextMenuTrigger>
         <ContextMenuContent>
