@@ -1,5 +1,4 @@
 import * as React from "react"
-import { PathInput } from "@/components/PathInput"
 import { Pill } from "@/components/Pill"
 import { Button } from "@/components/ui/button"
 import { api, type DiffFileMeta, type DiffPayload } from "@/lib/api"
@@ -28,17 +27,14 @@ export function DiffTab({
   data,
   error,
   pathValue,
-  onPathChange,
-  onOpenFile,
 }: {
   repoPath: string | null
   data: DiffPayload | null
   error: string | null
-  // The shared "go to path" input (owned by FilesPanel). Here it filters the
-  // diff to the entered path; submitting a file path opens it in the viewer.
+  // The path the file viewer is focused on (owned by FilesPanel, set from the
+  // Files subtab's input). The diff is read-only here: it just filters to this
+  // path — the diff view has no input of its own.
   pathValue: string
-  onPathChange: (value: string) => void
-  onOpenFile: (path: string) => void
 }) {
   const activeCwd = repoPath
   const [collapsed, setCollapsed] = React.useState<Set<string>>(new Set())
@@ -46,7 +42,7 @@ export function DiffTab({
   const seenRef = React.useRef<Set<string>>(new Set())
 
   const allFiles = data?.files ?? []
-  // Restrict to the shared path when one is set: an exact file match, or any
+  // Restrict to the focused path when one is set: an exact file match, or any
   // file beneath a directory prefix. An empty/repo-root path shows everything.
   const filter = relFilter(pathValue, repoPath)
   const files = filter
@@ -55,16 +51,6 @@ export function DiffTab({
       )
     : allFiles
   const fileSig = files.map((f) => f.path).join("\n")
-
-  // Submitting on the diff tab: a file opens in the viewer (the directory case
-  // already filters live via the input value).
-  const submitPath = async (path: string) => {
-    try {
-      await api.files(path)
-    } catch (e) {
-      if (/not a directory/i.test((e as Error).message)) onOpenFile(path)
-    }
-  }
 
   // Reset collapse tracking when the repo changes.
   // biome-ignore lint/correctness/useExhaustiveDependencies: repoPath is the trigger
@@ -112,16 +98,10 @@ export function DiffTab({
 
   return (
     <div className="flex min-h-0 flex-1 flex-col">
-      <header className="flex flex-col gap-2 border-border border-b bg-background px-3 py-2">
-        <PathInput
-          value={pathValue}
-          onChange={onPathChange}
-          onSubmit={(v) => void submitPath(v)}
-          placeholder="filter diff by path…  (Enter to open file)"
-        />
+      <header className="border-border border-b bg-background px-3 py-2">
         <div className="flex flex-wrap items-center gap-2">
           <Pill tone="accent" multiline>
-            {activeCwd || "—"}
+            {pathValue || activeCwd || "—"}
           </Pill>
           {data && (
             <Pill tone={data.dirty ? "warn" : "good"}>

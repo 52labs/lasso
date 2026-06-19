@@ -122,8 +122,6 @@ export function FilesPanel() {
             data={data}
             error={error}
             pathValue={pathValue}
-            onPathChange={onPathChange}
-            onOpenFile={setViewerPath}
           />
         </div>
 
