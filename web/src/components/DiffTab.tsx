@@ -1,9 +1,21 @@
 import * as React from "react"
+import { PathInput } from "@/components/PathInput"
 import { Pill } from "@/components/Pill"
 import { Button } from "@/components/ui/button"
 import { api, type DiffFileMeta, type DiffPayload } from "@/lib/api"
 import { type DiffLine, parseDiff } from "@/lib/diff"
 import { cn } from "@/lib/utils"
+
+// Reduce the shared (absolute) path input to a repo-relative prefix used to
+// filter the diff. Diff file paths are relative to repoPath, so a path that is
+// repoPath itself (or empty, or outside the repo) means "no filter".
+function relFilter(pathValue: string, repoPath: string | null): string {
+  if (!pathValue || !repoPath) return ""
+  const root = repoPath.replace(/\/$/, "")
+  if (pathValue === root) return ""
+  if (!pathValue.startsWith(`${root}/`)) return ""
+  return pathValue.slice(root.length + 1).replace(/\/$/, "")
+}
 
 // The Diff view (a subtab of Files). The changed-file metadata is fetched and
 // polled by the parent FilesPanel — which shares it with the file tree's
@@ -15,18 +27,44 @@ export function DiffTab({
   repoPath,
   data,
   error,
+  pathValue,
+  onPathChange,
+  onOpenFile,
 }: {
   repoPath: string | null
   data: DiffPayload | null
   error: string | null
+  // The shared "go to path" input (owned by FilesPanel). Here it filters the
+  // diff to the entered path; submitting a file path opens it in the viewer.
+  pathValue: string
+  onPathChange: (value: string) => void
+  onOpenFile: (path: string) => void
 }) {
   const activeCwd = repoPath
   const [collapsed, setCollapsed] = React.useState<Set<string>>(new Set())
   const [allCollapsed, setAllCollapsed] = React.useState(true)
   const seenRef = React.useRef<Set<string>>(new Set())
 
-  const files = data?.files ?? []
+  const allFiles = data?.files ?? []
+  // Restrict to the shared path when one is set: an exact file match, or any
+  // file beneath a directory prefix. An empty/repo-root path shows everything.
+  const filter = relFilter(pathValue, repoPath)
+  const files = filter
+    ? allFiles.filter(
+        (f) => f.path === filter || f.path.startsWith(`${filter}/`)
+      )
+    : allFiles
   const fileSig = files.map((f) => f.path).join("\n")
+
+  // Submitting on the diff tab: a file opens in the viewer (the directory case
+  // already filters live via the input value).
+  const submitPath = async (path: string) => {
+    try {
+      await api.files(path)
+    } catch (e) {
+      if (/not a directory/i.test((e as Error).message)) onOpenFile(path)
+    }
+  }
 
   // Reset collapse tracking when the repo changes.
   // biome-ignore lint/correctness/useExhaustiveDependencies: repoPath is the trigger
@@ -74,7 +112,13 @@ export function DiffTab({
 
   return (
     <div className="flex min-h-0 flex-1 flex-col">
-      <header className="border-border border-b bg-background px-3 py-2">
+      <header className="flex flex-col gap-2 border-border border-b bg-background px-3 py-2">
+        <PathInput
+          value={pathValue}
+          onChange={onPathChange}
+          onSubmit={(v) => void submitPath(v)}
+          placeholder="filter diff by path…  (Enter to open file)"
+        />
         <div className="flex flex-wrap items-center gap-2">
           <Pill tone="accent" multiline>
             {activeCwd || "—"}
@@ -118,11 +162,13 @@ export function DiffTab({
           <div className="empty">loading diff…</div>
         ) : files.length === 0 ? (
           <div className="empty">
-            {data.isBranchDiff
-              ? data.baseBranch
-                ? `no changes vs ${data.baseBranch}`
-                : "no base branch to compare against"
-              : `no changes${data.branch ? ` on ${data.branch}` : ""}`}
+            {filter && allFiles.length > 0
+              ? `no changes under “${filter}”`
+              : data.isBranchDiff
+                ? data.baseBranch
+                  ? `no changes vs ${data.baseBranch}`
+                  : "no base branch to compare against"
+                : `no changes${data.branch ? ` on ${data.branch}` : ""}`}
           </div>
         ) : (
           files.map((f) => (
