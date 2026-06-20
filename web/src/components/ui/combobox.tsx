@@ -108,59 +108,71 @@ export function Combobox({
         </span>
         <ChevronsUpDown className="size-4 shrink-0 text-muted-foreground" />
       </Popover.Trigger>
-      <Popover.Portal>
-        <Popover.Content
-          align="start"
-          sideOffset={4}
-          className="isolate z-50 w-[var(--radix-popover-trigger-width)] overflow-hidden rounded-lg border border-border bg-popover p-1 text-popover-foreground shadow-elev-pop outline-none"
-          onOpenAutoFocus={(e) => {
-            // Focus the filter input rather than the first list item.
-            e.preventDefault()
-            const content = e.currentTarget as HTMLElement | null
-            content?.querySelector("input")?.focus()
-          }}
-        >
-          <input
-            value={query}
-            onChange={(e) => setQuery(e.target.value)}
-            onKeyDown={onKeyDown}
-            placeholder={filterPlaceholder}
-            className="mb-1 w-full rounded-md border border-input bg-background px-2 py-1 text-sm outline-none transition-colors placeholder:text-muted-foreground focus-visible:border-ring"
-          />
-          <div ref={listRef} className="max-h-60 overflow-y-auto">
-            {filtered.length === 0 ? (
-              <div className="px-2 py-1.5 text-muted-foreground text-sm">
-                {emptyText}
-              </div>
-            ) : (
-              filtered.map((opt, i) => (
-                <button
-                  key={opt.value}
-                  type="button"
-                  data-index={i}
-                  onClick={() => choose(opt)}
-                  onMouseMove={() => {
-                    navSource.current = "pointer"
-                    setActive(i)
-                  }}
+      {/* Deliberately NOT wrapped in Popover.Portal. Inside a modal Dialog,
+          react-remove-scroll only permits wheel/touch scrolling within the
+          dialog's own DOM subtree; a portaled popover renders on document.body
+          (outside that subtree), so its list couldn't be wheel-scrolled — you
+          could only reach overflowing items via the keyboard. Rendering inline
+          keeps the content inside the dialog subtree (scroll works) while Radix
+          Popper's default `position: fixed` strategy still escapes the form's
+          overflow clipping, so the dropdown isn't trapped inside the scroll
+          area. (Combobox is only used inside this dialog.) */}
+      <Popover.Content
+        align="start"
+        sideOffset={4}
+        className="isolate z-50 w-[var(--radix-popover-trigger-width)] overflow-hidden rounded-lg border border-border bg-popover p-1 text-popover-foreground shadow-elev-pop outline-none"
+        onOpenAutoFocus={(e) => {
+          // Focus the filter input rather than the first list item.
+          e.preventDefault()
+          const content = e.currentTarget as HTMLElement | null
+          content?.querySelector("input")?.focus()
+        }}
+      >
+        <input
+          value={query}
+          onChange={(e) => setQuery(e.target.value)}
+          onKeyDown={onKeyDown}
+          placeholder={filterPlaceholder}
+          className="mb-1 w-full rounded-md border border-input bg-background px-2 py-1 text-sm outline-none transition-colors placeholder:text-muted-foreground focus-visible:border-ring"
+        />
+        <div ref={listRef} className="max-h-60 overflow-y-auto">
+          {filtered.length === 0 ? (
+            <div className="px-2 py-1.5 text-muted-foreground text-sm">
+              {emptyText}
+            </div>
+          ) : (
+            filtered.map((opt, i) => (
+              <button
+                key={opt.value}
+                type="button"
+                data-index={i}
+                onClick={() => choose(opt)}
+                onMouseMove={() => {
+                  navSource.current = "pointer"
+                  setActive(i)
+                }}
+                className={cn(
+                  "flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left text-sm outline-none",
+                  // The keyboard/pointer cursor uses the primary tint so the
+                  // highlighted option reads clearly — `bg-accent` resolves to
+                  // --h-hover, which is the same color as the popover surface
+                  // (--popover also maps to --h-hover), so the highlight was
+                  // imperceptible and you couldn't tell what was selected.
+                  i === active && "bg-primary text-primary-foreground"
+                )}
+              >
+                <Check
                   className={cn(
-                    "flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left text-sm outline-none",
-                    i === active && "bg-accent text-accent-foreground"
+                    "size-4 shrink-0",
+                    opt.value === value ? "opacity-100" : "opacity-0"
                   )}
-                >
-                  <Check
-                    className={cn(
-                      "size-4 shrink-0",
-                      opt.value === value ? "opacity-100" : "opacity-0"
-                    )}
-                  />
-                  <span className="truncate">{opt.label}</span>
-                </button>
-              ))
-            )}
-          </div>
-        </Popover.Content>
-      </Popover.Portal>
+                />
+                <span className="truncate">{opt.label}</span>
+              </button>
+            ))
+          )}
+        </div>
+      </Popover.Content>
     </Popover.Root>
   )
 }
