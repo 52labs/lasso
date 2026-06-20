@@ -2236,16 +2236,16 @@ func serveSPAIndex(w http.ResponseWriter, dist fs.FS) {
 		http.Error(w, "frontend build missing (run `bun run build` in web/)", http.StatusInternalServerError)
 		return
 	}
-	// Inject the server-resolved herdr theme into <head> so the first paint
-	// matches config.toml instead of flashing index.css's fallback palette
-	// before the SPA boots and fetches /api/theme. index.html is served
-	// no-store (below), so each reload re-injects the current resolved theme.
-	// A missing </head> (shouldn't happen with the Vite build) leaves the HTML
-	// untouched — graceful fallback.
-	if srvHub != nil {
-		style := `<style id="lasso-theme-boot">` + srvHub.themeSnapshot().cssVarsRoot() + `</style>`
-		b = []byte(strings.Replace(string(b), "</head>", style+"</head>", 1))
-	}
+	// Serve index.html verbatim. The chrome is the static Nothing design palette
+	// (web/src/index.css --h-* vars; dark/light only, chosen by the inline mode
+	// script). herdr's theme deliberately no longer paints the chrome — it
+	// dictates the *terminal* (xterm) palette only, applied client-side after
+	// boot (web/src/lib/theme.ts).
+	//
+	// We used to inject a <style id="lasso-theme-boot"> here that mapped herdr's
+	// resolved theme onto --h-*; placed at the end of <head> it overrode
+	// index.css's :root and made the whole chrome track config.toml (e.g. the
+	// rose-pine purple), defeating the Nothing palette. Removed.
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	w.Header().Set("Cache-Control", "no-store")
 	_, _ = w.Write(b)
