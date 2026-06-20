@@ -1,5 +1,5 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
-import { Keyboard, Monitor, Moon, RotateCw, Sun } from "lucide-react"
+import { Keyboard, Monitor, Moon, Palette, RotateCw, Sun } from "lucide-react"
 import * as React from "react"
 import { Pill } from "@/components/Pill"
 import { Button } from "@/components/ui/button"
@@ -14,6 +14,7 @@ import { useApp } from "@/lib/app-store"
 import { getMode, type Mode, setMode } from "@/lib/mode"
 import { qk } from "@/lib/query"
 import { SHORTCUTS } from "@/lib/shortcuts"
+import { refreshTheme } from "@/lib/theme"
 import { cn } from "@/lib/utils"
 
 // Native textarea/select styled to match the shadcn <Input>.
@@ -196,17 +197,23 @@ export function SettingsTab({ active }: { active: boolean }) {
   )
 }
 
-// AppearanceToggle picks the chrome color mode: System (follow the OS), Light, or
-// Dark. The choice persists in localStorage and applies live (sets the html
-// dark/light class the Nothing --h-* tokens cascade from) via lib/mode. The
-// terminal palette is herdr's and is unaffected by this control.
+// AppearanceToggle picks the chrome theme: System (follow the OS), Light, Dark,
+// or Herdr (match herdr's own theme — the default). The choice persists in
+// localStorage and applies live: setMode sets the html dark/light class the
+// Nothing --h-* tokens cascade from, then refreshTheme applies or clears the
+// herdr --h-* override (see lib/theme.ts). The terminal palette is always
+// herdr's and is unaffected by this control.
 function AppearanceToggle() {
   const [mode, setModeState] = React.useState<Mode>(() => getMode())
   const choose = (m: Mode) => {
     setModeState(m)
     setMode(m)
+    // Repaint the chrome for the new mode: applies herdr's palette when entering
+    // "herdr", removes the override when leaving it.
+    refreshTheme()
   }
   const opts: { m: Mode; label: string; Icon: typeof Monitor }[] = [
+    { m: "herdr", label: "Herdr", Icon: Palette },
     { m: "system", label: "System", Icon: Monitor },
     { m: "light", label: "Light", Icon: Sun },
     { m: "dark", label: "Dark", Icon: Moon },
@@ -233,8 +240,9 @@ function AppearanceToggle() {
         ))}
       </div>
       <p className="text-[11px] text-muted-foreground">
-        Sets the UI light/dark mode. System follows your OS. The terminal keeps
-        herdr's own theme.
+        Sets the UI theme. Herdr matches herdr's own colors; System follows your
+        OS; Light/Dark pin the Nothing palette. The terminal always keeps
+        herdr's theme.
       </p>
     </div>
   )

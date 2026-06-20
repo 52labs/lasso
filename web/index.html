@@ -4,16 +4,19 @@
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>lasso</title>
-    <!-- Apply the saved appearance mode (system|light|dark) before first paint so
-         there's no flash of the wrong chrome theme. Mirrors lib/mode.ts. The
-         terminal palette is herdr's, set separately at runtime (lib/theme.ts). -->
+    <!-- Apply the saved appearance mode (herdr|system|light|dark) before first
+         paint so there's no flash of the wrong chrome theme. Mirrors lib/mode.ts;
+         default is "herdr", which resolves to the dark class (herdr's --h-*
+         override is layered on at runtime once /api/theme lands, see
+         lib/theme.ts). The terminal palette is herdr's, set separately. -->
     <script>
       ;(() => {
         let m, dark
         try {
-          m = localStorage.getItem("lasso-mode") || "system"
+          m = localStorage.getItem("lasso-mode") || "herdr"
           dark =
             m === "dark" ||
+            m === "herdr" ||
             (m !== "light" &&
               window.matchMedia("(prefers-color-scheme: dark)").matches)
           document.documentElement.classList.add(dark ? "dark" : "light")

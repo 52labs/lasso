@@ -1,4 +1,5 @@
 import { api, type ThemePayload } from "@/lib/api"
+import { getMode } from "@/lib/mode"
 
 // The fixed terminal iframes whose xterm.js theme we keep in sync with herdr's
 // (the left "Herdr" terminal and the right shell). The Grid tab's per-pane
@@ -193,12 +194,41 @@ export function startTermThemeReconciler() {
   termThemeReconciler = setInterval(reconcileTermTheme, 1500)
 }
 
-// refreshTheme pulls herdr's resolved theme and applies it to the *terminals
-// only*: it sets the xterm.js palette inside the same-origin ttyd iframes (no
-// reconnect) and pins the terminal font. herdr dictates the terminal theme; the
-// surrounding chrome is the Nothing design system (its --h-* vars come from
-// index.css and follow the system light/dark mode, see lib/mode.ts) — so we
-// deliberately no longer repaint the chrome from herdr's palette here.
+// The <style> that overrides the chrome's --h-* vars with herdr's palette while
+// the user is in "herdr" appearance mode (see lib/mode.ts). Appended after the
+// bundled stylesheet so its plain :root{} rule wins by source order; absent in
+// every other mode, where the chrome is the static Nothing palette.
+const HERDR_CHROME_STYLE_ID = "lasso-herdr-chrome"
+
+// applyHerdrChrome paints the chrome from herdr's resolved palette, reproducing
+// the pre-Nothing behavior where the whole UI tracked herdr's theme. `css` is
+// /api/theme's bare "--bg: …;" declaration block; we prefix each property to
+// "--h-" to match the token names index.css cascades from (the same mapping the
+// Go server's cssVarsRoot() once injected). Idempotent — reuses the style node.
+function applyHerdrChrome(css: string) {
+  let el = document.getElementById(
+    HERDR_CHROME_STYLE_ID
+  ) as HTMLStyleElement | null
+  if (!el) {
+    el = document.createElement("style")
+    el.id = HERDR_CHROME_STYLE_ID
+    document.head.appendChild(el)
+  }
+  el.textContent = `:root{${css.replaceAll("--", "--h-")}}`
+}
+
+// clearHerdrChrome removes the override so the chrome falls back to the static
+// Nothing palette (used by every non-"herdr" appearance mode).
+function clearHerdrChrome() {
+  document.getElementById(HERDR_CHROME_STYLE_ID)?.remove()
+}
+
+// refreshTheme pulls herdr's resolved theme and applies it. The terminals always
+// track it: it sets the xterm.js palette inside the same-origin ttyd iframes (no
+// reconnect) and pins the terminal font. The surrounding chrome is the Nothing
+// design system by default (its --h-* vars come from index.css and follow the
+// light/dark mode) — EXCEPT in "herdr" appearance mode, where we also repaint the
+// chrome from herdr's palette so the whole UI matches the terminal.
 export async function refreshTheme() {
   let t: ThemePayload
   try {
@@ -209,4 +239,6 @@ export async function refreshTheme() {
   lastXtermTheme = t.xterm
   applyTermTheme(t.xterm, 0)
   applyTermFont(0)
+  if (getMode() === "herdr") applyHerdrChrome(t.css)
+  else clearHerdrChrome()
 }
