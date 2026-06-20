@@ -27,7 +27,7 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog"
 import { Input } from "@/components/ui/input"
-import { type GridPane, api } from "@/lib/api"
+import { api, type GridPane } from "@/lib/api"
 import { useApp } from "@/lib/app-store"
 import { tilde } from "@/lib/format"
 import { focusPaneInHerdr } from "@/lib/pane-focus"

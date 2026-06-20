@@ -37,7 +37,7 @@ export function Pill({
       className={cn(
         "rounded-md px-2 py-px font-normal text-[13px]",
         multiline
-          ? "h-auto min-w-0 items-start overflow-visible whitespace-normal [overflow-wrap:anywhere] py-0.5 leading-snug"
+          ? "h-auto min-w-0 items-start overflow-visible whitespace-normal py-0.5 leading-snug [overflow-wrap:anywhere]"
           : // Single-line pills are the Nothing "instrument-panel" label: Space
             // Mono, ALL CAPS, tracked out. Multiline pills (repo paths, version
             // strings) keep the normal sans/case so they stay readable.

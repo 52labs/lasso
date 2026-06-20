@@ -1,4 +1,4 @@
-import { type GridPane, type GridPayload, api } from "@/lib/api"
+import { api, type GridPane, type GridPayload } from "@/lib/api"
 import { qk, queryClient } from "@/lib/query"
 import { focusHerdrTerminal } from "@/lib/terminal"
 import { pushQueryParams } from "@/lib/url"
