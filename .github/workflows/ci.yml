@@ -18,10 +18,10 @@ jobs:
       - uses: oven-sh/setup-bun@v2
       - uses: actions/setup-go@v5
         with:
-          go-version-file: go.mod
+          go-version-file: src/go.mod
 
       - name: Frontend (typecheck, lint, build the embedded bundle)
-        working-directory: web
+        working-directory: src/web
         run: |
           bun install --frozen-lockfile
           bun run typecheck
@@ -29,8 +29,9 @@ jobs:
           bun run build
 
       - name: Go (format, vet, build, test)
+        working-directory: src
         run: |
           test -z "$(gofmt -l .)" || { echo "gofmt needed:"; gofmt -l .; exit 1; }
           go vet .
-          go build -o lasso .
+          go build -o ../lasso .
           go test .

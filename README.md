@@ -70,16 +70,17 @@ The binary is both the server and its own control surface:
 ## Run from source
 
 ```bash
-mise run build      # build the frontend (web/dist) then the binary
+mise run build      # build the frontend (src/web/dist) then the binary
 ./lasso             # serves on 127.0.0.1:8090, spawns ttyd running herdr
 mise run dev        # Vite dev server (frontend HMR) + Go backend, on your tailnet
 mise run test       # Go tests
 ```
 
-The frontend is a React + Vite + Tailwind (shadcn/ui) app under `web/`, built to
-`web/dist` and embedded into the binary via `go:embed` — so the shipped binary is
-self-contained. `go build` therefore needs `web/dist` to exist; `mise run build`
-produces it. `web/dist` is **gitignored** (not committed) — run `mise run build`
+The Go backend lives under `src/` (module root, with `go.mod`). The frontend is a
+React + Vite + Tailwind (shadcn/ui) app under `src/web/`, built to `src/web/dist`
+and embedded into the binary via `go:embed` — so the shipped binary is
+self-contained. `go build` therefore needs `src/web/dist` to exist; `mise run build`
+produces it. `src/web/dist` is **gitignored** (not committed) — run `mise run build`
 locally, and CI builds it for releases.
 
 `mise run dev` serves the UI through Vite with hot reload and proxies the API and
@@ -96,7 +97,7 @@ drive herdr on the local box or on SSH-reachable hosts (the footer's host
 switcher / the Grid), so one lasso fronts a whole fleet. Each instance spawns its
 own ttyds on per-PID unix sockets, so several can run at once without colliding.
 The data and terminal routes live under `/api/*`, `/terminal/`, and `/shell/`,
-plus an unauthenticated MCP server at `/mcp`; see the route table in `main.go`.
+plus an unauthenticated MCP server at `/mcp`; see the route table in `src/main.go`.
 
 ## Theming
 
@@ -172,8 +173,8 @@ fine on a private tailnet or behind Access, but confine it before widening acces
 Releases are cut by CI on a version tag:
 
 ```bash
-mise run bump patch --commit     # bump lassoSemver in version.go and commit
-git tag "v$(grep -oP 'lassoSemver = "\K[^"]+' version.go)"
+mise run bump patch --commit     # bump lassoSemver in src/version.go and commit
+git tag "v$(grep -oP 'lassoSemver = "\K[^"]+' src/version.go)"
 git push origin main --tags
 ```
 

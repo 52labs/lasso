@@ -4,16 +4,16 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## What this is
 
-Lasso is a Go backend (`main.go` and friends) that serves a React/TypeScript SPA. The frontend in `web/` is **built and embedded into the Go binary** — `go build` embeds `web/dist/`, so it must exist locally (run `mise run build`) but is **not** committed (it's gitignored). CI builds the frontend and produces release binaries.
+Lasso is a Go backend (`src/main.go` and friends) that serves a React/TypeScript SPA. All Go code lives under `src/` (the Go module root — `src/go.mod`). The frontend in `src/web/` is **built and embedded into the Go binary** — `go build` embeds `src/web/dist/`, so it must exist locally (run `mise run build`) but is **not** committed (it's gitignored). CI builds the frontend and produces release binaries.
 
 ## Commands
 
-Backend (root, via [mise](https://mise.jdx.dev)):
-- `mise run build` — builds the frontend (`bun run build` in `web/`) then `go build -o lasso .`
+Backend (run from repo root, via [mise](https://mise.jdx.dev); Go sources are in `src/`):
+- `mise run build` — builds the frontend (`bun run build` in `src/web/`) then `go build` in `src/` (binary → `./lasso`)
 - `mise run dev` — Vite dev server with HMR, proxying to the Go backend (requires tailscale up; auto-bumps the dev port from 8190 if busy)
-- `mise run test` — `go test .`
+- `mise run test` — `go test .` in `src/`
 
-Frontend (`web/`, package manager is **bun**):
+Frontend (`src/web/`, package manager is **bun**):
 - `bun run dev` / `bun run build` (`tsc -b && vite build`)
 - `bun run typecheck` — `tsc --noEmit`
 - `bun run lint` — `biome lint .`
@@ -23,11 +23,11 @@ Frontend (`web/`, package manager is **bun**):
 ## Frontend workflow
 
 - Run `bun run typecheck` and `bun run lint` before considering frontend work done.
-- `web/dist/` is the embedded bundle — gitignored and not committed. Run `mise run build` to regenerate it locally; CI builds it for releases.
+- `src/web/dist/` is the embedded bundle — gitignored and not committed. Run `mise run build` to regenerate it locally; CI builds it for releases.
 
 ## Formatting & linting
 
-Tooling is **Biome** (`web/biome.json`) — it replaced Prettier + ESLint. Style: 2-space indent, no semicolons, double quotes, ES5 trailing commas, 80-col width. Tailwind class sorting is handled by Biome's `useSortedClasses` (aware of `cn`/`cva`). a11y rules are demoted to warnings (not previously enforced); don't treat them as blocking. Go code: standard `gofmt`.
+Tooling is **Biome** (`src/web/biome.json`) — it replaced Prettier + ESLint. Style: 2-space indent, no semicolons, double quotes, ES5 trailing commas, 80-col width. Tailwind class sorting is handled by Biome's `useSortedClasses` (aware of `cn`/`cva`). a11y rules are demoted to warnings (not previously enforced); don't treat them as blocking. Go code: standard `gofmt`.
 
 ## Security gotchas
 

@@ -1,20 +1,22 @@
 # mise tasks for lasso.
 #   mise run dev    — Vite dev server (frontend HMR) proxying to the Go backend
-#   mise run build  — build the frontend (web/dist) then the binary
+#   mise run build  — build the frontend (src/web/dist) then the binary
 #   mise run test   — run the Go tests
 
 [tasks."build:web"]
-description = "Build the React/shadcn frontend into web/dist (embedded by Go)"
-dir = "web"
+description = "Build the React/shadcn frontend into src/web/dist (embedded by Go)"
+dir = "src/web"
 run = "bun install && bun run build"
 
 [tasks.build]
 description = "Build the frontend then the lasso binary"
 depends = ["build:web"]
-run = "go build -o lasso ."
+dir = "src"
+run = "go build -o ../lasso ."
 
 [tasks.test]
 description = "Run the Go test suite"
+dir = "src"
 run = "go test ."
 
 [tasks.bump]
@@ -27,9 +29,9 @@ run = """
 #!/usr/bin/env bash
 set -e
 
-# version.go holds the single source of truth: const lassoSemver = "X.Y.Z".
-current=$(perl -ne 'print $1 if /lassoSemver = "([0-9]+\\.[0-9]+\\.[0-9]+)"/' version.go)
-[ -n "$current" ] || { echo "couldn't read lassoSemver from version.go" >&2; exit 1; }
+# src/version.go holds the single source of truth: const lassoSemver = "X.Y.Z".
+current=$(perl -ne 'print $1 if /lassoSemver = "([0-9]+\\.[0-9]+\\.[0-9]+)"/' src/version.go)
+[ -n "$current" ] || { echo "couldn't read lassoSemver from src/version.go" >&2; exit 1; }
 IFS='.' read -r major minor patch <<< "$current"
 
 case "${usage_type}" in
@@ -41,12 +43,12 @@ esac
 
 new_version="$major.$minor.$patch"
 
-perl -i -pe "s/lassoSemver = \\"[0-9]+\\.[0-9]+\\.[0-9]+\\"/lassoSemver = \\"$new_version\\"/" version.go
+perl -i -pe "s/lassoSemver = \\"[0-9]+\\.[0-9]+\\.[0-9]+\\"/lassoSemver = \\"$new_version\\"/" src/version.go
 echo "Bumped lassoSemver: $current → $new_version"
 
 # Auto-commit if --commit flag is set
 if [ "$usage_commit" = "true" ]; then
-  git add version.go
+  git add src/version.go
   git commit -m "chore: bump version to $new_version"
   echo "Committed version bump"
 fi
@@ -86,9 +88,9 @@ tail -n +1 -f "$logf" & tailpid=$!
 trap 'kill "$backend" "$tailpid" 2>/dev/null; rm -f "$logf"' EXIT
 
 echo "lasso (dev): backend on 127.0.0.1:$port · Vite UI on http://$ip (frontend hot reload ON)"
-echo "edit anything under web/src and the browser hot-reloads; restart this task for Go changes."
+echo "edit anything under src/web/src and the browser hot-reloads; restart this task for Go changes."
 # Vite auto-bumps its own port (5173→5174→…) if busy and prints the chosen URL.
-cd web && env LASSO_BACKEND="http://127.0.0.1:$port" bun run dev --host "$ip"
+cd src/web && env LASSO_BACKEND="http://127.0.0.1:$port" bun run dev --host "$ip"
 '''
 
 [tasks.dev-herdr]
@@ -181,5 +183,5 @@ trap 'stop_herdr; kill "$backend" "$tailpid" 2>/dev/null; rm -f "$logf"' EXIT IN
 
 echo "lasso (dev-herdr $ver): backend 127.0.0.1:$port → herdr $ver ($sock) · Vite UI http://$ip"
 echo "Settings tab should read herdr $ver / protocol 12 / compatible. Ctrl-C stops lasso AND the isolated daemon."
-cd web && env LASSO_BACKEND="http://127.0.0.1:$port" bun run dev --host "$ip"
+cd src/web && env LASSO_BACKEND="http://127.0.0.1:$port" bun run dev --host "$ip"
 '''
