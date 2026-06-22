@@ -264,6 +264,16 @@ export function PaneSwitcher({
               // keep typing instead of having to click it again.
               inputRef.current?.focus()
             }}
+            onKeyDown={(e) => {
+              // Radix checkboxes toggle on Space, not Enter (per WAI-ARIA). Honor
+              // Enter too, so a user who Tabbed here from the search box can flip
+              // the filter with Enter, then lands back in the input.
+              if (e.key === "Enter") {
+                e.preventDefault()
+                setActiveOnly((v) => !v)
+                inputRef.current?.focus()
+              }
+            }}
           />
           Active
         </label>
