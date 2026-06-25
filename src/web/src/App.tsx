@@ -6,6 +6,7 @@ import {
   LayoutGrid,
   type LucideIcon,
   NotebookPen,
+  Search,
   Settings,
   SquareTerminal,
   Terminal,
@@ -66,11 +67,13 @@ type TabDef = {
 function FitTabs({
   tabs,
   leading,
+  center,
   trailing,
   listClassName,
 }: {
   tabs: TabDef[]
   leading?: React.ReactNode
+  center?: React.ReactNode
   trailing?: React.ReactNode
   listClassName?: string
 }) {
@@ -103,7 +106,13 @@ function FitTabs({
           height. */}
       <div
         ref={scrollRef}
-        className="no-scrollbar relative flex min-w-0 flex-1 overflow-x-auto"
+        className={cn(
+          "no-scrollbar relative flex min-w-0 overflow-x-auto",
+          // When a center slot is present the tabs size to their content so the
+          // centered element gets the remaining track; otherwise the tabs region
+          // grows to fill the row (and drives the icon-collapse measurement).
+          center ? "flex-none" : "flex-1"
+        )}
       >
         {tabs.map(({ value, label, icon: Icon, badge }) => (
           <TabsTrigger
@@ -132,8 +141,30 @@ function FitTabs({
           ))}
         </div>
       </div>
+      {center && (
+        <div className="flex min-w-0 flex-1 justify-center px-2">{center}</div>
+      )}
       {trailing}
     </TabsList>
+  )
+}
+
+// A search affordance for the header: styled like an input but it's a button
+// that opens the ⌘K pane switcher (the actual search lives in that palette).
+function HeaderSearch({ onOpen }: { onOpen: () => void }) {
+  return (
+    <button
+      type="button"
+      onClick={onOpen}
+      title="Search panes (⌘K)"
+      className="flex h-7 w-full max-w-xs items-center gap-2 rounded-md border border-border bg-muted/40 px-2.5 text-muted-foreground text-sm hover:border-primary hover:text-foreground max-md:hidden"
+    >
+      <Search className="size-3.5 shrink-0" />
+      <span className="min-w-0 flex-1 truncate text-left">Search…</span>
+      <kbd className="rounded border border-border bg-background px-1.5 py-0.5 font-mono text-[11px] text-muted-foreground">
+        ⌘K
+      </kbd>
+    </button>
   )
 }
 
@@ -360,6 +391,14 @@ function Shell() {
                 { value: "grid", label: "Grid", icon: LayoutGrid },
               ]}
               leading={<HostSwitcher variant="nav" />}
+              center={
+                <HeaderSearch
+                  onOpen={() => {
+                    setPaletteFromTerm(false)
+                    setPaletteOpen(true)
+                  }}
+                />
+              }
               listClassName="pr-2"
               trailing={
                 // New Agent sits at the far-right of the strip; when the sidebar
