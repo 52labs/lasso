@@ -1,4 +1,4 @@
-import { ArrowDown, ArrowUp, CornerDownLeft } from "lucide-react"
+import { ArrowDown, ArrowUp } from "lucide-react"
 import type * as React from "react"
 import {
   focusTerminalInput,
@@ -6,19 +6,15 @@ import {
   type VirtualKey,
 } from "@/lib/terminal"
 
-// Virtual keys for mobile: the soft keyboard has no Esc or arrows, which agents
-// (Claude Code) need constantly. Mobile-only (md:hidden), pinned to the bottom of
-// the terminal pane — with the visualViewport height clamp it lands just above
-// the on-screen keyboard.
+// Virtual keys for mobile: the soft keyboard has no Esc, Tab, or arrows, which
+// agents (Claude Code) need constantly (Enter is left to the keyboard's Return).
+// Mobile-only (md:hidden), pinned to the bottom of the terminal pane — with the
+// visualViewport height clamp it lands just above the on-screen keyboard.
 const KEYS: { key: VirtualKey; label: React.ReactNode; title: string }[] = [
   { key: "Escape", label: "esc", title: "Escape" },
   { key: "ArrowUp", label: <ArrowUp className="size-4" />, title: "Up" },
   { key: "ArrowDown", label: <ArrowDown className="size-4" />, title: "Down" },
-  {
-    key: "Enter",
-    label: <CornerDownLeft className="size-4" />,
-    title: "Enter",
-  },
+  { key: "Tab", label: "tab", title: "Tab" },
 ]
 
 export function MobileKeyBar({ targetId }: { targetId: string }) {

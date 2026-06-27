@@ -479,20 +479,20 @@ export function typeIntoHerdr(text: string) {
   pasteIntoTerminal("term", text)
 }
 
-// Virtual on-screen keys for mobile, where the soft keyboard offers no Esc or
-// arrows — keys agents (Claude Code) lean on constantly. We write the key's byte
-// sequence straight to the pty via term.input() (the same path sendNewline uses),
-// rather than synthesising a keydown: dispatched KeyboardEvents proved flaky to
-// land on xterm's handler. The arrows are the only mode-sensitive case — we read
-// xterm's live application-cursor state and emit ESCO vs ESC[ to match exactly
-// what a real keypress would send, so ↑/↓ drive Claude Code's history as on
-// desktop. Crucially this never touches focus, so tapping a key can't toggle the
-// keyboard.
-export type VirtualKey = "Escape" | "ArrowUp" | "ArrowDown" | "Enter"
+// Virtual on-screen keys for mobile, where the soft keyboard offers no Esc, Tab,
+// or arrows — keys agents (Claude Code) lean on constantly (Enter is omitted: the
+// iOS keyboard already has Return). We write the key's byte sequence straight to
+// the pty via term.input() (the same path sendNewline uses), rather than
+// synthesising a keydown: dispatched KeyboardEvents proved flaky to land on
+// xterm's handler. The arrows are the only mode-sensitive case — we read xterm's
+// live application-cursor state and emit ESCO vs ESC[ to match exactly what a real
+// keypress would send, so ↑/↓ drive Claude Code's history as on desktop.
+// Crucially this never touches focus, so tapping a key can't toggle the keyboard.
+export type VirtualKey = "Escape" | "ArrowUp" | "ArrowDown" | "Tab"
 
 const KEY_SEQ: Record<VirtualKey, string | { normal: string; app: string }> = {
   Escape: "\x1b",
-  Enter: "\r",
+  Tab: "\t",
   ArrowUp: { normal: "\x1b[A", app: "\x1bOA" },
   ArrowDown: { normal: "\x1b[B", app: "\x1bOB" },
 }
