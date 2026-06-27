@@ -1,4 +1,5 @@
 import { api } from "@/lib/api"
+import { mountTerminalKeyBar } from "@/lib/mobile-keybar"
 import {
   applyTermFont,
   applyTermTheme,
@@ -364,6 +365,7 @@ export function bootTermFrame(id: string, suppressContext: boolean) {
     applyTermTheme(lastTerminalTheme(), 0)
     applyTermFont(0)
     wireTerminalIframe(id, suppressContext)
+    mountTerminalKeyBar(id)
   }
   el.addEventListener("load", onLoad)
   // A ttyd WebSocket reconnect rebuilds xterm with its default theme without
@@ -372,6 +374,7 @@ export function bootTermFrame(id: string, suppressContext: boolean) {
   startTermThemeReconciler()
   applyTermFont(0) // in case it already loaded
   wireTerminalIframe(id, suppressContext) // in case it already loaded
+  mountTerminalKeyBar(id) // in case it already loaded
   return () => el.removeEventListener("load", onLoad)
 }
 
@@ -509,27 +512,6 @@ export function sendKeyToTerminal(id: string, key: VirtualKey) {
           ? spec.app
           : spec.normal
     term.input(seq)
-  } catch {
-    /* same-origin; ignore */
-  }
-}
-
-// focusTerminalInput re-asserts focus on a terminal iframe's hidden xterm
-// textarea. On iOS, tapping a control in the PARENT document (our key bar) lands
-// "outside" the focused iframe and dismisses the soft keyboard, even with
-// preventDefault — the focus boundary is the iframe, not the button. Calling this
-// synchronously from the tap's pointerdown (a user gesture) hands focus straight
-// back so the keyboard never actually drops. Must run in the same gesture tick.
-export function focusTerminalInput(id: string) {
-  try {
-    const win = frameWindow(id)
-    if (!win) return
-    win.focus()
-    const ta = win.document.querySelector(
-      ".xterm-helper-textarea"
-    ) as HTMLElement | null
-    ta?.focus()
-    win.term?.focus?.()
   } catch {
     /* same-origin; ignore */
   }

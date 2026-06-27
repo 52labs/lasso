@@ -20,7 +20,6 @@ import { FilesPanel } from "@/components/FilesPanel"
 import { GitStatusBadge } from "@/components/GitStatusBadge"
 import { GridTab } from "@/components/GridTab"
 import { HostSwitcher } from "@/components/HostSwitcher"
-import { MobileKeyBar } from "@/components/MobileKeyBar"
 import { NewTerminalDialog } from "@/components/NewTerminalDialog"
 import { PaneSwitcher } from "@/components/PaneSwitcher"
 import { ScratchTab } from "@/components/ScratchTab"
@@ -460,7 +459,6 @@ function Shell() {
                 />
               </Pane>
             </div>
-            {leftView === "herdr" && <MobileKeyBar targetId="term" />}
           </Tabs>
         </ResizablePanel>
 
