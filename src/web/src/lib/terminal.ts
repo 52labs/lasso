@@ -29,9 +29,6 @@ interface XTerm {
   focus?: () => void
   rows?: number
   buffer?: XTermBuffer
-  // xterm 5 public IModes — applicationCursorKeysMode is the current DECCKM
-  // state, which decides whether ↑/↓ encode as ESC[ (normal) or ESCO (app).
-  modes?: { applicationCursorKeysMode?: boolean }
   options?: Record<string, unknown>
   attachCustomKeyEventHandler?: (h: (e: KeyboardEvent) => boolean) => void
   // xterm.js public IParser. ttyd 1.7.4 never registers an OSC 52 handler, so
@@ -484,34 +481,50 @@ export function typeIntoHerdr(text: string) {
 
 // Virtual on-screen keys for mobile, where the soft keyboard offers no Esc, Tab,
 // or arrows — keys agents (Claude Code) lean on constantly (Enter is omitted: the
-// iOS keyboard already has Return). We write the key's byte sequence straight to
-// the pty via term.input() (the same path sendNewline uses), rather than
-// synthesising a keydown: dispatched KeyboardEvents proved flaky to land on
-// xterm's handler. The arrows are the only mode-sensitive case — we read xterm's
-// live application-cursor state and emit ESCO vs ESC[ to match exactly what a real
-// keypress would send, so ↑/↓ drive Claude Code's history as on desktop.
-// Crucially this never touches focus, so tapping a key can't toggle the keyboard.
+// iOS keyboard already has Return). We dispatch a real keydown at xterm's hidden
+// textarea and let XTERM encode it, exactly as it would a hardware keypress. This
+// is the only way to be correct across every keyboard mode the app may turn on —
+// application-cursor (ESCO vs ESC[ on the arrows), the kitty/extended protocol,
+// modifyOtherKeys — which a fixed byte sequence written via term.input() can't
+// track. xterm 5 keys its encoder off event.keyCode, which the KeyboardEvent ctor
+// ignores from the init dict, so we pin it (and legacy `which`). Verified
+// end-to-end: a dispatched ArrowUp drives shell/Claude Code history. Falls back to
+// a raw sequence only if the textarea isn't mounted yet.
 export type VirtualKey = "Escape" | "ArrowUp" | "ArrowDown" | "Tab"
 
-const KEY_SEQ: Record<VirtualKey, string | { normal: string; app: string }> = {
-  Escape: "\x1b",
-  Tab: "\t",
-  ArrowUp: { normal: "\x1b[A", app: "\x1bOA" },
-  ArrowDown: { normal: "\x1b[B", app: "\x1bOB" },
+const KEY_SPEC: Record<
+  VirtualKey,
+  { code: string; keyCode: number; seq: string }
+> = {
+  Escape: { code: "Escape", keyCode: 27, seq: "\x1b" },
+  Tab: { code: "Tab", keyCode: 9, seq: "\t" },
+  ArrowUp: { code: "ArrowUp", keyCode: 38, seq: "\x1b[A" },
+  ArrowDown: { code: "ArrowDown", keyCode: 40, seq: "\x1b[B" },
 }
 
 export function sendKeyToTerminal(id: string, key: VirtualKey) {
   try {
-    const term = frameWindow(id)?.term
-    if (!term || typeof term.input !== "function") return
-    const spec = KEY_SEQ[key]
-    const seq =
-      typeof spec === "string"
-        ? spec
-        : term.modes?.applicationCursorKeysMode
-          ? spec.app
-          : spec.normal
-    term.input(seq)
+    const win = frameWindow(id)
+    if (!win) return
+    const spec = KEY_SPEC[key]
+    const ta = win.document.querySelector(
+      ".xterm-helper-textarea"
+    ) as HTMLElement | null
+    if (ta) {
+      const Ctor = (win as unknown as { KeyboardEvent: typeof KeyboardEvent })
+        .KeyboardEvent
+      const ev = new Ctor("keydown", {
+        key,
+        code: spec.code,
+        bubbles: true,
+        cancelable: true,
+      })
+      Object.defineProperty(ev, "keyCode", { get: () => spec.keyCode })
+      Object.defineProperty(ev, "which", { get: () => spec.keyCode })
+      ta.dispatchEvent(ev)
+      return
+    }
+    win.term?.input?.(spec.seq)
   } catch {
     /* same-origin; ignore */
   }
