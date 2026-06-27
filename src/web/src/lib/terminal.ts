@@ -476,6 +476,58 @@ export function typeIntoHerdr(text: string) {
   pasteIntoTerminal("term", text)
 }
 
+// Virtual on-screen keys for mobile, where the soft keyboard offers no Esc or
+// arrows — keys agents (Claude Code) lean on constantly. We dispatch a real
+// keydown at xterm's helper textarea so xterm encodes the key for the app's
+// CURRENT mode (application-cursor mode swaps ESC[ for ESCO on the arrows);
+// driving term.input() with a fixed sequence would miss that. xterm 5 keys its
+// encoder off event.keyCode, which the KeyboardEvent ctor won't take from the
+// init dict, so we pin it (and legacy `which`) via defineProperty. Falls back to
+// a raw sequence if the textarea isn't mounted yet.
+export type VirtualKey = "Escape" | "ArrowUp" | "ArrowDown" | "Enter"
+
+const KEY_SPEC: Record<
+  VirtualKey,
+  { code: string; keyCode: number; seq: string }
+> = {
+  Escape: { code: "Escape", keyCode: 27, seq: "\x1b" },
+  ArrowUp: { code: "ArrowUp", keyCode: 38, seq: "\x1b[A" },
+  ArrowDown: { code: "ArrowDown", keyCode: 40, seq: "\x1b[B" },
+  Enter: { code: "Enter", keyCode: 13, seq: "\r" },
+}
+
+export function sendKeyToTerminal(id: string, key: VirtualKey) {
+  const spec = KEY_SPEC[key]
+  try {
+    const win = frameWindow(id)
+    if (!win) return
+    const ta = win.document.querySelector(
+      ".xterm-helper-textarea"
+    ) as HTMLTextAreaElement | null
+    if (ta) {
+      const Ctor = (win as unknown as { KeyboardEvent: typeof KeyboardEvent })
+        .KeyboardEvent
+      const ev = new Ctor("keydown", {
+        key,
+        code: spec.code,
+        bubbles: true,
+        cancelable: true,
+      })
+      Object.defineProperty(ev, "keyCode", { get: () => spec.keyCode })
+      Object.defineProperty(ev, "which", { get: () => spec.keyCode })
+      // Re-focus the terminal (a tap may have blurred it) so the key lands and,
+      // crucially on iOS, the on-screen keyboard stays open.
+      win.focus()
+      ta.focus()
+      ta.dispatchEvent(ev)
+      return
+    }
+    win.term?.input?.(spec.seq)
+  } catch {
+    /* same-origin; ignore */
+  }
+}
+
 // Hand keyboard focus to the herdr terminal (/terminal/) so the user can type
 // into the focused pane without clicking it first. Focuses both the iframe
 // window and xterm's input, and retries while xterm is still (re)connecting —
