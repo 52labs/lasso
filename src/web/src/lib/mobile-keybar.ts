@@ -10,10 +10,13 @@ import { sendKeyToTerminal, type VirtualKey } from "@/lib/terminal"
 // preventDefault'd pointerdown on a sibling control keeps the xterm textarea
 // focused exactly like any same-document toolbar, so the keyboard stays put.
 //
-// ttyd's body is a single #terminal-container; we make the body a flex column and
-// let the container flex so the bar sits BELOW the terminal (xterm refits to the
-// smaller box on resize) rather than overlaying the prompt row. Touch devices
-// only — desktop never mounts it, so its layout is untouched.
+// ttyd's body is a single static #terminal-container. We shorten it by the bar
+// height (height: calc(100% - Npx)) and append the bar as a normal block element
+// below, so xterm refits to the smaller box (rows shrink, COLS UNCHANGED) and the
+// bar sits beneath the prompt rather than over it. Crucially we DON'T switch the
+// body to flexbox — that subtly narrowed the container (~37px), which dropped
+// columns and tripped Claude Code's wide/"desktop" layout on a phone. Touch
+// devices only — desktop never mounts it, so its layout is untouched.
 
 const BAR_ID = "__lasso_mobile_keybar"
 const BAR_PX = 56 // tall, thumb-friendly targets
@@ -55,18 +58,15 @@ export function mountTerminalKeyBar(id: string, tries = 0): void {
     return
   }
 
-  // Reflow so the bar sits below the terminal instead of over the prompt.
-  doc.body.style.display = "flex"
-  doc.body.style.flexDirection = "column"
-  container.style.flex = "1 1 0"
-  container.style.minHeight = "0"
-  container.style.height = "auto"
+  // Shorten the terminal by the bar height (block flow, width untouched) so the
+  // bar can sit below it without covering the prompt.
+  container.style.height = `calc(100% - ${BAR_PX}px)`
 
   const cs = getComputedStyle(document.documentElement)
   const bar = doc.createElement("div")
   bar.id = BAR_ID
   for (const v of THEME_VARS) bar.style.setProperty(v, cs.getPropertyValue(v))
-  bar.style.cssText += `;flex:0 0 ${BAR_PX}px;display:flex;border-top:1px solid var(--h-border);background:var(--h-panel,var(--h-bg));`
+  bar.style.cssText += `;height:${BAR_PX}px;display:flex;border-top:1px solid var(--h-border);background:var(--h-panel,var(--h-bg));`
 
   for (const { key, label } of KEYS) {
     const b = doc.createElement("button")
