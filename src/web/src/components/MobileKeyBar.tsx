@@ -1,6 +1,10 @@
 import { ArrowDown, ArrowUp, CornerDownLeft } from "lucide-react"
 import type * as React from "react"
-import { sendKeyToTerminal, type VirtualKey } from "@/lib/terminal"
+import {
+  focusTerminalInput,
+  sendKeyToTerminal,
+  type VirtualKey,
+} from "@/lib/terminal"
 
 // Virtual keys for mobile: the soft keyboard has no Esc or arrows, which agents
 // (Claude Code) need constantly. Mobile-only (md:hidden), pinned to the bottom of
@@ -26,13 +30,15 @@ export function MobileKeyBar({ targetId }: { targetId: string }) {
           type="button"
           title={title}
           tabIndex={-1}
-          // Act on pointerdown and preventDefault so the tap never moves focus
-          // off the terminal's textarea — that's what was toggling the on-screen
-          // keyboard. (No onClick: it would fire a second time after the keyboard
-          // re-took focus.)
+          // Act on pointerdown (not click) and preventDefault so the button
+          // never takes focus, then immediately hand focus back to the terminal:
+          // on iOS a tap in the parent doc dismisses the keyboard even with
+          // preventDefault, so we re-focus the iframe's textarea in the same
+          // gesture tick to keep it open. (No onClick — it would double-fire.)
           onPointerDown={(e) => {
             e.preventDefault()
             sendKeyToTerminal(targetId, key)
+            focusTerminalInput(targetId)
           }}
           className="flex flex-1 items-center justify-center border-border border-r py-2.5 font-mono text-muted-foreground text-sm last:border-r-0 hover:text-foreground active:bg-accent/40"
         >

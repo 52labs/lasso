@@ -514,6 +514,27 @@ export function sendKeyToTerminal(id: string, key: VirtualKey) {
   }
 }
 
+// focusTerminalInput re-asserts focus on a terminal iframe's hidden xterm
+// textarea. On iOS, tapping a control in the PARENT document (our key bar) lands
+// "outside" the focused iframe and dismisses the soft keyboard, even with
+// preventDefault — the focus boundary is the iframe, not the button. Calling this
+// synchronously from the tap's pointerdown (a user gesture) hands focus straight
+// back so the keyboard never actually drops. Must run in the same gesture tick.
+export function focusTerminalInput(id: string) {
+  try {
+    const win = frameWindow(id)
+    if (!win) return
+    win.focus()
+    const ta = win.document.querySelector(
+      ".xterm-helper-textarea"
+    ) as HTMLElement | null
+    ta?.focus()
+    win.term?.focus?.()
+  } catch {
+    /* same-origin; ignore */
+  }
+}
+
 // Hand keyboard focus to the herdr terminal (/terminal/) so the user can type
 // into the focused pane without clicking it first. Focuses both the iframe
 // window and xterm's input, and retries while xterm is still (re)connecting —
