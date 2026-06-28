@@ -1,4 +1,5 @@
 import { useQuery } from "@tanstack/react-query"
+import { X } from "lucide-react"
 import * as React from "react"
 import { toast } from "sonner"
 
@@ -235,7 +236,15 @@ export function PaneSwitcher({
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent
         showCloseButton={false}
-        className="top-[15%] translate-y-0 gap-0 p-0 sm:max-w-lg"
+        className={cn(
+          "gap-0 p-0",
+          // Mobile: a full-screen sheet sized to the visible area above the
+          // keyboard (--vvh), so the list scrolls inside it and the soft keyboard
+          // can't push it off-screen / scroll the page behind it.
+          "inset-0 flex h-[var(--vvh,100dvh)] max-h-none w-full max-w-none translate-x-0 translate-y-0 flex-col rounded-none",
+          // sm+: the centered floating palette.
+          "sm:inset-auto sm:top-[15%] sm:left-1/2 sm:h-auto sm:max-h-[70dvh] sm:max-w-lg sm:-translate-x-1/2 sm:rounded-xl"
+        )}
         onOpenAutoFocus={(e) => {
           e.preventDefault()
           // On touch, do NOT autofocus the search field: the soft keyboard would
@@ -270,13 +279,23 @@ export function PaneSwitcher({
         <DialogHeader className="sr-only">
           <DialogTitle>Find a pane</DialogTitle>
         </DialogHeader>
+        {/* A full-screen sheet on mobile has no backdrop to tap away, so give it
+            an explicit close. Hidden on sm+, where Esc / click-away dismiss. */}
+        <button
+          type="button"
+          onClick={() => onOpenChange(false)}
+          aria-label="Close"
+          className="absolute top-2 right-2 z-10 flex size-9 items-center justify-center rounded-md text-muted-foreground hover:text-foreground sm:hidden"
+        >
+          <X className="size-5" />
+        </button>
         <input
           ref={inputRef}
           value={query}
           onChange={(e) => setQuery(e.target.value)}
           onKeyDown={onKeyDown}
           placeholder="Search panes by tab, workspace, host, agent, path, or prompt…"
-          className="w-full bg-transparent px-4 py-3 text-sm outline-none placeholder:text-muted-foreground"
+          className="w-full bg-transparent px-4 py-3 pr-14 text-sm outline-none placeholder:text-muted-foreground sm:pr-4"
         />
         {/* Active filter: on shows only live panes (default); off folds in past
             agents whose pane was closed, so old sessions can be reopened. */}
@@ -310,7 +329,7 @@ export function PaneSwitcher({
         </label>
         <div
           ref={listRef}
-          className="max-h-80 overflow-y-auto overscroll-contain p-1"
+          className="min-h-0 flex-1 overflow-y-auto overscroll-contain p-1 sm:max-h-80 sm:flex-none"
         >
           {filtered.length === 0 ? (
             <div className="px-3 py-6 text-center text-muted-foreground text-sm">
