@@ -41,11 +41,16 @@ function clampPort(n: number): number | null {
   return Number.isInteger(n) && n >= 1 && n <= 65535 ? n : null
 }
 
+// Resolved is an iframe-able src plus whether it's a cross-site public preview
+// hostname (a `<port>.<dev-domain>` behind Cloudflare Access) — those need the
+// Access cookie primed before the framed load, see primeAccessCookie.
+type Resolved = { url: string; publicPreview: boolean }
+
 // resolve maps user input to an iframe-able src. A local port is turned into a
 // trusted preview URL via /api/preview (a Cloudflare-fronted public hostname
 // when lasso is reached over a public origin, otherwise a tailscale-serve HTTPS
 // URL). Full URLs pass through.
-async function resolve(raw: string): Promise<string> {
+async function resolve(raw: string): Promise<Resolved> {
   const port = parseLocalPort(raw)
   if (port != null) {
     if (location.protocol === "https:") {
@@ -60,11 +65,43 @@ async function resolve(raw: string): Promise<string> {
         )
       }
       const data = (await res.json()) as { url: string }
-      return data.url
+      const host = hostOf(data.url)
+      // A cross-site, non-private HTTPS host is the Cloudflare-fronted public
+      // preview (`<port>.<dev-domain>`), which sits behind Access. A tailnet
+      // (`*.ts.net`) URL is same-trust / not Access-gated, so skip priming.
+      const publicPreview =
+        !!host && host !== location.host && !looksPrivateHost(host)
+      return { url: data.url, publicPreview }
     }
-    return `http://${location.hostname}:${port}`
+    return { url: `http://${location.hostname}:${port}`, publicPreview: false }
   }
-  return normalize(raw)
+  return { url: normalize(raw), publicPreview: false }
+}
+
+// primeAccessCookie runs the Cloudflare Access SSO redirect chain for a public
+// preview host OUTSIDE of an iframe, so the subsequent framed load is already
+// authenticated and renders immediately instead of going blank.
+//
+// Why it's needed: the first framed load of a `<port>.<dev-domain>` host bounces
+// to the Access login, which sets `frame-ancestors`/X-Frame-Options and so can't
+// render inside lasso's iframe — the frame goes blank even though that bounce is
+// what mints the `CF_Authorization` cookie. A credentialed no-cors fetch follows
+// the same redirect chain (fetch ignores framing restrictions), dropping the
+// cookie on the preview host; the iframe's first load then rides it. No-op when
+// already authenticated; harmless (still blank, as before) if the user has no
+// Access session at all.
+async function primeAccessCookie(url: string): Promise<void> {
+  try {
+    await fetch(url, {
+      mode: "no-cors",
+      credentials: "include",
+      cache: "no-store",
+      signal: AbortSignal.timeout(8000),
+    })
+  } catch {
+    // Best-effort: on failure we just fall back to the old behavior (the user
+    // can open-in-new-tab + reload), so swallow errors.
+  }
 }
 
 // hostOf returns the host portion of a URL, or "" if it can't be parsed.
@@ -136,7 +173,7 @@ export function BrowserTab() {
     setStatus("loading")
     setErr("")
 
-    let resolved: string
+    let resolved: Resolved
     try {
       resolved = await resolve(input)
     } catch (e) {
@@ -149,10 +186,11 @@ export function BrowserTab() {
     }
     if (seq !== seqRef.current) return
 
-    setOpenTarget(resolved)
+    const target = resolved.url
+    setOpenTarget(target)
 
     // Mixed content: an https page can't embed an http:// page.
-    if (location.protocol === "https:" && /^http:\/\//i.test(resolved)) {
+    if (location.protocol === "https:" && /^http:\/\//i.test(target)) {
       setSrc("about:blank")
       setErr(
         "This is an https app, so it can't embed an http:// page (mixed content). Open it in a new tab instead."
@@ -161,20 +199,28 @@ export function BrowserTab() {
       return
     }
 
-    setSrc(resolved)
+    // Prime the Cloudflare Access cookie for a public preview host before the
+    // framed load, so the first load renders instead of bouncing (blank) through
+    // the un-frameable Access login page. See primeAccessCookie.
+    if (resolved.publicPreview) {
+      await primeAccessCookie(target)
+      if (seq !== seqRef.current) return
+    }
+
+    setSrc(target)
     setReloadKey((k) => k + 1)
 
     // Probe reachability/embeddability in parallel. The probe is authoritative:
     // if it fails, the iframe will be blank, so surface a clear reason.
-    if (/^https?:\/\//i.test(resolved)) {
-      void probeReachable(resolved).then((ok) => {
+    if (/^https?:\/\//i.test(target)) {
+      void probeReachable(target).then((ok) => {
         if (seq !== seqRef.current || ok) return
-        const host = hostOf(resolved)
+        const host = hostOf(target)
         const pageIsPublic = !looksPrivateHost(location.host)
         const msg =
           pageIsPublic && looksPrivateHost(host)
             ? `Your browser blocked embedding ${host}. lasso is open over a public address, and browsers won't embed a private/tailnet page in a public one (Private Network Access). It opens fine in its own tab — or open lasso via its tailnet URL to embed tailnet pages.`
-            : `Couldn't load ${host || resolved} in the embedded view — it may be unreachable from your browser or refuse embedding. Try opening it in a new tab.`
+            : `Couldn't load ${host || target} in the embedded view — it may be unreachable from your browser or refuse embedding. Try opening it in a new tab.`
         setErr(msg)
         setStatus("error")
       })
