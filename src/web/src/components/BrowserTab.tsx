@@ -163,6 +163,13 @@ export function BrowserTab() {
   >("idle")
   const [err, setErr] = React.useState("")
   const seqRef = React.useRef(0)
+  // When set to the current nav's seq, the iframe's next onLoad triggers exactly
+  // one reload. Public-preview hosts sit behind Cloudflare Access: the first
+  // framed load runs the Access redirect chain (minting CF_Authorization) but
+  // can't render the login interstitial in a frame, so it lands blank. Reloading
+  // once — now that the cookie is set — renders the app, automating the manual
+  // reload users otherwise have to do. Cleared once consumed to avoid a loop.
+  const primeReloadSeqRef = React.useRef<number | null>(null)
 
   const nav = React.useCallback(async (raw: string) => {
     const input = raw.trim()
@@ -201,10 +208,15 @@ export function BrowserTab() {
 
     // Prime the Cloudflare Access cookie for a public preview host before the
     // framed load, so the first load renders instead of bouncing (blank) through
-    // the un-frameable Access login page. See primeAccessCookie.
+    // the un-frameable Access login page. See primeAccessCookie. Priming via a
+    // cross-site fetch can't always complete the SSO hop a real navigation does,
+    // so we also arm a one-shot post-load reload (below) as a reliable fallback.
     if (resolved.publicPreview) {
       await primeAccessCookie(target)
       if (seq !== seqRef.current) return
+      primeReloadSeqRef.current = seq
+    } else {
+      primeReloadSeqRef.current = null
     }
 
     setSrc(target)
@@ -303,14 +315,33 @@ export function BrowserTab() {
           )}
         </div>
       )}
-      <iframe
-        key={reloadKey}
-        src={src || "about:blank"}
-        title="browser preview"
-        referrerPolicy="no-referrer"
-        className="frame"
-        onLoad={() => setStatus((s) => (s === "loading" ? "loaded" : s))}
-      />
+      <div className="relative flex min-h-0 flex-1 flex-col">
+        <iframe
+          key={reloadKey}
+          src={src || "about:blank"}
+          title="browser preview"
+          referrerPolicy="no-referrer"
+          className="frame"
+          onLoad={() => {
+            const seq = seqRef.current
+            // One-shot reload for a public preview: the first framed load set
+            // the Access cookie but rendered blank; reload once to show the app.
+            // Keep status "loading" so the overlay hides the blank first frame
+            // until the reloaded frame's onLoad flips it to "loaded".
+            if (primeReloadSeqRef.current === seq) {
+              primeReloadSeqRef.current = null
+              setReloadKey((k) => k + 1)
+              return
+            }
+            setStatus((s) => (s === "loading" ? "loaded" : s))
+          }}
+        />
+        {status === "loading" && src !== "about:blank" && (
+          <div className="absolute inset-0 flex items-center justify-center bg-background text-[13px] text-muted-foreground">
+            connecting…
+          </div>
+        )}
+      </div>
     </div>
   )
 }
