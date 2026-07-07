@@ -246,6 +246,10 @@ export interface HarnessDef {
   label: string
   supports_plan_mode: boolean
   model_suggestions: string[] | null
+  // The model this harness's CLI is itself configured to use on the target host
+  // (e.g. Claude Code's configured model). The creator seeds its model field
+  // with it. Empty/absent = no pinned model (the CLI picks its own default).
+  default_model?: string
 }
 
 // One git repo discovered under repos_root, with its remembered per-repo state.

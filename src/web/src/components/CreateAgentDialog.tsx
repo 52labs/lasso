@@ -282,7 +282,13 @@ export function CreateAgentDialog({
     setPrefix(config.branch_prefix || "")
     const seededAgent = config.default_agent || config.last_agent || "claude"
     setAgent(seededAgent)
-    setModel(config.last_models?.[seededAgent] ?? "")
+    // Default the model to whatever the harness's CLI is itself configured with
+    // (Claude Code's configured model). When the CLI has no model pinned in any
+    // of its config files the field stays blank — the placeholder "default" then
+    // reads as "let the CLI pick", which is exactly what launching with no
+    // --model does.
+    const seededDef = config.harnesses?.find((h) => h.id === seededAgent)
+    setModel(seededDef?.default_model || "")
     setExtraArgs("")
     const last = config.last_repo
     setRepo(
@@ -754,9 +760,11 @@ export function CreateAgentDialog({
                       onChange={(e) => {
                         const next = e.target.value
                         setAgent(next)
-                        // Each harness remembers its own last-used model;
-                        // switching harness swaps in that memory.
-                        setModel(config?.last_models?.[next] ?? "")
+                        // Swap in the newly-selected harness's configured default
+                        // model (e.g. Claude Code's), or blank when its CLI has no
+                        // model pinned in its config.
+                        const nextDef = harnesses.find((h) => h.id === next)
+                        setModel(nextDef?.default_model || "")
                       }}
                     >
                       {harnesses.map((h) => (

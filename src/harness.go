@@ -1,6 +1,11 @@
 package main
 
-import "strings"
+import (
+	"encoding/json"
+	"os"
+	"path/filepath"
+	"strings"
+)
 
 // Harness registry: the compiled-in table of AI agent CLIs lasso can launch.
 // Each entry pairs the UI-facing metadata (label, plan-mode support, model
@@ -22,7 +27,19 @@ type harnessDef struct {
 	// suggestions only — anything the user types is passed through, since
 	// model names churn far faster than lasso releases.
 	ModelSuggestions []string `json:"model_suggestions"`
-	buildCmd         func(o launchOpts) string
+	// DefaultModel is the model this harness's CLI is itself configured to use
+	// on the target host (e.g. Claude Code's configured model) — the creator
+	// seeds its model field with it so a new agent defaults to the same model
+	// the harness would run on its own. Empty means "no pinned model, the CLI
+	// picks its default" (for claude, the account/org default). It is NOT part
+	// of the static table: it's resolved per host at serve time (see
+	// resolveHarnesses / the defaultModel resolver), so the compiled-in value is
+	// always "".
+	DefaultModel string `json:"default_model,omitempty"`
+	buildCmd     func(o launchOpts) string
+	// defaultModel resolves DefaultModel for backend b (the host the agent will
+	// run on). nil when the harness has no discoverable configured model.
+	defaultModel func(b Backend) string
 }
 
 // launchOpts are the per-spawn knobs a harness builder consumes. model maps to
@@ -43,6 +60,7 @@ var harnesses = []harnessDef{
 		SupportsPlanMode: true,
 		ModelSuggestions: []string{"opus", "sonnet", "haiku", "claude-fable-5"},
 		buildCmd:         claudeCommand,
+		defaultModel:     claudeConfiguredModel,
 	},
 	{
 		ID:               "codex",
@@ -62,6 +80,90 @@ func harnessByID(id string) harnessDef {
 		}
 	}
 	return harnesses[0] // claude
+}
+
+// resolveHarnesses returns a copy of the registry with each harness's
+// DefaultModel filled in for backend b — the host the agent will run on — so
+// the creator can seed its model field with the model that harness's CLI is
+// itself configured to use there. The static table's DefaultModel is always
+// empty (it's a per-host runtime value), so we copy rather than mutate the
+// shared slice. Best-effort per harness: a resolver that can't read the host's
+// config just yields "".
+func resolveHarnesses(b Backend) []harnessDef {
+	out := make([]harnessDef, len(harnesses))
+	copy(out, harnesses)
+	for i := range out {
+		if out[i].defaultModel != nil {
+			out[i].DefaultModel = out[i].defaultModel(b)
+		}
+	}
+	return out
+}
+
+// claudeConfiguredModel returns the model Claude Code itself is configured to
+// use on backend b — the model a bare `claude` (no --model) would run with —
+// or "" when nothing is pinned (Claude Code then uses the account/org default,
+// so no --model is the right thing to launch with). It mirrors Claude Code's
+// own resolution, most-specific first:
+//
+//  1. ANTHROPIC_MODEL in the environment (local host only — we can't see a
+//     remote daemon's env, and claudeCommand does not scrub this var, so a
+//     spawned agent inherits it).
+//  2. "model" in ~/.claude/settings.json (the user settings file).
+//  3. top-level "model" in ~/.claude.json, where the interactive /model command
+//     persists its choice.
+//
+// A "default" sentinel (Claude Code's marker for "use the account default") is
+// treated as unset, so we surface/launch nothing rather than the literal word.
+func claudeConfiguredModel(b Backend) string {
+	if _, ok := b.(*localBackend); ok {
+		if m := normalizeClaudeModel(os.Getenv("ANTHROPIC_MODEL")); m != "" {
+			return m
+		}
+	}
+	home, err := b.HomeDir()
+	if err != nil || home == "" {
+		return ""
+	}
+	if m := claudeModelFromJSON(b, filepath.Join(home, ".claude", "settings.json")); m != "" {
+		return m
+	}
+	return claudeModelFromJSON(b, filepath.Join(home, ".claude.json"))
+}
+
+// claudeModelFromJSON reads a top-level string "model" key from a JSON file on
+// backend b, returning "" if the file is missing/unreadable, isn't a JSON
+// object, or the key is absent or non-string. Only that one key is decoded —
+// ~/.claude.json in particular is large, so we avoid unmarshaling the whole
+// document.
+func claudeModelFromJSON(b Backend, path string) string {
+	data, err := b.ReadFile(path)
+	if err != nil {
+		return ""
+	}
+	var obj map[string]json.RawMessage
+	if json.Unmarshal(data, &obj) != nil {
+		return ""
+	}
+	raw, ok := obj["model"]
+	if !ok {
+		return ""
+	}
+	var s string
+	if json.Unmarshal(raw, &s) != nil {
+		return ""
+	}
+	return normalizeClaudeModel(s)
+}
+
+// normalizeClaudeModel trims a configured model value and maps Claude Code's
+// "default" sentinel (and empty) to "" — meaning "no pinned model".
+func normalizeClaudeModel(m string) string {
+	m = strings.TrimSpace(m)
+	if strings.EqualFold(m, "default") {
+		return ""
+	}
+	return m
 }
 
 // agentCommand builds the shell command that launches the chosen agent. A
