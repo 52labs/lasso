@@ -370,6 +370,13 @@ func hostAgentConfig(host string) (*LassoConfig, error) {
 	c.BranchPrefix = def.BranchPrefix
 	c.DefaultAgent = def.DefaultAgent
 	c.ScratchSetup = def.ScratchSetup
+	// Fill each harness's DefaultModel from the target host's own CLI config
+	// (e.g. Claude Code's configured model) so the creator can default the model
+	// field to it. Best-effort: if the host's backend isn't reachable we keep the
+	// static registry (DefaultModel empty → the CLI's own default).
+	if be, err := gridHostBackend(host); err == nil {
+		c.Harnesses = resolveHarnesses(be)
+	}
 	return c, nil
 }
 
