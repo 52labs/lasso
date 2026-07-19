@@ -225,6 +225,7 @@ export function SettingsTab({
 
       <div className="@container min-h-0 flex-1 overflow-y-auto px-3 py-4">
         <AppearanceToggle />
+        <HerdrThemeSelect active={active} />
         <div className="mb-4 flex flex-col gap-1">
           <label className={labelClass} htmlFor="settings-host">
             Configuring host
@@ -303,6 +304,74 @@ function AppearanceToggle() {
         Sets the UI theme. Herdr matches herdr's own colors; System follows your
         OS; Light/Dark pin the Nothing palette. The terminal always keeps
         herdr's theme.
+      </p>
+    </div>
+  )
+}
+
+// HerdrThemeSelect picks the herdr theme itself — distinct from Appearance,
+// which only chooses whether the chrome follows it. Saving writes [theme].name
+// in herdr's config.toml, the source of truth both already track: the herdr
+// TUI reloads it, and lasso repaints the terminals (and, in Herdr mode, the
+// chrome) off the theme_rev SSE bump. Local host only — the config lives on
+// the machine running lasso.
+function HerdrThemeSelect({ active }: { active: boolean }) {
+  const { themeRev } = useApp()
+  const themeQuery = useQuery({
+    queryKey: qk.theme(themeRev),
+    queryFn: () => api.theme(),
+    enabled: active,
+  })
+  const t = themeQuery.data
+  // Optimistic selection so the dropdown doesn't snap back while the config
+  // write → theme_rev bump round-trips; cleared once the server agrees (or the
+  // write fails).
+  const [pending, setPending] = React.useState<string | null>(null)
+  React.useEffect(() => {
+    if (pending && t?.resolved === pending) setPending(null)
+  }, [pending, t])
+  const setMutation = useMutation({
+    mutationFn: (name: string) => api.setTheme(name),
+    onError: (e: Error) => {
+      setPending(null)
+      toast.error(`Couldn't set theme: ${e.message}`)
+    },
+  })
+  const value = pending ?? t?.resolved ?? ""
+  const group = (light: boolean) =>
+    (t?.themes ?? [])
+      .filter((o) => o.light === light)
+      .map((o) => (
+        <option key={o.name} value={o.name}>
+          {o.label}
+        </option>
+      ))
+  return (
+    <div className="mb-4 flex flex-col gap-1">
+      <label className={labelClass} htmlFor="settings-herdr-theme">
+        Herdr theme
+      </label>
+      <select
+        id="settings-herdr-theme"
+        className={cn(fieldClass, "max-w-xs")}
+        value={value}
+        disabled={!t}
+        onChange={(e) => {
+          setPending(e.target.value)
+          setMutation.mutate(e.target.value)
+        }}
+      >
+        {!t?.themes.some((o) => o.name === value) && (
+          <option value={value}>{value || "…"}</option>
+        )}
+        <optgroup label="Dark">{group(false)}</optgroup>
+        <optgroup label="Light">{group(true)}</optgroup>
+      </select>
+      <p className="text-[11px] text-muted-foreground">
+        Sets herdr's own theme in its config.toml; herdr and the terminals
+        follow it live.
+        {t?.forced &&
+          " This lasso was launched with a -theme override, so its terminals won't follow until that flag is dropped."}
       </p>
     </div>
   )

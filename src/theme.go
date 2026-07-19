@@ -314,6 +314,38 @@ var themes = map[string]themeDef{
 	},
 }
 
+// themeOption is one selectable built-in theme, served at /api/theme so the
+// Settings dropdown offers exactly the set this build can resolve (and herdr
+// accepts), with display labels and dark/light grouping.
+type themeOption struct {
+	Name  string `json:"name"`
+	Label string `json:"label"`
+	Light bool   `json:"light"`
+}
+
+// themeOptions lists the selectable themes in display order: dark schemes
+// first, then the light variants. Every Name is a canonical key in themes.
+var themeOptions = []themeOption{
+	{Name: "catppuccin", Label: "Catppuccin"},
+	{Name: "tokyo-night", Label: "Tokyo Night"},
+	{Name: "dracula", Label: "Dracula"},
+	{Name: "nord", Label: "Nord"},
+	{Name: "gruvbox", Label: "Gruvbox"},
+	{Name: "one-dark", Label: "One Dark"},
+	{Name: "solarized", Label: "Solarized"},
+	{Name: "kanagawa", Label: "Kanagawa"},
+	{Name: "rose-pine", Label: "Rosé Pine"},
+	{Name: "vesper", Label: "Vesper"},
+	{Name: "terminal", Label: "Terminal"},
+	{Name: "catppuccin-latte", Label: "Catppuccin Latte", Light: true},
+	{Name: "tokyo-night-day", Label: "Tokyo Night Day", Light: true},
+	{Name: "gruvbox-light", Label: "Gruvbox Light", Light: true},
+	{Name: "one-light", Label: "One Light", Light: true},
+	{Name: "solarized-light", Label: "Solarized Light", Light: true},
+	{Name: "kanagawa-lotus", Label: "Kanagawa Lotus", Light: true},
+	{Name: "rose-pine-dawn", Label: "Rosé Pine Dawn", Light: true},
+}
+
 // themeAliases maps herdr's alternate theme spellings to our canonical keys,
 // mirroring herdr's from_name match arms (src/app/state.rs) so every name herdr
 // accepts resolves to the same palette here. Unknown names fall back to
@@ -564,6 +596,77 @@ func parseThemeConfig(path string) (name string, custom map[string]string, legac
 		}
 	}
 	return name, custom, legacyAccent
+}
+
+// setHerdrThemeName rewrites [theme].name in herdr's config.toml, preserving
+// everything else in the file (herdr owns this config; lasso only touches the
+// one key). Creates the file/section when missing. The write is atomic (temp
+// file + rename) so neither herdr nor our own poller ever reads a torn file.
+func setHerdrThemeName(path, name string) error {
+	entry := fmt.Sprintf("name = %q", name)
+	data, err := os.ReadFile(path)
+	if err != nil && !os.IsNotExist(err) {
+		return err
+	}
+	var out []string
+	replaced := false
+	if err == nil {
+		section := ""
+		themeAt := -1 // insertion point just after a bare [theme] header
+		for _, line := range strings.Split(string(data), "\n") {
+			t := strings.TrimSpace(stripComment(line))
+			if strings.HasPrefix(t, "[") && strings.HasSuffix(t, "]") {
+				section = strings.TrimSpace(t[1 : len(t)-1])
+				out = append(out, line)
+				if section == "theme" {
+					themeAt = len(out)
+				}
+				continue
+			}
+			if section == "theme" {
+				if key, _, found := strings.Cut(t, "="); found && strings.TrimSpace(key) == "name" {
+					// Replace the first name key; drop any (invalid) duplicates so
+					// the value we wrote is unambiguously the one in effect.
+					if !replaced {
+						out = append(out, entry)
+						replaced = true
+					}
+					continue
+				}
+			}
+			out = append(out, line)
+		}
+		if !replaced && themeAt >= 0 {
+			out = append(out[:themeAt], append([]string{entry}, out[themeAt:]...)...)
+			replaced = true
+		}
+	}
+	if !replaced {
+		// No [theme] section (or no file at all): append/create one.
+		for len(out) > 0 && strings.TrimSpace(out[len(out)-1]) == "" {
+			out = out[:len(out)-1]
+		}
+		if len(out) > 0 {
+			out = append(out, "")
+		}
+		out = append(out, "[theme]", entry)
+	}
+	content := strings.Join(out, "\n")
+	if !strings.HasSuffix(content, "\n") {
+		content += "\n"
+	}
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		return err
+	}
+	mode := os.FileMode(0o644)
+	if fi, statErr := os.Stat(path); statErr == nil {
+		mode = fi.Mode().Perm()
+	}
+	tmp := path + ".lasso-tmp"
+	if err := os.WriteFile(tmp, []byte(content), mode); err != nil {
+		return err
+	}
+	return os.Rename(tmp, path)
 }
 
 // stripComment removes a trailing TOML comment that lies outside of quotes.
