@@ -22,7 +22,9 @@
 package main
 
 import (
+	"errors"
 	"fmt"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -598,22 +600,18 @@ func parseThemeConfig(path string) (name string, custom map[string]string, legac
 	return name, custom, legacyAccent
 }
 
-// setHerdrThemeName rewrites [theme].name in herdr's config.toml, preserving
-// everything else in the file (herdr owns this config; lasso only touches the
-// one key). Creates the file/section when missing. The write is atomic (temp
-// file + rename) so neither herdr nor our own poller ever reads a torn file.
-func setHerdrThemeName(path, name string) error {
+// rewriteThemeConfigTOML returns config.toml content with [theme].name set to
+// name, preserving everything else (herdr owns this config; lasso only touches
+// the one key). prev is the existing file content ("" if it doesn't exist yet,
+// in which case a [theme] section is created).
+func rewriteThemeConfigTOML(prev, name string) string {
 	entry := fmt.Sprintf("name = %q", name)
-	data, err := os.ReadFile(path)
-	if err != nil && !os.IsNotExist(err) {
-		return err
-	}
 	var out []string
 	replaced := false
-	if err == nil {
+	if prev != "" {
 		section := ""
 		themeAt := -1 // insertion point just after a bare [theme] header
-		for _, line := range strings.Split(string(data), "\n") {
+		for _, line := range strings.Split(prev, "\n") {
 			t := strings.TrimSpace(stripComment(line))
 			if strings.HasPrefix(t, "[") && strings.HasSuffix(t, "]") {
 				section = strings.TrimSpace(t[1 : len(t)-1])
@@ -655,6 +653,22 @@ func setHerdrThemeName(path, name string) error {
 	if !strings.HasSuffix(content, "\n") {
 		content += "\n"
 	}
+	return content
+}
+
+// setHerdrThemeName rewrites [theme].name in the LOCAL herdr config.toml.
+// Creates the file/section when missing. The write is atomic (temp file +
+// rename) so neither herdr nor our own poller ever reads a torn file.
+func setHerdrThemeName(path, name string) error {
+	data, err := os.ReadFile(path)
+	if err != nil && !os.IsNotExist(err) {
+		return err
+	}
+	prev := ""
+	if err == nil {
+		prev = string(data)
+	}
+	content := rewriteThemeConfigTOML(prev, name)
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 		return err
 	}
@@ -667,6 +681,32 @@ func setHerdrThemeName(path, name string) error {
 		return err
 	}
 	return os.Rename(tmp, path)
+}
+
+// writeHerdrThemeNameVia rewrites [theme].name in the herdr config at cfgPath on
+// backend b — the local machine (os) or a remote host (over SFTP). Unlike
+// setHerdrThemeName it writes in place rather than via temp+rename: SFTP's
+// rename-over-an-existing-file isn't portable, and no reader observes a torn
+// remote file (the remote herdr only reads its config on reload, which we
+// trigger after this returns, and lasso's own poller reads the LOCAL config).
+func writeHerdrThemeNameVia(b Backend, cfgPath, name string) error {
+	data, err := b.ReadFile(cfgPath)
+	if err != nil && !errors.Is(err, fs.ErrNotExist) {
+		return err
+	}
+	prev := ""
+	if err == nil {
+		prev = string(data)
+	}
+	content := rewriteThemeConfigTOML(prev, name)
+	if err := b.MkdirAll(filepath.Dir(cfgPath), 0o755); err != nil {
+		return err
+	}
+	perm := fs.FileMode(0o644)
+	if fi, statErr := b.Stat(cfgPath); statErr == nil {
+		perm = fi.Mode().Perm()
+	}
+	return b.WriteFile(cfgPath, []byte(content), perm)
 }
 
 // stripComment removes a trailing TOML comment that lies outside of quotes.

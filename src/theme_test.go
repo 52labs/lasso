@@ -269,3 +269,29 @@ accent = "cyan"
 		t.Fatalf("append result:\n%s", got)
 	}
 }
+
+// writeHerdrThemeNameVia drives the same rewrite through the Backend interface
+// (localBackend here; the remote path is the same code over SFTP). Covers the
+// create-when-missing and preserve-and-replace cases plus fs.ErrNotExist
+// handling through the interface's ReadFile.
+func TestWriteHerdrThemeNameVia(t *testing.T) {
+	dir := t.TempDir()
+	cfg := filepath.Join(dir, "sub", "config.toml") // sub/ exercises MkdirAll
+	b := &localBackend{}
+
+	if err := writeHerdrThemeNameVia(b, cfg, "nord"); err != nil {
+		t.Fatalf("create: %v", err)
+	}
+	if got, _ := os.ReadFile(cfg); string(got) != "[theme]\nname = \"nord\"\n" {
+		t.Fatalf("created file:\n%s", got)
+	}
+
+	os.WriteFile(cfg, []byte("onboarding = false\n\n[theme]\nname = \"nord\"\n[theme.custom]\naccent = \"#ff0000\"\n"), 0o644)
+	if err := writeHerdrThemeNameVia(b, cfg, "gruvbox"); err != nil {
+		t.Fatalf("replace: %v", err)
+	}
+	name, custom, _ := parseThemeConfig(cfg)
+	if name != "gruvbox" || custom["accent"] != "#ff0000" {
+		t.Fatalf("round-trip: name=%q custom=%v", name, custom)
+	}
+}

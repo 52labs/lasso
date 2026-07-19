@@ -1040,11 +1040,12 @@ func serveAgentClose(w http.ResponseWriter, r *http.Request) {
 }
 
 // serveThemeSet (Settings tab) switches the herdr/lasso theme by rewriting
-// [theme].name in herdr's own config.toml — the single source of truth both
+// [theme].name in the LOCAL herdr config.toml — the single source of truth both
 // already follow: the hub re-resolves the config every poll (bumping theme_rev
-// so the browser repaints chrome + terminals), and the herdr TUI is nudged with
-// `herdr server reload-config`. Local host only: the config lives beside the
-// local socket, and lasso's theme is always resolved from it.
+// so the browser repaints chrome + terminals), and the running herdr server is
+// asked to reload its config over the API socket. When a remote host is the
+// active backend, the change is mirrored onto it too (same as a host switch), so
+// its terminals track the theme.
 func serveThemeSet(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		http.Error(w, "POST only", http.StatusMethodNotAllowed)
@@ -1066,14 +1067,16 @@ func serveThemeSet(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "write config.toml: "+err.Error(), http.StatusInternalServerError)
 		return
 	}
-	// Repaint the running herdr TUI: it doesn't watch its config file, so ask
-	// the daemon to reload it. Best-effort — if herdr is down (or too old to
-	// know the command) the new theme still applies on its next start, and
-	// lasso's own repaint below doesn't depend on it.
-	ctx, cancel := context.WithTimeout(r.Context(), 5*time.Second)
-	defer cancel()
-	if out, err := exec.CommandContext(ctx, herdrBinary(), "server", "reload-config").CombinedOutput(); err != nil {
-		log.Printf("theme:    herdr reload-config: %v (%s)", err, strings.TrimSpace(string(out)))
+	// Repaint the running local herdr TUI: it doesn't watch its config file, so
+	// ask the server to reload it over the API socket (no herdr-on-PATH needed).
+	// Best-effort — if herdr is down the theme still applies on its next start,
+	// and lasso's own repaint (below) doesn't depend on it.
+	if _, err := herdrCallSock(*herdrSock, "server.reload_config", map[string]any{}); err != nil {
+		log.Printf("theme:    herdr reload-config: %v", err)
+	}
+	// If we're driving a remote host, mirror the theme onto it as well.
+	if rb, ok := curBackend().(*remoteBackend); ok {
+		syncRemoteTheme(rb, name)
 	}
 	// Skip the poll wait so the browser's theme_rev bump (and repaint) is
 	// near-immediate.
