@@ -179,3 +179,119 @@ accent = "cyan"
 		t.Error("expected Customized=true")
 	}
 }
+
+// Every dropdown option must resolve to itself (it's a canonical key), and
+// every built-in theme must be offered — the dropdown is the themes map's UI.
+func TestThemeOptionsCoverThemes(t *testing.T) {
+	seen := map[string]bool{}
+	for _, o := range themeOptions {
+		if _, ok := themes[o.Name]; !ok {
+			t.Errorf("option %q is not a canonical theme key", o.Name)
+		}
+		if normalizeThemeName(o.Name) != o.Name {
+			t.Errorf("option %q is not canonical (normalizes to %q)", o.Name, normalizeThemeName(o.Name))
+		}
+		if seen[o.Name] {
+			t.Errorf("option %q listed twice", o.Name)
+		}
+		seen[o.Name] = true
+	}
+	for name := range themes {
+		if !seen[name] {
+			t.Errorf("theme %q missing from themeOptions", name)
+		}
+	}
+}
+
+func TestSetHerdrThemeName(t *testing.T) {
+	dir := t.TempDir()
+	cfg := filepath.Join(dir, "config.toml")
+
+	// No file: creates one with just the theme section.
+	if err := setHerdrThemeName(cfg, "nord"); err != nil {
+		t.Fatalf("create: %v", err)
+	}
+	if got, _ := os.ReadFile(cfg); string(got) != "[theme]\nname = \"nord\"\n" {
+		t.Fatalf("created file:\n%s", got)
+	}
+
+	// Existing name key: replaced in place, everything else untouched —
+	// including [theme.custom] and later sections.
+	os.WriteFile(cfg, []byte(`onboarding = false
+
+[theme]
+name = "nord"   # inline comment
+[theme.custom]
+accent = "#ff0000"
+
+[ui]
+accent = "cyan"
+`), 0o644)
+	if err := setHerdrThemeName(cfg, "rose-pine"); err != nil {
+		t.Fatalf("replace: %v", err)
+	}
+	got, _ := os.ReadFile(cfg)
+	want := `onboarding = false
+
+[theme]
+name = "rose-pine"
+[theme.custom]
+accent = "#ff0000"
+
+[ui]
+accent = "cyan"
+`
+	if string(got) != want {
+		t.Fatalf("replace result:\n%s\nwant:\n%s", got, want)
+	}
+	if name, custom, _ := parseThemeConfig(cfg); name != "rose-pine" || custom["accent"] != "#ff0000" {
+		t.Fatalf("round-trip parse: name=%q custom=%v", name, custom)
+	}
+
+	// [theme] section without a name key: inserted right after the header, not
+	// into [theme.custom].
+	os.WriteFile(cfg, []byte("[theme]\n[theme.custom]\naccent = \"#ff0000\"\n"), 0o644)
+	if err := setHerdrThemeName(cfg, "gruvbox"); err != nil {
+		t.Fatalf("insert: %v", err)
+	}
+	got, _ = os.ReadFile(cfg)
+	if string(got) != "[theme]\nname = \"gruvbox\"\n[theme.custom]\naccent = \"#ff0000\"\n" {
+		t.Fatalf("insert result:\n%s", got)
+	}
+
+	// File with other sections but no [theme]: section appended.
+	os.WriteFile(cfg, []byte("onboarding = false\n"), 0o644)
+	if err := setHerdrThemeName(cfg, "dracula"); err != nil {
+		t.Fatalf("append: %v", err)
+	}
+	got, _ = os.ReadFile(cfg)
+	if string(got) != "onboarding = false\n\n[theme]\nname = \"dracula\"\n" {
+		t.Fatalf("append result:\n%s", got)
+	}
+}
+
+// writeHerdrThemeNameVia drives the same rewrite through the Backend interface
+// (localBackend here; the remote path is the same code over SFTP). Covers the
+// create-when-missing and preserve-and-replace cases plus fs.ErrNotExist
+// handling through the interface's ReadFile.
+func TestWriteHerdrThemeNameVia(t *testing.T) {
+	dir := t.TempDir()
+	cfg := filepath.Join(dir, "sub", "config.toml") // sub/ exercises MkdirAll
+	b := &localBackend{}
+
+	if err := writeHerdrThemeNameVia(b, cfg, "nord"); err != nil {
+		t.Fatalf("create: %v", err)
+	}
+	if got, _ := os.ReadFile(cfg); string(got) != "[theme]\nname = \"nord\"\n" {
+		t.Fatalf("created file:\n%s", got)
+	}
+
+	os.WriteFile(cfg, []byte("onboarding = false\n\n[theme]\nname = \"nord\"\n[theme.custom]\naccent = \"#ff0000\"\n"), 0o644)
+	if err := writeHerdrThemeNameVia(b, cfg, "gruvbox"); err != nil {
+		t.Fatalf("replace: %v", err)
+	}
+	name, custom, _ := parseThemeConfig(cfg)
+	if name != "gruvbox" || custom["accent"] != "#ff0000" {
+		t.Fatalf("round-trip: name=%q custom=%v", name, custom)
+	}
+}

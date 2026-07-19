@@ -6,6 +6,7 @@ import (
 	"log"
 	"net/http"
 	"os"
+	"path/filepath"
 	"sync"
 	"time"
 )
@@ -158,6 +159,12 @@ func serveHostSwitch(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		newB = rb
+		// Make the target host's herdr theme match the local machine's before its
+		// terminals attach, so they render in the same palette lasso's chrome
+		// shows (lasso always resolves its own theme from the LOCAL config).
+		if srvHub != nil {
+			syncRemoteTheme(rb, srvHub.themeSnapshot().Resolved)
+		}
 	}
 
 	// Swap, then re-point every host-bound subsystem at the new backend.
@@ -181,6 +188,26 @@ func serveHostSwitch(w http.ResponseWriter, r *http.Request) {
 
 	log.Printf("host:     switched to %s", newB.Name())
 	writeHostResult(w, newB)
+}
+
+// syncRemoteTheme writes theme name into rb's herdr config.toml (beside its
+// socket) and asks the remote server to reload it, so the host renders in that
+// theme. Best-effort: any failure is logged and never blocks the caller (a host
+// switch or a Settings theme change). name is a canonical theme key.
+func syncRemoteTheme(rb *remoteBackend, name string) {
+	if rb == nil || name == "" {
+		return
+	}
+	cfg := filepath.Join(filepath.Dir(rb.remoteSock), "config.toml")
+	if err := writeHerdrThemeNameVia(rb, cfg, name); err != nil {
+		log.Printf("host:     theme sync to %s failed: %v", rb.alias, err)
+		return
+	}
+	if _, err := rb.HerdrCall("server.reload_config", map[string]any{}); err != nil {
+		log.Printf("host:     theme reload on %s failed: %v", rb.alias, err)
+		return
+	}
+	log.Printf("host:     synced theme %q -> %s", name, rb.alias)
 }
 
 // writeHostResult reports the now-active host plus its herdr version/protocol.

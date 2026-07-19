@@ -160,6 +160,14 @@ export interface VersionInfo {
   err?: string
 }
 
+// One selectable built-in theme (the server's canonical list, in display
+// order: dark schemes first, then light variants).
+export interface ThemeOption {
+  name: string
+  label: string
+  light: boolean
+}
+
 export interface ThemePayload {
   name: string
   resolved: string
@@ -167,6 +175,10 @@ export interface ThemePayload {
   css: string
   // xterm.js ITheme — shape is opaque to us; we hand it straight to the iframe.
   xterm: Record<string, unknown>
+  themes: ThemeOption[]
+  // True when lasso was launched with a -theme override, so writing herdr's
+  // config restyles herdr but this lasso instance won't follow.
+  forced: boolean
 }
 
 // httpError builds a concise Error from a non-OK response. lasso/herdr return
@@ -317,6 +329,10 @@ function withHost(url: string, host?: string): string {
 export const api = {
   active: () => getJSON<ActiveState>("/api/active"),
   theme: () => getJSON<ThemePayload>("/api/theme"),
+  // Writes [theme].name in herdr's config.toml (the shared source of truth) —
+  // herdr reloads it and lasso follows via the theme_rev SSE bump.
+  setTheme: (name: string) =>
+    postJSON<{ ok: boolean; name: string }>("/api/theme-set", { name }),
 
   // The ssh-config hosts probed for a compatible herdr server. ?refresh=1 skips
   // the server-side cache (the footer's manual refresh).

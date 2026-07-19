@@ -3,6 +3,13 @@
 #   mise run build  — build the frontend (src/web/dist) then the binary
 #   mise run test   — run the Go tests
 
+# Toolchain the tasks below need on PATH. go is pinned to go.mod's version so
+# `mise run build`/`test`/`dev` compile with the exact toolchain (no implicit
+# toolchain download); bun drives the frontend build.
+[tools]
+go = "1.25.3"
+bun = "1.3.3"
+
 [tasks."build:web"]
 description = "Build the React/shadcn frontend into src/web/dist (embedded by Go)"
 dir = "src/web"

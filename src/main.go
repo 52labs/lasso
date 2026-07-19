@@ -87,6 +87,11 @@ type themePayload struct {
 	Customized bool            `json:"customized"`
 	CSS        string          `json:"css"`   // :root declaration lines
 	Xterm      json.RawMessage `json:"xterm"` // xterm.js ITheme object
+	// Themes are the selectable built-ins (for the Settings dropdown); Forced
+	// means this instance was launched with -theme=<name>, so editing herdr's
+	// config.toml restyles herdr but this lasso won't follow.
+	Themes []themeOption `json:"themes"`
+	Forced bool          `json:"forced"`
 }
 
 func defaultSock() string {
@@ -183,8 +188,11 @@ func runServer() {
 			Customized: rt.Customized,
 			CSS:        rt.cssVars(),
 			Xterm:      json.RawMessage(rt.xtermJSON()),
+			Themes:     themeOptions,
+			Forced:     *themeName != "" && *themeName != "auto",
 		})
 	})
+	mux.HandleFunc("/api/theme-set", serveThemeSet)
 	mux.HandleFunc("/api/events", hub.serveSSE)
 	mux.HandleFunc("/api/files", serveFiles)
 	mux.HandleFunc("/api/file", serveFile)
@@ -1029,6 +1037,51 @@ func serveAgentClose(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, out)
+}
+
+// serveThemeSet (Settings tab) switches the herdr/lasso theme by rewriting
+// [theme].name in the LOCAL herdr config.toml — the single source of truth both
+// already follow: the hub re-resolves the config every poll (bumping theme_rev
+// so the browser repaints chrome + terminals), and the running herdr server is
+// asked to reload its config over the API socket. When a remote host is the
+// active backend, the change is mirrored onto it too (same as a host switch), so
+// its terminals track the theme.
+func serveThemeSet(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "POST only", http.StatusMethodNotAllowed)
+		return
+	}
+	var req struct {
+		Name string `json:"name"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, "bad json", http.StatusBadRequest)
+		return
+	}
+	name := normalizeThemeName(req.Name)
+	if _, ok := themes[name]; !ok {
+		http.Error(w, fmt.Sprintf("unknown theme %q", req.Name), http.StatusBadRequest)
+		return
+	}
+	if err := setHerdrThemeName(herdrConfigPath(), name); err != nil {
+		http.Error(w, "write config.toml: "+err.Error(), http.StatusInternalServerError)
+		return
+	}
+	// Repaint the running local herdr TUI: it doesn't watch its config file, so
+	// ask the server to reload it over the API socket (no herdr-on-PATH needed).
+	// Best-effort — if herdr is down the theme still applies on its next start,
+	// and lasso's own repaint (below) doesn't depend on it.
+	if _, err := herdrCallSock(*herdrSock, "server.reload_config", map[string]any{}); err != nil {
+		log.Printf("theme:    herdr reload-config: %v", err)
+	}
+	// If we're driving a remote host, mirror the theme onto it as well.
+	if rb, ok := curBackend().(*remoteBackend); ok {
+		syncRemoteTheme(rb, name)
+	}
+	// Skip the poll wait so the browser's theme_rev bump (and repaint) is
+	// near-immediate.
+	srvHub.kick()
+	writeJSON(w, map[string]any{"ok": true, "name": name})
 }
 
 // ---------------------------------------------------------------------------
