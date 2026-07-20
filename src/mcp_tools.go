@@ -51,7 +51,7 @@ func registerMCPTools(s *mcp.Server) {
 
 	mcp.AddTool(s, &mcp.Tool{
 		Name:        "whoami",
-		Description: "Identify the calling agent's OWN lasso agent record, so it can then act on itself — most commonly to call close_agent with the returned id once its work is done. Pass the value of your $HERDR_PANE_ID environment variable as pane_id (e.g. \"p_82\"); lasso maps that herdr pane to the agent it created there. The lasso MCP server runs in lasso's own process, NOT your shell, so it cannot read your environment — you MUST supply $HERDR_PANE_ID yourself. On success returns found:true and the same fields as a list_agents entry (id, type, title, repo, branch, work_dir, root_pane, workspace_id, status, host, ...) under `agent`. If it can't resolve (no pane_id given, or the pane isn't one lasso manages) it returns found:false with a human-readable `detail` instead of erroring.",
+		Description: "Identify the calling agent's OWN lasso agent record, so it can then act on itself — most commonly to call close_agent with the returned id once its work is done. Pass the value of your $HERDR_PANE_ID environment variable as pane_id (e.g. \"p_82\"); lasso maps that herdr pane to the agent it created there. The lasso MCP server runs in lasso's own process, NOT your shell, so it cannot read your environment — you MUST supply $HERDR_PANE_ID yourself. With no `host`, every host lasso knows is searched (pane ids are only unique per host, and your pane is not necessarily on the box the MCP server runs on): a unique match resolves; a cross-host collision returns found:false naming the candidate hosts, so call again with the host you run on. On success returns found:true and the same fields as a list_agents entry (id, type, title, repo, branch, work_dir, root_pane, workspace_id, status, host, ...) under `agent` — pass BOTH the returned id and host to close_agent. If it can't resolve (no pane_id given, or the pane isn't one lasso manages) it returns found:false with a human-readable `detail` instead of erroring.",
 	}, whoamiTool)
 
 	mcp.AddTool(s, &mcp.Tool{
@@ -76,7 +76,7 @@ func registerMCPTools(s *mcp.Server) {
 
 	mcp.AddTool(s, &mcp.Tool{
 		Name:        "close_agent",
-		Description: "Stop an agent: first kill the agent process (claude/codex/opencode) in its pane, then — unless close_pane is false — close the associated herdr pane. For a git agent, set remove_worktree=true to also delete its git worktree (this discards any uncommitted work, so it defaults to false, and implies closing the pane).",
+		Description: "Stop an agent: first kill the agent process (claude/codex/opencode) in its pane, then — unless close_pane is false — close the associated herdr pane. For a git agent, set remove_worktree=true to also delete its git worktree (this discards any uncommitted work, so it defaults to false, and implies closing the pane). Pass the `host` whoami/list_agents returned alongside the id; with no host every known host is searched, and an agent id that exists on several hosts is refused rather than guessed, so the wrong host's agent is never killed.",
 	}, closeAgentTool)
 }
 
@@ -442,7 +442,7 @@ func listAgentsTool(_ context.Context, _ *mcp.CallToolRequest, in listAgentsIn) 
 // ---------------------------------------------------------------------------
 
 type whoamiIn struct {
-	Host   string `json:"host,omitempty" jsonschema:"Host the calling agent runs on; omit for the local box."`
+	Host   string `json:"host,omitempty" jsonschema:"Host the calling agent runs on. Omit to search every host this lasso knows: a pane id that matches exactly one host's agent resolves to it; a pane id that collides across hosts is refused (found:false) with the candidate hosts listed, so pass the host you actually run on (compare your hostname against list_hosts labels)."`
 	PaneID string `json:"pane_id,omitempty" jsonschema:"Your own herdr pane id — the value of the $HERDR_PANE_ID environment variable in your shell (e.g. \"p_82\"). The server cannot read your environment, so you must pass it. The public form (\"w<workspace>-<n>\") is also accepted."`
 }
 
@@ -452,20 +452,25 @@ type whoamiOut struct {
 	Detail string     `json:"detail,omitempty"` // why resolution failed, when found is false
 }
 
-func whoamiTool(_ context.Context, _ *mcp.CallToolRequest, in whoamiIn) (*mcp.CallToolResult, whoamiOut, error) {
-	host := in.Host
-	if host == "" {
-		host = "local"
+func whoamiTool(ctx context.Context, _ *mcp.CallToolRequest, in whoamiIn) (*mcp.CallToolResult, whoamiOut, error) {
+	// No host given: do NOT assume "local". The caller only knows its
+	// $HERDR_PANE_ID, pane ids are only unique per host, and the box this MCP
+	// server runs on is not necessarily the box the caller's pane lives on — so
+	// defaulting to local can resolve the id to an unrelated agent on another
+	// host (which the caller would then close). Search everywhere instead and
+	// refuse to guess on a collision.
+	if in.Host == "" {
+		return nil, resolveWhoamiAcrossHosts(ctx, in.PaneID), nil
 	}
-	b, err := resolveBackend(host)
+	b, err := agentBackendResolver(in.Host)
 	if err != nil {
 		return nil, whoamiOut{}, err
 	}
-	recs, err := listAgents(host)
+	recs, err := listAgents(in.Host)
 	if err != nil {
 		return nil, whoamiOut{}, err
 	}
-	return nil, resolveWhoami(b, host, recs, in.PaneID), nil
+	return nil, resolveWhoami(b, in.Host, recs, in.PaneID), nil
 }
 
 // resolveWhoami maps a herdr pane id to the lasso agent that owns it. It asks
@@ -496,6 +501,48 @@ func resolveWhoami(b Backend, host string, recs []AgentRecord, paneID string) wh
 		}
 	}
 	return whoamiOut{Detail: fmt.Sprintf("pane %q does not map to any lasso agent on host %q — you may be in a herdr pane lasso did not create, or on a different host than the one you queried.", paneID, host)}
+}
+
+// resolveWhoamiAcrossHosts handles whoami with no host argument, mirroring
+// resolveCloseTarget's no-host pane path: every host recorded in this lasso's
+// db is searched (raw-id canonicalization only through the LOCAL herdr — see
+// paneMatchesAcrossHosts), an unclaimed pane may still be adopted from a peer
+// lasso's records, and a pane id that matches agents on several hosts is
+// refused rather than guessed — misidentifying the caller as another host's
+// agent is what lets it close that agent next.
+func resolveWhoamiAcrossHosts(ctx context.Context, paneID string) whoamiOut {
+	paneID = strings.TrimSpace(paneID)
+	if paneID == "" {
+		return whoamiOut{Detail: "no pane_id given: pass the value of your $HERDR_PANE_ID environment variable (e.g. \"p_82\"). If that variable is empty or unset, you are not running inside a lasso-managed herdr pane."}
+	}
+	matches, err := paneMatchesAcrossHosts(paneID)
+	if err != nil {
+		return whoamiOut{Detail: fmt.Sprintf("could not search agent records: %v", err)}
+	}
+	switch len(matches) {
+	case 1:
+		rec := matches[0]
+		status := ""
+		if b, err := agentBackendResolver(rec.Host); err == nil {
+			status = paneAgentStatus(b, rec.RootPane)
+		}
+		ai := agentInfoFrom(rec.Host, rec, status)
+		return whoamiOut{Found: true, Agent: &ai}
+	case 0:
+		// A pane none of our own records claim may belong to a peer lasso that
+		// spawned the agent on this machine (same fallback closeme uses).
+		if b, err := agentBackendResolver("local"); err == nil {
+			if rec, ok, aerr := adoptPeerAgent(ctx, b, paneID); aerr != nil {
+				return whoamiOut{Detail: aerr.Error()}
+			} else if ok {
+				ai := agentInfoFrom(rec.Host, rec, paneAgentStatus(b, rec.RootPane))
+				return whoamiOut{Found: true, Agent: &ai}
+			}
+		}
+		return whoamiOut{Detail: fmt.Sprintf("pane %q does not map to any lasso agent on any host this lasso knows — you may be in a herdr pane lasso did not create, or the lasso that owns it is unreachable.", paneID)}
+	default:
+		return whoamiOut{Detail: fmt.Sprintf("pane id %q matches agents on hosts %s — pane ids are only unique per host, so lasso won't guess which one is you. Call whoami again with `host` set to the host your pane runs on (compare your machine's hostname against the labels in list_hosts).", paneID, hostsOf(matches))}
+	}
 }
 
 // ---------------------------------------------------------------------------
@@ -657,7 +704,7 @@ func waitAgentTool(ctx context.Context, _ *mcp.CallToolRequest, in waitAgentIn) 
 // ---------------------------------------------------------------------------
 
 type closeAgentIn struct {
-	Host           string `json:"host,omitempty" jsonschema:"Host the agent is on; omit for the local box."`
+	Host           string `json:"host,omitempty" jsonschema:"Host the agent is on — pass the host field whoami/list_agents returned with the agent. Omit to search every host this lasso knows: an id that exists on exactly one host is closed there; an id that exists on several hosts is refused so the wrong host's agent is never killed."`
 	AgentID        string `json:"agent_id" jsonschema:"The agent's id."`
 	ClosePane      *bool  `json:"close_pane,omitempty" jsonschema:"Close the agent's herdr pane after killing the process. Defaults to true; set false to leave the pane open as a bare shell."`
 	RemoveWorktree bool   `json:"remove_worktree,omitempty" jsonschema:"For a git agent, also delete its git worktree (discards uncommitted work). Defaults to false. Implies closing the pane."`
@@ -669,14 +716,24 @@ type closeAgentOut struct {
 	RemovedWorktree bool `json:"removed_worktree"` // the git worktree was deleted
 }
 
-func closeAgentTool(_ context.Context, _ *mcp.CallToolRequest, in closeAgentIn) (*mcp.CallToolResult, closeAgentOut, error) {
-	rec, err := findAgentRecord(in.Host, in.AgentID)
+func closeAgentTool(ctx context.Context, _ *mcp.CallToolRequest, in closeAgentIn) (*mcp.CallToolResult, closeAgentOut, error) {
+	agentID := strings.TrimSpace(in.AgentID)
+	if agentID == "" {
+		return nil, closeAgentOut{}, fmt.Errorf("agent_id is required")
+	}
+	// Resolve the id the same way /api/agent/close does: an explicit host scopes
+	// the lookup to that host's records; without one every host's records are
+	// searched — the old default of "local" made a whoami-resolved id from
+	// another host unusable — and an id that somehow exists on several hosts is
+	// refused rather than guessed, since acting on the wrong host's record
+	// would kill an unrelated agent.
+	rec, _, err := resolveCloseTarget(ctx, in.Host, agentID, "")
 	if err != nil {
 		return nil, closeAgentOut{}, err
 	}
 	// Resolve the backend from the record's own host (not the request's), so the
 	// teardown can only ever run against the host the agent actually lives on.
-	b, err := resolveBackend(rec.Host)
+	b, err := agentBackendResolver(rec.Host)
 	if err != nil {
 		return nil, closeAgentOut{}, err
 	}

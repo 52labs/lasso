@@ -1,8 +1,10 @@
 package main
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
+	"strings"
 	"testing"
 	"time"
 )
@@ -118,5 +120,150 @@ func TestResolveWhoamiUnknownPane(t *testing.T) {
 	}
 	if out.Detail == "" {
 		t.Error("expected a detail for an unmanaged pane")
+	}
+}
+
+// ---------------------------------------------------------------------------
+// whoami with no host — cross-host resolution through whoamiTool
+// ---------------------------------------------------------------------------
+
+// The field bug this guards against: the MCP server ran on one box while the
+// caller's pane lived on another, and BOTH hosts had a pane "w1F:p1" mapped to
+// a lasso agent. whoami defaulted host to "local" and identified the caller as
+// the other host's agent — which the caller would then close. Without a host,
+// a cross-host pane-id collision must be refused, naming the candidate hosts.
+func TestWhoamiOmittedHostRefusesCrossHostCollision(t *testing.T) {
+	openTestDB(t)
+	if err := appendAgent("local", AgentRecord{ID: "djexrfh3p79z", Type: "git",
+		RootPane: "w1F:p1", WorkDir: "/w/citadel", CreatedAt: time.Now()}); err != nil {
+		t.Fatal(err)
+	}
+	if err := appendAgent("gigachad", AgentRecord{ID: "dk3n97h1oxig", Type: "git",
+		RootPane: "w1F:p1", WorkDir: "/w/gigachad", CreatedAt: time.Now()}); err != nil {
+		t.Fatal(err)
+	}
+	stubCloseBackends(t, map[string]Backend{
+		"local":    newCloseBackend("local", map[string]string{"w1F:p1": "w1F:p1"}),
+		"gigachad": newCloseBackend("gigachad", map[string]string{"w1F:p1": "w1F:p1"}),
+	})
+
+	_, out, err := whoamiTool(context.Background(), nil, whoamiIn{PaneID: "w1F:p1"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if out.Found || out.Agent != nil {
+		t.Fatalf("expected refusal on a cross-host pane collision, got %+v", out)
+	}
+	for _, h := range []string{"local", "gigachad"} {
+		if !strings.Contains(out.Detail, h) {
+			t.Errorf("detail %q should name candidate host %q", out.Detail, h)
+		}
+	}
+}
+
+// The same collision with an explicit host resolves to THAT host's own agent.
+func TestWhoamiExplicitHostResolvesCollision(t *testing.T) {
+	openTestDB(t)
+	if err := appendAgent("local", AgentRecord{ID: "djexrfh3p79z", Type: "git",
+		RootPane: "w1F:p1", WorkDir: "/w/citadel", CreatedAt: time.Now()}); err != nil {
+		t.Fatal(err)
+	}
+	if err := appendAgent("gigachad", AgentRecord{ID: "dk3n97h1oxig", Type: "git",
+		RootPane: "w1F:p1", WorkDir: "/w/gigachad", CreatedAt: time.Now()}); err != nil {
+		t.Fatal(err)
+	}
+	stubCloseBackends(t, map[string]Backend{
+		"local":    newCloseBackend("local", map[string]string{"w1F:p1": "w1F:p1"}),
+		"gigachad": newCloseBackend("gigachad", map[string]string{"w1F:p1": "w1F:p1"}),
+	})
+
+	_, out, err := whoamiTool(context.Background(), nil, whoamiIn{Host: "gigachad", PaneID: "w1F:p1"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !out.Found || out.Agent == nil {
+		t.Fatalf("expected found with an explicit host, got %+v", out)
+	}
+	if out.Agent.ID != "dk3n97h1oxig" || out.Agent.Host != "gigachad" {
+		t.Errorf("resolved to %s@%s, want dk3n97h1oxig@gigachad", out.Agent.ID, out.Agent.Host)
+	}
+}
+
+// A pane id that exists on exactly one host resolves without a host hint —
+// even when that host is NOT the box the MCP server runs on — and the returned
+// record carries the owning host so close_agent can be pointed at it.
+func TestWhoamiOmittedHostResolvesUniqueRemotePane(t *testing.T) {
+	openTestDB(t)
+	if err := appendAgent("local", AgentRecord{ID: "loc1", Type: "git",
+		RootPane: "wA:p1", WorkDir: "/w/loc1", CreatedAt: time.Now()}); err != nil {
+		t.Fatal(err)
+	}
+	if err := appendAgent("gigachad", AgentRecord{ID: "dk3n97h1oxig", Type: "git",
+		RootPane: "w1F:p1", WorkDir: "/w/gigachad", CreatedAt: time.Now()}); err != nil {
+		t.Fatal(err)
+	}
+	stubCloseBackends(t, map[string]Backend{
+		"local":    newCloseBackend("local", map[string]string{"wA:p1": "wA:p1"}),
+		"gigachad": newCloseBackend("gigachad", map[string]string{"w1F:p1": "w1F:p1"}),
+	})
+
+	_, out, err := whoamiTool(context.Background(), nil, whoamiIn{PaneID: "w1F:p1"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !out.Found || out.Agent == nil {
+		t.Fatalf("expected a unique remote pane to resolve, got %+v", out)
+	}
+	if out.Agent.ID != "dk3n97h1oxig" || out.Agent.Host != "gigachad" {
+		t.Errorf("resolved to %s@%s, want dk3n97h1oxig@gigachad", out.Agent.ID, out.Agent.Host)
+	}
+}
+
+// Without a host, a raw $HERDR_PANE_ID is still canonicalized — through the
+// LOCAL herdr only — so a local caller keeps resolving as before.
+func TestWhoamiOmittedHostCanonicalizesLocalRawID(t *testing.T) {
+	openTestDB(t)
+	if err := appendAgent("local", AgentRecord{ID: "self", Type: "scratch",
+		RootPane: "w55-1", WorkDir: "/w/self", CreatedAt: time.Now()}); err != nil {
+		t.Fatal(err)
+	}
+	stubCloseBackends(t, map[string]Backend{
+		"local": newCloseBackend("local", map[string]string{"p_82": "w55-1"}),
+	})
+
+	_, out, err := whoamiTool(context.Background(), nil, whoamiIn{PaneID: "p_82"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !out.Found || out.Agent == nil || out.Agent.ID != "self" {
+		t.Fatalf("expected the raw id to resolve to the local agent, got %+v", out)
+	}
+}
+
+// A local pane no record of ours claims falls back to peer adoption (the
+// closeme topology: the agent was spawned here by another machine's lasso), so
+// whoami still answers with the adopted record.
+func TestWhoamiOmittedHostAdoptsPeerRecord(t *testing.T) {
+	openTestDB(t) // no local records at all
+	local := newCloseBackend("local", map[string]string{"p_82": "w55-1"})
+	_ = local.MkdirAll("/w/peer-agent", 0o755)
+	stubCloseBackends(t, map[string]Backend{"local": local})
+	stubPeers(t, []string{"citadel"}, func(peer, rootPane string) ([]AgentRecord, error) {
+		if peer == "citadel" && rootPane == "w55-1" {
+			return []AgentRecord{{ID: "dk33", Type: "git", RootPane: "w55-1",
+				WorkspaceID: "w55", WorkDir: "/w/peer-agent"}}, nil
+		}
+		return nil, nil
+	})
+
+	_, out, err := whoamiTool(context.Background(), nil, whoamiIn{PaneID: "p_82"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !out.Found || out.Agent == nil || out.Agent.ID != "dk33" {
+		t.Fatalf("expected the peer's record to be adopted, got %+v", out)
+	}
+	if out.Agent.Host != "local" {
+		t.Errorf("adopted agent host = %q, want local (the pane lives here)", out.Agent.Host)
 	}
 }

@@ -18,10 +18,11 @@ import (
 // agent — and the teardown always runs on the backend of the host the resolved
 // record lives on (closeAgentRecord enforces the match).
 
-// closeBackendResolver resolves a host name to the Backend the close path
-// drives. A package var so tests can substitute fake hosts without a live
-// herdr or ssh fleet.
-var closeBackendResolver = resolveBackend
+// agentBackendResolver resolves a host name to the Backend the agent
+// resolution paths (this close path, plus the whoami and close_agent MCP
+// tools) drive. A package var so tests can substitute fake hosts without a
+// live herdr or ssh fleet.
+var agentBackendResolver = resolveBackend
 
 // serveAgentClose soft-closes a single agent: it kills the agent process and
 // closes its pane (the same teardown the close_agent MCP tool performs), so a
@@ -59,7 +60,7 @@ func serveAgentClose(w http.ResponseWriter, r *http.Request) {
 	}
 	// Close through the backend of the host the record lives on — never the
 	// request's active host, and never blindly "local".
-	b, err := closeBackendResolver(rec.Host)
+	b, err := agentBackendResolver(rec.Host)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusBadGateway)
 		return
@@ -73,7 +74,8 @@ func serveAgentClose(w http.ResponseWriter, r *http.Request) {
 }
 
 // resolveCloseTarget maps a close request to the one agent record it may act
-// on. With a host, resolution is scoped to that host's records. Without one,
+// on (shared with the close_agent MCP tool, which resolves agent ids through
+// it). With a host, resolution is scoped to that host's records. Without one,
 // every host in this lasso's own db is searched; a unique match wins, and a
 // pane/agent id that matches records on several hosts is refused (the caller
 // must pass host) rather than guessed at. A pane no host's records claim may
@@ -113,7 +115,7 @@ func resolveCloseTarget(ctx context.Context, host, agentID, paneID string) (Agen
 	// Pane path. With an explicit host, resolve the pane on that host only —
 	// the caller has vouched for where the pane lives.
 	if host != "" {
-		b, err := closeBackendResolver(host)
+		b, err := agentBackendResolver(host)
 		if err != nil {
 			return AgentRecord{}, http.StatusBadGateway, err
 		}
@@ -151,7 +153,7 @@ func resolveCloseTarget(ctx context.Context, host, agentID, paneID string) (Agen
 	case 1:
 		return matches[0], 0, nil
 	case 0:
-		if b, err := closeBackendResolver("local"); err == nil {
+		if b, err := agentBackendResolver("local"); err == nil {
 			if rec, ok, aerr := adoptPeerAgent(ctx, b, paneID); aerr != nil {
 				return AgentRecord{}, http.StatusConflict, aerr
 			} else if ok {
@@ -186,7 +188,7 @@ func paneMatchesAcrossHosts(paneID string) ([]AgentRecord, error) {
 	for host, recs := range byHost {
 		forms := map[string]bool{paneID: true}
 		if isLocalHost(host) {
-			if b, err := closeBackendResolver(host); err == nil {
+			if b, err := agentBackendResolver(host); err == nil {
 				if info, ok := paneGet(b, paneID); ok {
 					forms[info.PaneID] = true
 				}
