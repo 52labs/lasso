@@ -3,6 +3,5 @@
 shot.png
 shot-*.png
 .authpass
-.claude/skills/wrap/
 /src/lasso
 /web/
