@@ -36,6 +36,7 @@ import { qk } from "@/lib/query"
 import {
   bootTermFrame,
   focusTerminalFrame,
+  onTerminalFocus,
   whenTerminalReady,
 } from "@/lib/terminal"
 import { GRID_FRAME_CLASS } from "@/lib/theme"
@@ -330,30 +331,6 @@ export function GridTab({
       ?.scrollIntoView({ block: "nearest", behavior: "smooth" })
     focusTerminalFrame(fid)
   }
-
-  // Clicking INSIDE a cell's terminal moves keyboard focus into its iframe —
-  // the parent window blurs and the iframe element becomes activeElement.
-  // Catch that and promote it to a real herdr focus so the border highlight and
-  // sidebar follow the terminal the user is actually typing in. (An app-level
-  // window blur — switching browser tabs — re-finds the already-focused frame
-  // and the guard in focusInGridBackend makes it a no-op.)
-  React.useEffect(() => {
-    if (!active) return
-    const onBlur = () => {
-      setTimeout(() => {
-        const el = document.activeElement
-        if (
-          !(el instanceof HTMLIFrameElement) ||
-          !el.id.startsWith("gridterm-")
-        )
-          return
-        const p = all?.find((x) => frameId(x.host, x.terminal_id) === el.id)
-        if (p) focusInGridBackend(p)
-      }, 0)
-    }
-    window.addEventListener("blur", onBlur)
-    return () => window.removeEventListener("blur", onBlur)
-  }, [active, all, focusInGridBackend])
 
   // Honor a focus request from App (an agent created from the New Agent dialog
   // while the Grid view was active): once the new pane shows up in a payload,
@@ -699,6 +676,7 @@ export function GridTab({
                 watched={watched.has(cellKey(p))}
                 onToggleWatch={() => toggleWatch(cellKey(p))}
                 onClick={(e) => onCellClick(e, p)}
+                onBodyFocus={() => focusInGridBackend(p)}
                 onOpenInHerdr={() => void focusPane(p)}
                 onRename={() => requestRename(p)}
                 onClose={() => requestClose(p)}
@@ -799,6 +777,7 @@ function GridCell({
   watched,
   onToggleWatch,
   onClick,
+  onBodyFocus,
   onOpenInHerdr,
   onRename,
   onClose,
@@ -811,6 +790,8 @@ function GridCell({
   watched: boolean
   onToggleWatch: () => void
   onClick: (e: React.MouseEvent | React.KeyboardEvent) => void
+  /** The user clicked into this cell's terminal (its iframe took focus). */
+  onBodyFocus: () => void
   onOpenInHerdr: () => void
   onRename: () => void
   onClose: () => void
@@ -875,6 +856,16 @@ function GridCell({
     },
     [p.host, p.terminal_id]
   )
+
+  // Report clicks into the terminal (its window taking focus) so GridTab can
+  // promote this pane to herdr's focused pane. Kept in a ref so the listener
+  // attaches once per iframe rather than churning on every poll re-render.
+  const onBodyFocusRef = React.useRef(onBodyFocus)
+  onBodyFocusRef.current = onBodyFocus
+  React.useEffect(() => {
+    if (!src) return
+    return onTerminalFocus(id, () => onBodyFocusRef.current())
+  }, [src, id])
 
   // Wire xterm (shift+enter, image paste, …) once the iframe exists, and keep the
   // server-side attach alive while the cell is mounted.

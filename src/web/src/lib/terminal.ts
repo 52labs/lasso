@@ -515,6 +515,41 @@ export function whenTerminalReady(id: string, onReady: () => void): () => void {
   }
 }
 
+// Invoke cb whenever a terminal iframe's window gains keyboard focus (the user
+// clicked into it). Listening on the frame's own window is the only reliable
+// signal: the parent window's blur only fires on the FIRST hop into an iframe —
+// focus moving between two iframes never re-blurs the parent. Retries until
+// the frame window exists (the iframe may still be loading). Returns cleanup.
+export function onTerminalFocus(id: string, cb: () => void): () => void {
+  let done = false
+  let tick: ReturnType<typeof setTimeout> | null = null
+  let win: Window | null = null
+  const attach = () => {
+    if (done) return
+    try {
+      const w = frameWindow(id)
+      if (w) {
+        win = w
+        w.addEventListener("focus", cb)
+        return
+      }
+    } catch {
+      /* same-origin; ignore */
+    }
+    tick = setTimeout(attach, 200)
+  }
+  attach()
+  return () => {
+    done = true
+    if (tick) clearTimeout(tick)
+    try {
+      win?.removeEventListener("focus", cb)
+    } catch {
+      /* ignore */
+    }
+  }
+}
+
 // Hand keyboard focus to a terminal iframe by element id (used by grid cells,
 // where clicking a header should let the user type without a second click).
 export function focusTerminalFrame(id: string) {
