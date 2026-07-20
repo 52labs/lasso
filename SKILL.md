@@ -44,9 +44,14 @@ The lasso MCP server runs inside lasso's own process, **not your shell**, so it
 cannot read your environment — you must pass `$HERDR_PANE_ID` yourself.
 
 - **`whoami`** — pass `$HERDR_PANE_ID` as `pane_id` to get your own agent record,
-  including your agent `id`.
-- **`close_agent`** — call with the `id` `whoami` returned (its `agent_id`) to
-  shut yourself down (the long-hand of `lasso closeme`).
+  including your agent `id` and the `host` your pane lives on. Pane ids are only
+  unique **per host**, so if the same pane id exists on several hosts, whoami
+  refuses to guess (`found:false`) and names the candidate hosts — call it again
+  with `host` set to the machine you actually run on (compare `hostname` against
+  the labels from `list_hosts`).
+- **`close_agent`** — call with the `id` **and `host`** `whoami` returned to
+  shut yourself down (the long-hand of `lasso closeme`). Never guess the host:
+  passing the wrong one (or another agent's id) kills an unrelated agent.
 
 If `$HERDR_PANE_ID` is empty, you are not running under lasso and none of this
 applies to you.

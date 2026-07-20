@@ -44,8 +44,8 @@ func (b *closeBackend) HerdrCall(method string, params any) (json.RawMessage, er
 // host absent from the map behaves like an unreachable one.
 func stubCloseBackends(t *testing.T, backends map[string]Backend) {
 	t.Helper()
-	prev := closeBackendResolver
-	closeBackendResolver = func(host string) (Backend, error) {
+	prev := agentBackendResolver
+	agentBackendResolver = func(host string) (Backend, error) {
 		if host == "" {
 			host = "local"
 		}
@@ -54,7 +54,7 @@ func stubCloseBackends(t *testing.T, backends map[string]Backend) {
 		}
 		return nil, fmt.Errorf("host %q not available", host)
 	}
-	t.Cleanup(func() { closeBackendResolver = prev })
+	t.Cleanup(func() { agentBackendResolver = prev })
 }
 
 // stubPeers fakes the peer-lasso fleet the adoption path consults.
@@ -296,6 +296,72 @@ func TestServeAgentCloseRejectsGET(t *testing.T) {
 	serveAgentClose(rec, req)
 	if rec.Code != http.StatusMethodNotAllowed {
 		t.Fatalf("status = %d, want 405 for GET", rec.Code)
+	}
+}
+
+// The close_agent MCP tool without a host must not assume "local": an id that
+// exists on exactly one host resolves there and the teardown runs through that
+// host's backend.
+func TestCloseAgentToolOmittedHostFindsRemoteAgent(t *testing.T) {
+	openTestDB(t)
+	if err := appendAgent("citadel", AgentRecord{ID: "rem1", Type: "git", RootPane: "wC:p3",
+		WorkDir: "/w/rem1", CreatedAt: time.Now()}); err != nil {
+		t.Fatal(err)
+	}
+	local := newCloseBackend("local", nil)
+	citadel := newCloseBackend("citadel", map[string]string{"wC:p3": "wC:p3"})
+	stubCloseBackends(t, map[string]Backend{"local": local, "citadel": citadel})
+
+	_, out, err := closeAgentTool(context.Background(), nil, closeAgentIn{AgentID: "rem1"})
+	if err != nil {
+		t.Fatalf("closeAgentTool: %v", err)
+	}
+	if !out.PaneClosed || len(citadel.closed) != 1 || citadel.closed[0] != "wC:p3" {
+		t.Errorf("citadel closed = %v (out %+v), want [wC:p3]", citadel.closed, out)
+	}
+	if len(local.closed) != 0 {
+		t.Errorf("local closed = %v, want none — the close leaked onto the wrong host", local.closed)
+	}
+}
+
+// Even when both hosts have an agent in a pane with the SAME pane id (the
+// cross-host collision), closing by agent id with an explicit host tears down
+// exactly the named host's agent — the colliding local pane is untouched.
+// (Agent ids themselves cannot collide within one lasso's db — agents.id is
+// the primary key — so the id, unlike the pane id, pins a single record; the
+// no-host multi-match refusal in resolveCloseTarget stays as a backstop.)
+func TestCloseAgentToolExplicitHostWithPaneCollision(t *testing.T) {
+	openTestDB(t)
+	if err := appendAgent("local", AgentRecord{ID: "loc1", Type: "git", RootPane: "wR:p1",
+		WorkDir: "/w/loc1", CreatedAt: time.Now()}); err != nil {
+		t.Fatal(err)
+	}
+	if err := appendAgent("citadel", AgentRecord{ID: "rem1", Type: "git", RootPane: "wR:p1",
+		WorkDir: "/w/rem1", CreatedAt: time.Now()}); err != nil {
+		t.Fatal(err)
+	}
+	local := newCloseBackend("local", map[string]string{"wR:p1": "wR:p1"})
+	citadel := newCloseBackend("citadel", map[string]string{"wR:p1": "wR:p1"})
+	stubCloseBackends(t, map[string]Backend{"local": local, "citadel": citadel})
+
+	_, _, err := closeAgentTool(context.Background(), nil, closeAgentIn{Host: "citadel", AgentID: "rem1"})
+	if err != nil {
+		t.Fatalf("closeAgentTool: %v", err)
+	}
+	if len(citadel.closed) != 1 || citadel.closed[0] != "wR:p1" {
+		t.Errorf("citadel closed = %v, want [wR:p1]", citadel.closed)
+	}
+	if len(local.closed) != 0 {
+		t.Errorf("local closed = %v, want none — the close leaked onto the colliding local pane", local.closed)
+	}
+}
+
+// close_agent needs an agent_id — an empty one must not fall through to pane
+// resolution and its confusing not-found message.
+func TestCloseAgentToolRequiresAgentID(t *testing.T) {
+	_, _, err := closeAgentTool(context.Background(), nil, closeAgentIn{})
+	if err == nil || !strings.Contains(err.Error(), "agent_id") {
+		t.Fatalf("expected an agent_id-required error, got %v", err)
 	}
 }
 
