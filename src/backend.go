@@ -82,6 +82,29 @@ func setBackend(b Backend) {
 	active.mu.Unlock()
 }
 
+// herdrReadTimeout is how long we wait for a herdr method's response. Most calls
+// are cheap reads that should fail fast so the UI stays snappy, but the worktree
+// and workspace mutations shell out to git — `git worktree add` alone runs several
+// seconds on a large repo, more once it's crossing an ssh-forwarded socket to a
+// remote host. Holding those to the read default made createAgent's worktree.create
+// time out and surface as a 502 from the New Agent modal.
+const herdrReadTimeout = 3 * time.Second
+
+var herdrSlowMethods = map[string]time.Duration{
+	"worktree.create":  120 * time.Second,
+	"worktree.remove":  120 * time.Second,
+	"workspace.create": 120 * time.Second,
+	"workspace.rename": 30 * time.Second,
+	"pane.close":       30 * time.Second,
+}
+
+func herdrTimeoutFor(method string) time.Duration {
+	if d, ok := herdrSlowMethods[method]; ok {
+		return d
+	}
+	return herdrReadTimeout
+}
+
 // herdrCallSock does one newline-delimited JSON request/response round-trip on a
 // fresh connection to sock. This is the body the old package-level herdrCall
 // used; both backends share it (local socket vs forwarded remote socket).
@@ -96,7 +119,7 @@ func herdrCallSock(sock, method string, params any) (json.RawMessage, error) {
 	if _, err := conn.Write(append(b, '\n')); err != nil {
 		return nil, err
 	}
-	_ = conn.SetReadDeadline(time.Now().Add(3 * time.Second))
+	_ = conn.SetReadDeadline(time.Now().Add(herdrTimeoutFor(method)))
 	line, err := bufio.NewReader(conn).ReadBytes('\n')
 	if err != nil && len(line) == 0 {
 		return nil, err
