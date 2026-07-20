@@ -404,6 +404,25 @@
   overflow: hidden;
   text-overflow: ellipsis;
 }
+/* The watch star: the one real button inside the header (which is a div so
+   the two don't nest). Muted until starred, accent when watched. */
+.termcell-star {
+  flex: 0 0 auto;
+  border: 0;
+  background: none;
+  padding: 0 2px;
+  font: inherit;
+  font-size: 13px;
+  line-height: 1;
+  color: var(--h-muted);
+  transition: color 0.12s;
+}
+.termcell-star:hover {
+  color: var(--h-fg);
+}
+.termcell-star.watched {
+  color: var(--h-accent);
+}
 .termcell-agent {
   flex: 0 0 auto;
   color: var(--h-muted);

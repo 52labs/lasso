@@ -75,9 +75,15 @@ export function GridTab({
   const { activePaneID, host: activeHost } = useApp()
   const ui = useUIState()
   const agentsOnly = ui.grid_agents_only
+  const mode = ui.grid_mode
   const hidden = React.useMemo(
     () => new Set(ui.grid_hidden_hosts),
     [ui.grid_hidden_hosts]
+  )
+  // Starred panes (host|pane_id keys) — the only panes shown in Watch mode.
+  const watched = React.useMemo(
+    () => new Set(ui.grid_watched),
+    [ui.grid_watched]
   )
 
   // Measure the grid viewport; the tall-first column/row math derives from it
@@ -140,9 +146,14 @@ export function GridTab({
   const panes = React.useMemo(
     () =>
       all
-        ? all.filter((p) => (!agentsOnly || p.has_agent) && !hidden.has(p.host))
+        ? all.filter(
+            (p) =>
+              (!agentsOnly || p.has_agent) &&
+              !hidden.has(p.host) &&
+              (mode !== "watch" || watched.has(cellKey(p)))
+          )
         : null,
-    [all, agentsOnly, hidden]
+    [all, agentsOnly, hidden, mode, watched]
   )
 
   // Tall-first layout: as many columns as fit at the min cell width (so a
@@ -165,6 +176,15 @@ export function GridTab({
 
   const toggleAgentsOnly = () => patchUIState({ grid_agents_only: !agentsOnly })
 
+  const setMode = (m: "all" | "watch") => patchUIState({ grid_mode: m })
+
+  const toggleWatch = (key: string) => {
+    const next = new Set(watched)
+    if (next.has(key)) next.delete(key)
+    else next.add(key)
+    patchUIState({ grid_watched: Array.from(next) })
+  }
+
   const toggleHost = (host: string) => {
     const next = new Set(hidden)
     if (next.has(host)) next.delete(host)
@@ -181,8 +201,12 @@ export function GridTab({
   }
 
   // Header click: plain click focuses the pane in Herdr; ⌘/Ctrl/Shift-click
-  // toggles selection instead.
-  const onCellClick = (e: React.MouseEvent, p: GridPane) => {
+  // toggles selection instead. (Also fired for keyboard Enter/Space — only the
+  // modifier keys are read off the event.)
+  const onCellClick = (
+    e: React.MouseEvent | React.KeyboardEvent,
+    p: GridPane
+  ) => {
     if (e.metaKey || e.ctrlKey || e.shiftKey) {
       toggleSelect(cellKey(p))
       return
@@ -249,6 +273,30 @@ export function GridTab({
   return (
     <div className="flex min-h-0 flex-1 flex-col">
       <div className="flex shrink-0 flex-wrap items-center gap-2 border-border border-b px-2 py-1.5">
+        {/* All / Watch segmented toggle: All is the classic every-pane wall,
+            Watch shows only starred panes (persisted server-side). */}
+        <div className="flex overflow-hidden rounded-full border border-border text-[11px]">
+          {(["all", "watch"] as const).map((m) => (
+            <button
+              key={m}
+              type="button"
+              onClick={() => setMode(m)}
+              aria-pressed={mode === m}
+              className={cn(
+                "px-2 py-0.5 transition-colors",
+                mode === m
+                  ? "bg-accent text-foreground"
+                  : "text-muted-foreground hover:text-foreground"
+              )}
+              title={
+                m === "all" ? "Show every pane" : "Show only watched panes"
+              }
+            >
+              {m === "all" ? "All" : "Watch"}
+            </button>
+          ))}
+        </div>
+
         {selected.size > 0 ? (
           <>
             <span className="text-foreground text-xs">
@@ -275,11 +323,13 @@ export function GridTab({
         ) : (
           <span className="text-muted-foreground text-xs">
             {panes
-              ? `${panes.length} pane${panes.length === 1 ? "" : "s"}${
-                  panes.length !== (all?.length ?? 0)
-                    ? ` of ${all?.length}`
-                    : ""
-                }`
+              ? mode === "watch"
+                ? `${panes.length} watched`
+                : `${panes.length} pane${panes.length === 1 ? "" : "s"}${
+                    panes.length !== (all?.length ?? 0)
+                      ? ` of ${all?.length}`
+                      : ""
+                  }`
               : ""}
           </span>
         )}
@@ -370,9 +420,13 @@ export function GridTab({
           <div className="empty">loading panes…</div>
         ) : panes.length === 0 ? (
           <div className="empty">
-            {agentsOnly || hidden.size
-              ? "no panes match the filters"
-              : "no panes"}
+            {mode === "watch"
+              ? watched.size === 0
+                ? "no watched panes yet — star ☆ panes to build your watch list"
+                : "no watched panes are running (or they're hidden by filters)"
+              : agentsOnly || hidden.size
+                ? "no panes match the filters"
+                : "no panes"}
           </div>
         ) : (
           panes.map((p) => (
@@ -389,6 +443,8 @@ export function GridTab({
                     : !!p.focused
                   : false
               }
+              watched={watched.has(cellKey(p))}
+              onToggleWatch={() => toggleWatch(cellKey(p))}
               onClick={(e) => onCellClick(e, p)}
               onRename={() => requestRename(p)}
               onClose={() => requestClose(p)}
@@ -485,6 +541,8 @@ function GridCell({
   selected,
   selectionCount,
   focused,
+  watched,
+  onToggleWatch,
   onClick,
   onRename,
   onClose,
@@ -494,7 +552,9 @@ function GridCell({
   selected: boolean
   selectionCount: number
   focused: boolean
-  onClick: (e: React.MouseEvent) => void
+  watched: boolean
+  onToggleWatch: () => void
+  onClick: (e: React.MouseEvent | React.KeyboardEvent) => void
   onRename: () => void
   onClose: () => void
 }) {
@@ -605,11 +665,20 @@ function GridCell({
     >
       <ContextMenu>
         <ContextMenuTrigger asChild>
-          <button
-            type="button"
+          {/* biome-ignore lint/a11y/useSemanticElements: the star inside is a
+              real <button>, and buttons can't nest. */}
+          <div
+            role="button"
+            tabIndex={0}
             className="termcell-head"
             title={`${tip}\n\nclick to focus in Herdr · ⌘/Ctrl-click to select`}
             onClick={onClick}
+            onKeyDown={(e) => {
+              if (e.key === "Enter" || e.key === " ") {
+                e.preventDefault()
+                onClick(e)
+              }
+            }}
           >
             <span className="termcell-host">{p.host_label}</span>
             <span className="termcell-title">
@@ -621,7 +690,19 @@ function GridCell({
                 ● {p.agent || "agent"}
               </span>
             )}
-          </button>
+            <button
+              type="button"
+              className={cn("termcell-star", watched && "watched")}
+              aria-pressed={watched}
+              title={watched ? "Stop watching" : "Watch this pane"}
+              onClick={(e) => {
+                e.stopPropagation()
+                onToggleWatch()
+              }}
+            >
+              {watched ? "★" : "☆"}
+            </button>
+          </div>
         </ContextMenuTrigger>
         <ContextMenuContent>
           <ContextMenuItem onSelect={onRename}>
