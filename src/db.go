@@ -198,10 +198,23 @@ func getSetting(key string) (string, error) {
 // server-side (one JSON blob in settings) rather than in localStorage so the UI
 // looks the same across browsers/devices reaching the same lasso.
 type uiState struct {
-	GridAgentsOnly   bool     `json:"grid_agents_only"`
-	GridHiddenHosts  []string `json:"grid_hidden_hosts"`
-	GridSelected     []string `json:"grid_selected"`
-	SidebarCollapsed bool     `json:"sidebar_collapsed"`
+	GridAgentsOnly  bool     `json:"grid_agents_only"`
+	GridHiddenHosts []string `json:"grid_hidden_hosts"`
+	GridSelected    []string `json:"grid_selected"`
+	// GridMode is the Grid tab's visibility mode: "all" shows every pane (minus
+	// filters), "watch" shows only the panes in GridWatched. Anything else reads
+	// as "all" (normalized in getUIState).
+	GridMode string `json:"grid_mode"`
+	// GridWatched holds host|pane_id keys of starred (watched) panes.
+	GridWatched []string `json:"grid_watched"`
+	// GridRailAgentsOnly filters the Grid tab's pane rail to agent panes.
+	GridRailAgentsOnly bool `json:"grid_rail_agents_only"`
+	SidebarCollapsed   bool `json:"sidebar_collapsed"`
+	// SidebarPct is the right sidebar's open width as a percentage of the panel
+	// group. Synced (rather than device-local) because the sidebar's footprint
+	// sets the shared herdr pty's width — tabs disagreeing about layout render
+	// blank gutters. 0 = never set; the frontend falls back to its default.
+	SidebarPct float64 `json:"sidebar_pct"`
 	// FilesClickNavigates controls the Files tab's folder-click behavior: when
 	// true (the default) clicking a folder re-roots the tree into it; when false
 	// it expands the folder in place. Defaulted true in getUIState so a fresh
@@ -216,6 +229,8 @@ func getUIState() (uiState, error) {
 	us := uiState{
 		GridHiddenHosts:     []string{},
 		GridSelected:        []string{},
+		GridMode:            "all",
+		GridWatched:         []string{},
 		FilesClickNavigates: true,
 	}
 	var v string
@@ -232,6 +247,12 @@ func getUIState() (uiState, error) {
 	}
 	if us.GridSelected == nil {
 		us.GridSelected = []string{}
+	}
+	if us.GridWatched == nil {
+		us.GridWatched = []string{}
+	}
+	if us.GridMode != "watch" {
+		us.GridMode = "all"
 	}
 	return us, nil
 }

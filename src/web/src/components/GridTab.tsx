@@ -1,7 +1,7 @@
 import { useQuery } from "@tanstack/react-query"
 import * as React from "react"
 import { toast } from "sonner"
-
+import { GridRail } from "@/components/GridRail"
 import {
   AlertDialog,
   AlertDialogAction,
@@ -28,11 +28,17 @@ import {
 } from "@/components/ui/dialog"
 import { Input } from "@/components/ui/input"
 import { api, type GridPane } from "@/lib/api"
-import { useApp } from "@/lib/app-store"
+import { lsGet, lsSet, useApp } from "@/lib/app-store"
 import { tilde } from "@/lib/format"
-import { focusPaneInHerdr } from "@/lib/pane-focus"
+import { loadSeen, markSeen, reconcileSeen } from "@/lib/grid-seen"
+import { focusPaneInHerdr, focusPaneInPlace } from "@/lib/pane-focus"
 import { qk } from "@/lib/query"
-import { bootTermFrame, whenTerminalReady } from "@/lib/terminal"
+import {
+  bootTermFrame,
+  focusTerminalFrame,
+  onTerminalFocus,
+  whenTerminalReady,
+} from "@/lib/terminal"
 import { GRID_FRAME_CLASS } from "@/lib/theme"
 import { patchUIState, useUIState } from "@/lib/ui-state"
 import { cn } from "@/lib/utils"
@@ -46,14 +52,33 @@ const POLL_MS = 2500
 // ttyd alive (the server reaps idle attaches after ~30s). Comfortably under that.
 const KEEPALIVE_MS = 18_000
 
-// Grid layout constants — must match .termgrid in index.css (gap) and .termcell
-// (flex-basis) so the measured column count matches what flexbox actually packs.
+// Grid layout constants — gap/padding must match .termgrid in index.css. The
+// column count and row height are computed from the viewport (tall-first: as
+// many columns as fit at GRID_MIN_CELL_W, cells stretched to fill the height,
+// never shorter than GRID_MIN_CELL_H) and applied via CSS vars.
 const GRID_GAP = 14
-const GRID_MIN_CELL = 360
+const GRID_PAD = 14
+const GRID_MIN_CELL_W = 360
+const GRID_MIN_CELL_H = 260
 
 // cellKey uniquely identifies a pane across hosts (pane ids are only unique
 // within a host).
 const cellKey = (p: GridPane) => `${p.host}|${p.pane_id}`
+
+// Whether the pane rail is open — device-local (like the sidebar width), so a
+// small laptop can keep it collapsed while a big monitor leaves it open.
+const RAIL_OPEN_KEY = "lasso-grid-rail-open"
+
+// A request (from App) to focus a pane in the grid once it shows up in a grid
+// payload — e.g. an agent just created from the New Agent dialog while the
+// Grid view was active. ts makes each request distinct so the same pane can be
+// requested twice.
+export interface GridFocusRequest {
+  host: string
+  paneId?: string
+  workspaceId?: string
+  ts: number
+}
 
 // The Grid tab: a wall of live terminals, one per herdr pane, spanning every
 // reachable + protocol-compatible host. Each cell body is an interactive
@@ -64,36 +89,75 @@ const cellKey = (p: GridPane) => `${p.host}|${p.pane_id}`
 export function GridTab({
   active,
   onFocusInHerdr,
+  focusRequest,
 }: {
   active: boolean
   onFocusInHerdr: () => void
+  focusRequest?: GridFocusRequest | null
 }) {
   const { activePaneID, host: activeHost } = useApp()
   const ui = useUIState()
   const agentsOnly = ui.grid_agents_only
+  const mode = ui.grid_mode
   const hidden = React.useMemo(
     () => new Set(ui.grid_hidden_hosts),
     [ui.grid_hidden_hosts]
   )
+  // Starred panes (host|pane_id keys) — the only panes shown in Watch mode.
+  const watched = React.useMemo(
+    () => new Set(ui.grid_watched),
+    [ui.grid_watched]
+  )
 
-  // Measure how many columns flexbox will pack so we can place the remainder
-  // (the newest panes, since they sort first) in the top row — which then grows
-  // to fill the full width — rather than leaving a stretched, oversized cell in
-  // the bottom row.
+  // Pane rail (the picker): default collapsed so the grid keeps the full
+  // width; open state persists per device.
+  const [railOpen, setRailOpen] = React.useState(
+    () => lsGet(RAIL_OPEN_KEY) === "1"
+  )
+  const toggleRail = (next?: boolean) => {
+    setRailOpen((cur) => {
+      const v = next ?? !cur
+      lsSet(RAIL_OPEN_KEY, v ? "1" : "0")
+      return v
+    })
+  }
+  // Keys highlighted as "new" in the rail (snapshotted when the +N badge opens
+  // it, cleared when it closes — see the seen-tracking below).
+  const [railHighlight, setRailHighlight] = React.useState<Set<string>>(
+    () => new Set()
+  )
+  React.useEffect(() => {
+    if (!railOpen) setRailHighlight((cur) => (cur.size ? new Set() : cur))
+  }, [railOpen])
+
+  // Which panes this device has already seen (null until first reconcile on a
+  // fresh device, so the "+N new" badge can't flash before seeding). Mirrors
+  // the localStorage set (grid-seen.ts) into state so the badge is reactive.
+  const [seen, setSeen] = React.useState<Set<string> | null>(() => loadSeen())
+  const mark = React.useCallback((keys: Iterable<string>) => {
+    markSeen(keys)
+    setSeen((cur) => {
+      if (!cur) return cur
+      let next: Set<string> | null = null
+      for (const k of keys) {
+        if (!cur.has(k)) {
+          next ??= new Set(cur)
+          next.add(k)
+        }
+      }
+      return next ?? cur
+    })
+  }, [])
+
+  // Measure the grid viewport; the tall-first column/row math derives from it
+  // in render (clientHeight of the scroll container is the viewport height, not
+  // the content height, which is exactly what the row math wants).
   const gridRef = React.useRef<HTMLDivElement>(null)
-  const [cols, setCols] = React.useState(1)
+  const [box, setBox] = React.useState({ w: 0, h: 0 })
   React.useLayoutEffect(() => {
     const el = gridRef.current
     if (!el) return
-    const measure = () => {
-      const content = el.clientWidth - GRID_GAP * 2 // .termgrid horizontal padding
-      setCols(
-        Math.max(
-          1,
-          Math.floor((content + GRID_GAP) / (GRID_MIN_CELL + GRID_GAP))
-        )
-      )
-    }
+    const measure = () => setBox({ w: el.clientWidth, h: el.clientHeight })
     measure()
     const ro = new ResizeObserver(measure)
     ro.observe(el)
@@ -134,6 +198,22 @@ export function GridTab({
   const all = data?.panes ?? null
   const hostErrors = data?.errors ?? null
 
+  // Reconcile the seen set against each payload (seeds on first ever load,
+  // prunes keys for dead panes so the set stays bounded).
+  React.useEffect(() => {
+    if (!all) return
+    const next = reconcileSeen(new Set(all.map(cellKey)))
+    setSeen((cur) => {
+      if (
+        cur &&
+        cur.size === next.size &&
+        Array.from(next).every((k) => cur.has(k))
+      )
+        return cur
+      return next
+    })
+  }, [all])
+
   // The distinct hosts present, for the per-host filter chips (label kept for
   // display). Only worth showing when more than one host is in play.
   const hosts = React.useMemo(() => {
@@ -142,15 +222,71 @@ export function GridTab({
     return Array.from(m, ([host, label]) => ({ host, label }))
   }, [all])
 
+  // Watch mode shows exactly the starred panes — the agents-only and host
+  // filters (whose toggles are hidden in Watch mode) only shape the All wall.
   const panes = React.useMemo(
     () =>
       all
-        ? all.filter((p) => (!agentsOnly || p.has_agent) && !hidden.has(p.host))
+        ? all.filter((p) =>
+            mode === "watch"
+              ? watched.has(cellKey(p))
+              : (!agentsOnly || p.has_agent) && !hidden.has(p.host)
+          )
         : null,
-    [all, agentsOnly, hidden]
+    [all, agentsOnly, hidden, mode, watched]
+  )
+
+  // A pane counts as seen once it's been on screen: rendered in All mode,
+  // listed while the rail is open, or deliberately starred.
+  React.useEffect(() => {
+    if (active && mode === "all" && panes) mark(panes.map(cellKey))
+  }, [active, mode, panes, mark])
+  React.useEffect(() => {
+    if (railOpen && all) mark(all.map(cellKey))
+  }, [railOpen, all, mark])
+  React.useEffect(() => {
+    if (watched.size) mark(watched)
+  }, [watched, mark])
+
+  // The unseen, unstarred panes backing the Watch-mode "+N new" badge.
+  const newKeys = React.useMemo(() => {
+    const s = new Set<string>()
+    if (mode !== "watch" || !all || !seen) return s
+    for (const p of all) {
+      const k = cellKey(p)
+      if (!seen.has(k) && !watched.has(k)) s.add(k)
+    }
+    return s
+  }, [mode, all, seen, watched])
+
+  // Tall-first layout: as many columns as fit at the min cell width (so a
+  // handful of panes becomes one row of tall columns), rows stretched to fill
+  // the viewport height down to a floor — past which the grid scrolls like the
+  // old fixed-height wall.
+  const n = panes?.length ?? 0
+  const availW = box.w - GRID_PAD * 2
+  const availH = box.h - GRID_PAD * 2
+  const maxCols = Math.max(
+    1,
+    Math.floor((availW + GRID_GAP) / (GRID_MIN_CELL_W + GRID_GAP))
+  )
+  const cols = Math.max(1, Math.min(n || 1, maxCols))
+  const rows = Math.ceil(Math.max(n, 1) / cols)
+  const cellH = Math.max(
+    GRID_MIN_CELL_H,
+    Math.floor((availH - (rows - 1) * GRID_GAP) / rows)
   )
 
   const toggleAgentsOnly = () => patchUIState({ grid_agents_only: !agentsOnly })
+
+  const setMode = (m: "all" | "watch") => patchUIState({ grid_mode: m })
+
+  const toggleWatch = (key: string) => {
+    const next = new Set(watched)
+    if (next.has(key)) next.delete(key)
+    else next.add(key)
+    patchUIState({ grid_watched: Array.from(next) })
+  }
 
   const toggleHost = (host: string) => {
     const next = new Set(hidden)
@@ -167,9 +303,82 @@ export function GridTab({
     patchUIState({ grid_selected: Array.from(next) })
   }
 
-  // Header click: plain click focuses the pane in Herdr; ⌘/Ctrl/Shift-click
-  // toggles selection instead.
-  const onCellClick = (e: React.MouseEvent, p: GridPane) => {
+  // In-grid focus: make the pane herdr's focused pane WITHOUT leaving the grid
+  // (no history push, no grid-terminal release, no view switch). The cell's
+  // border highlight and the sidebar file viewer both key off the SSE focus
+  // state (activePaneID / activeCwd / host), so they follow automatically —
+  // including across hosts.
+  const focusInGridBackend = React.useCallback(
+    (p: GridPane) => {
+      if (p.host === activeHost && p.pane_id === activePaneID) return
+      focusPaneInPlace(p, activeHost).catch((e) =>
+        toast.error(`focus failed: ${(e as Error).message}`)
+      )
+    },
+    [activeHost, activePaneID]
+  )
+  const focusInGrid = (p: GridPane) => {
+    const key = cellKey(p)
+    if (panes && !panes.some((x) => cellKey(x) === key)) {
+      // Filtered out of the current view (e.g. unstarred in Watch mode).
+      toast(`${p.host_label} pane isn't shown — star it or switch to All`)
+      return
+    }
+    focusInGridBackend(p)
+    const fid = frameId(p.host, p.terminal_id)
+    document
+      .getElementById(`cell-${fid}`)
+      ?.scrollIntoView({ block: "nearest", behavior: "smooth" })
+    focusTerminalFrame(fid)
+  }
+
+  // Honor a focus request from App (an agent created from the New Agent dialog
+  // while the Grid view was active): once the new pane shows up in a payload,
+  // star it if we're in Watch mode (creating it was an explicit ask to see it),
+  // highlight it, and hand it the keyboard. Retries until a poll includes the
+  // pane; a fresh request forces one refetch so it doesn't wait a full 2.5s.
+  const handledFocusReq = React.useRef(0)
+  React.useEffect(() => {
+    if (focusRequest && focusRequest.ts !== handledFocusReq.current)
+      void reload()
+    // reload is stable (React Query refetch); keyed on the request itself.
+  }, [focusRequest, reload])
+  React.useEffect(() => {
+    const req = focusRequest
+    if (!req || req.ts === handledFocusReq.current || !all) return
+    const p = all.find(
+      (x) =>
+        x.host === req.host &&
+        ((req.paneId && x.pane_id === req.paneId) ||
+          (req.workspaceId && x.workspace_id === req.workspaceId))
+    )
+    if (!p) return // not listed yet — the next poll retries
+    handledFocusReq.current = req.ts
+    const key = cellKey(p)
+    if (mode === "watch" && !watched.has(key))
+      patchUIState({ grid_watched: [...watched, key] })
+    focusInGridBackend(p)
+    // The cell may still be mounting (or just became visible via the star), and
+    // its ttyd takes a moment to attach — retry the scroll + keyboard handoff.
+    const fid = frameId(p.host, p.terminal_id)
+    for (const delay of [150, 600, 1500]) {
+      setTimeout(() => {
+        document
+          .getElementById(`cell-${fid}`)
+          ?.scrollIntoView({ block: "nearest", behavior: "smooth" })
+        focusTerminalFrame(fid)
+      }, delay)
+    }
+  }, [focusRequest, all, mode, watched, focusInGridBackend])
+
+  // Header click: plain click opens the pane in Herdr (clicking into the cell
+  // BODY is the in-grid interaction — the terminal takes the keyboard right
+  // there); ⌘/Ctrl/Shift-click toggles selection instead. (Also fired for
+  // keyboard Enter/Space — only the modifier keys are read off the event.)
+  const onCellClick = (
+    e: React.MouseEvent | React.KeyboardEvent,
+    p: GridPane
+  ) => {
     if (e.metaKey || e.ctrlKey || e.shiftKey) {
       toggleSelect(cellKey(p))
       return
@@ -236,6 +445,62 @@ export function GridTab({
   return (
     <div className="flex min-h-0 flex-1 flex-col">
       <div className="flex shrink-0 flex-wrap items-center gap-2 border-border border-b px-2 py-1.5">
+        <button
+          type="button"
+          onClick={() => toggleRail()}
+          aria-pressed={railOpen}
+          className={cn(
+            "rounded-full border px-2 py-0.5 text-[11px] transition-colors",
+            railOpen
+              ? "border-primary/40 bg-accent text-foreground"
+              : "border-border text-muted-foreground hover:text-foreground"
+          )}
+          title={railOpen ? "Hide the pane list" : "Show the pane list"}
+        >
+          Panes
+        </button>
+
+        {/* All / Watch segmented toggle: All is the classic every-pane wall,
+            Watch shows only starred panes (persisted server-side). */}
+        <div className="flex overflow-hidden rounded-full border border-border text-[11px]">
+          {(["all", "watch"] as const).map((m) => (
+            <button
+              key={m}
+              type="button"
+              onClick={() => setMode(m)}
+              aria-pressed={mode === m}
+              className={cn(
+                "px-2 py-0.5 transition-colors",
+                mode === m
+                  ? "bg-accent text-foreground"
+                  : "text-muted-foreground hover:text-foreground"
+              )}
+              title={
+                m === "all" ? "Show every pane" : "Show only watched panes"
+              }
+            >
+              {m === "all" ? "All" : "Watch"}
+            </button>
+          ))}
+        </div>
+
+        {/* Panes that appeared since this device last looked — Watch mode only.
+            Clicking opens the rail with the new rows highlighted (a snapshot,
+            since opening the rail immediately marks everything seen). */}
+        {newKeys.size > 0 && (
+          <button
+            type="button"
+            onClick={() => {
+              setRailHighlight(new Set(newKeys))
+              toggleRail(true)
+            }}
+            className="rounded-full border border-primary/40 bg-accent px-2 py-0.5 text-[11px] text-foreground transition-colors hover:border-primary"
+            title="Panes that appeared since you last looked — click to review"
+          >
+            +{newKeys.size} new
+          </button>
+        )}
+
         {selected.size > 0 ? (
           <>
             <span className="text-foreground text-xs">
@@ -262,17 +527,21 @@ export function GridTab({
         ) : (
           <span className="text-muted-foreground text-xs">
             {panes
-              ? `${panes.length} pane${panes.length === 1 ? "" : "s"}${
-                  panes.length !== (all?.length ?? 0)
-                    ? ` of ${all?.length}`
-                    : ""
-                }`
+              ? mode === "watch"
+                ? `${panes.length} watched`
+                : `${panes.length} pane${panes.length === 1 ? "" : "s"}${
+                    panes.length !== (all?.length ?? 0)
+                      ? ` of ${all?.length}`
+                      : ""
+                  }`
               : ""}
           </span>
         )}
 
-        {/* Per-host filter chips (only when more than one host is present). */}
-        {hosts.length > 1 &&
+        {/* Per-host filter chips (only when more than one host is present, and
+            only in All mode — Watch is already an explicit pane list). */}
+        {mode === "all" &&
+          hosts.length > 1 &&
           hosts.map((h) => {
             const on = !hidden.has(h.host)
             return (
@@ -300,26 +569,28 @@ export function GridTab({
             )
           })}
 
-        <button
-          type="button"
-          onClick={toggleAgentsOnly}
-          aria-pressed={agentsOnly}
-          className={cn(
-            "ml-auto flex items-center gap-1.5 rounded-full border px-2 py-0.5 text-[11px] transition-colors",
-            agentsOnly
-              ? "border-primary/40 bg-accent text-foreground"
-              : "border-border text-muted-foreground hover:text-foreground"
-          )}
-          title="Show only panes with an associated agent"
-        >
-          <span
+        {mode === "all" && (
+          <button
+            type="button"
+            onClick={toggleAgentsOnly}
+            aria-pressed={agentsOnly}
             className={cn(
-              "size-2 rounded-full",
-              agentsOnly ? "bg-primary" : "bg-muted-foreground/40"
+              "ml-auto flex items-center gap-1.5 rounded-full border px-2 py-0.5 text-[11px] transition-colors",
+              agentsOnly
+                ? "border-primary/40 bg-accent text-foreground"
+                : "border-border text-muted-foreground hover:text-foreground"
             )}
-          />
-          Agents only
-        </button>
+            title="Show only panes with an associated agent"
+          >
+            <span
+              className={cn(
+                "size-2 rounded-full",
+                agentsOnly ? "bg-primary" : "bg-muted-foreground/40"
+              )}
+            />
+            Agents only
+          </button>
+        )}
       </div>
 
       {/* Per-host failures (unreachable, protocol drift) — the rest still renders. */}
@@ -337,57 +608,87 @@ export function GridTab({
         </div>
       )}
 
-      <div ref={gridRef} className="termgrid">
-        {error ? (
-          <div className="empty">
-            cannot list panes
-            <br />
-            {error}
-          </div>
-        ) : !panes ? (
-          <div className="empty">loading panes…</div>
-        ) : panes.length === 0 ? (
-          <div className="empty">
-            {agentsOnly || hidden.size
-              ? "no panes match the filters"
-              : "no panes"}
-          </div>
-        ) : (
-          panes.map((p, i) => {
-            // A flex break after the first `remainder` cells puts them in the
-            // top row (where they grow to fill the full width); the older panes
-            // pack into full rows below. No break when the count divides evenly.
-            const remainder = cols > 0 ? panes.length % cols : 0
-            const breakHere =
-              remainder > 0 && remainder < panes.length && i === remainder - 1
-            return (
-              <React.Fragment key={cellKey(p)}>
-                <GridCell
-                  pane={p}
-                  active={active}
-                  selected={selected.has(cellKey(p))}
-                  selectionCount={selected.size}
-                  focused={
-                    p.host === activeHost
-                      ? activePaneID
-                        ? p.pane_id === activePaneID
-                        : !!p.focused
-                      : false
-                  }
-                  onClick={(e) => onCellClick(e, p)}
-                  onRename={() => requestRename(p)}
-                  onClose={() => requestClose(p)}
-                />
-                {breakHere && <div className="termbreak" aria-hidden="true" />}
-              </React.Fragment>
-            )
-          })
-        )}
+      <div className="flex min-h-0 flex-1">
+        <GridRail
+          open={railOpen}
+          panes={all}
+          watched={watched}
+          newKeys={railHighlight}
+          onToggleWatch={toggleWatch}
+          onFocusPane={focusInGrid}
+          onOpenInHerdr={(p) => void focusPane(p)}
+        />
+        <div
+          ref={gridRef}
+          className="termgrid"
+          style={
+            {
+              "--grid-cols": cols,
+              "--grid-cell-h": `${cellH}px`,
+            } as React.CSSProperties
+          }
+        >
+          {error ? (
+            <div className="empty">
+              cannot list panes
+              <br />
+              {error}
+            </div>
+          ) : !panes ? (
+            <div className="empty">loading panes…</div>
+          ) : panes.length === 0 ? (
+            <div className="empty">
+              {mode === "watch" ? (
+                <>
+                  {watched.size === 0
+                    ? "no watched panes yet — star ☆ panes to build your watch list"
+                    : "none of your watched panes are running"}
+                  <br />
+                  <button
+                    type="button"
+                    onClick={() => toggleRail(true)}
+                    className="mt-2 rounded border border-border px-2 py-0.5 text-[11px] text-muted-foreground hover:text-foreground"
+                  >
+                    browse panes
+                  </button>
+                </>
+              ) : agentsOnly || hidden.size ? (
+                "no panes match the filters"
+              ) : (
+                "no panes"
+              )}
+            </div>
+          ) : (
+            panes.map((p) => (
+              <GridCell
+                key={cellKey(p)}
+                pane={p}
+                active={active}
+                selected={selected.has(cellKey(p))}
+                selectionCount={selected.size}
+                focused={
+                  p.host === activeHost
+                    ? activePaneID
+                      ? p.pane_id === activePaneID
+                      : !!p.focused
+                    : false
+                }
+                watched={watched.has(cellKey(p))}
+                onToggleWatch={() => toggleWatch(cellKey(p))}
+                onClick={(e) => onCellClick(e, p)}
+                onBodyFocus={() => focusInGridBackend(p)}
+                onOpenInHerdr={() => void focusPane(p)}
+                onRename={() => requestRename(p)}
+                onClose={() => requestClose(p)}
+              />
+            ))
+          )}
+        </div>
       </div>
 
       <div className="hint">
-        click a header to focus in Herdr · ⌘/Ctrl-click to select · right-click
-        for rename / close
+        click a header to open in Herdr · click inside a cell to type there ·
+        ⌘/Ctrl-click a header to select · right-click for actions
       </div>
 
       {/* rename the workspace (relabels every pane grouped under it on that host) */}
@@ -473,7 +774,11 @@ function GridCell({
   selected,
   selectionCount,
   focused,
+  watched,
+  onToggleWatch,
   onClick,
+  onBodyFocus,
+  onOpenInHerdr,
   onRename,
   onClose,
 }: {
@@ -482,11 +787,17 @@ function GridCell({
   selected: boolean
   selectionCount: number
   focused: boolean
-  onClick: (e: React.MouseEvent) => void
+  watched: boolean
+  onToggleWatch: () => void
+  onClick: (e: React.MouseEvent | React.KeyboardEvent) => void
+  /** The user clicked into this cell's terminal (its iframe took focus). */
+  onBodyFocus: () => void
+  onOpenInHerdr: () => void
   onRename: () => void
   onClose: () => void
 }) {
   const id = frameId(p.host, p.terminal_id)
+  const { host: activeHost } = useApp()
   const bodyRef = React.useRef<HTMLDivElement>(null)
   const [src, setSrc] = React.useState<string | null>(null)
   const [failed, setFailed] = React.useState(false)
@@ -547,6 +858,46 @@ function GridCell({
     [p.host, p.terminal_id]
   )
 
+  // Report clicks into the terminal (its window taking focus) so GridTab can
+  // promote this pane to herdr's focused pane. Kept in a ref so the listener
+  // attaches once per iframe rather than churning on every poll re-render.
+  const onBodyFocusRef = React.useRef(onBodyFocus)
+  onBodyFocusRef.current = onBodyFocus
+  React.useEffect(() => {
+    if (!src) return
+    return onTerminalFocus(id, () => onBodyFocusRef.current())
+  }, [src, id])
+
+  // Drop back to the unattached state so the lazy-mount effect re-attaches (the
+  // cell is on screen, so its IntersectionObserver fires immediately). Used when
+  // the server killed our ttyd out from under us — a host switch evicts that
+  // host's backend and releases every grid terminal streaming over it.
+  const reattach = React.useCallback(() => {
+    setSrc(null)
+    setFailed(false)
+    setReady(false)
+  }, [])
+
+  // A host switch releases grid terminals on BOTH the old and new active host
+  // (their connections get replaced). Probe shortly after the active host
+  // changes and re-attach if our ttyd died — twice, since the first probe can
+  // race the switch still completing. The keepalive below is the slow backstop.
+  const prevActiveHost = React.useRef(activeHost)
+  React.useEffect(() => {
+    if (prevActiveHost.current === activeHost) return
+    prevActiveHost.current = activeHost
+    if (!src) return
+    const probe = () =>
+      api
+        .gridTermTouch(p.host, p.terminal_id)
+        .then((r) => {
+          if (!r.alive) reattach()
+        })
+        .catch(() => {})
+    const timers = [500, 2500].map((d) => setTimeout(probe, d))
+    return () => timers.forEach(clearTimeout)
+  }, [activeHost, src, p.host, p.terminal_id, reattach])
+
   // Wire xterm (shift+enter, image paste, …) once the iframe exists, and keep the
   // server-side attach alive while the cell is mounted.
   React.useEffect(() => {
@@ -559,15 +910,22 @@ function GridCell({
     // Touch-only keepalive: bumps the server idle timer but never (re)creates the
     // attach, so an in-flight keepalive landing after this cell releases can't
     // resurrect a thin attach that would clamp the pane in the wide Herdr terminal.
+    // It DOES report whether the entry is still alive — when the server released
+    // us (host switch, reap), re-attach rather than showing a dead terminal.
     const ka = setInterval(() => {
-      void api.gridTermTouch(p.host, p.terminal_id).catch(() => {})
+      api
+        .gridTermTouch(p.host, p.terminal_id)
+        .then((r) => {
+          if (!r.alive) reattach()
+        })
+        .catch(() => {})
     }, KEEPALIVE_MS)
     return () => {
       cleanup()
       cancelReady()
       clearInterval(ka)
     }
-  }, [src, id, p.host, p.terminal_id])
+  }, [src, id, p.host, p.terminal_id, reattach])
 
   const title = p.workspace_label || p.workspace_id || p.pane_id
   const tabLabel = p.tab_label && p.tab_label !== title ? p.tab_label : ""
@@ -589,15 +947,25 @@ function GridCell({
 
   return (
     <div
+      id={`cell-${id}`}
       className={cn("termcell", focused && "focused", selected && "selected")}
     >
       <ContextMenu>
         <ContextMenuTrigger asChild>
-          <button
-            type="button"
+          {/* biome-ignore lint/a11y/useSemanticElements: the star inside is a
+              real <button>, and buttons can't nest. */}
+          <div
+            role="button"
+            tabIndex={0}
             className="termcell-head"
-            title={`${tip}\n\nclick to focus in Herdr · ⌘/Ctrl-click to select`}
+            title={`${tip}\n\nclick to open in Herdr · ⌘/Ctrl-click to select`}
             onClick={onClick}
+            onKeyDown={(e) => {
+              if (e.key === "Enter" || e.key === " ") {
+                e.preventDefault()
+                onClick(e)
+              }
+            }}
           >
             <span className="termcell-host">{p.host_label}</span>
             <span className="termcell-title">
@@ -609,9 +977,27 @@ function GridCell({
                 ● {p.agent || "agent"}
               </span>
             )}
-          </button>
+            <button
+              type="button"
+              className={cn("termcell-star", watched && "watched")}
+              aria-pressed={watched}
+              title={watched ? "Stop watching" : "Watch this pane"}
+              onClick={(e) => {
+                e.stopPropagation()
+                onToggleWatch()
+              }}
+            >
+              {watched ? "★" : "☆"}
+            </button>
+          </div>
         </ContextMenuTrigger>
         <ContextMenuContent>
+          <ContextMenuItem onSelect={onOpenInHerdr}>
+            Open in Herdr
+          </ContextMenuItem>
+          <ContextMenuItem onSelect={onToggleWatch}>
+            {watched ? "Unwatch ☆" : "Watch ★"}
+          </ContextMenuItem>
           <ContextMenuItem onSelect={onRename}>
             Rename workspace…
           </ContextMenuItem>

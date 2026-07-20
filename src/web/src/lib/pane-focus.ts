@@ -23,6 +23,16 @@ async function focusPaneCore(
   focusHerdrTerminal()
 }
 
+// focusPaneInPlace makes a pane herdr's focused pane WITHOUT leaving the
+// current view: switch the active host if needed and focus the pane's tab, but
+// push no history, release no grid terminal, and surface nothing. Used by the
+// Grid tab so clicking a cell highlights it (via the SSE focus state) and the
+// sidebar file viewer follows its cwd/host, while the user stays in the grid.
+export async function focusPaneInPlace(p: GridPane, activeHost: string | null) {
+  if (p.host !== activeHost) await api.switchHost(p.host)
+  if (p.workspace_id && p.tab_id) await api.focus(p.workspace_id, p.tab_id)
+}
+
 // focusPaneInHerdr is the user-initiated focus path, shared by the Grid tab
 // (header click) and the Cmd+K pane switcher. It pushes one browser history
 // entry encoding the target (view + host + pane) so Back/Forward re-focus the
