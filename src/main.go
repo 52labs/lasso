@@ -300,6 +300,11 @@ func runServer() {
 	// here — after the active backend is up — and refreshed on its own interval.
 	startCacheWarmer()
 
+	// Clean up SSH control masters orphaned by killed `herdr --remote` clients
+	// (see sshreap.go) — left unreaped they pile up until the remote sshd
+	// starts resetting new connections.
+	startHerdrSSHReaper(ctx)
+
 	srv := &http.Server{Handler: handler}
 	go func() {
 		<-ctx.Done()
