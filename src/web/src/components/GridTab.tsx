@@ -1,7 +1,7 @@
 import { useQuery } from "@tanstack/react-query"
 import * as React from "react"
 import { toast } from "sonner"
-
+import { GridRail } from "@/components/GridRail"
 import {
   AlertDialog,
   AlertDialogAction,
@@ -28,7 +28,7 @@ import {
 } from "@/components/ui/dialog"
 import { Input } from "@/components/ui/input"
 import { api, type GridPane } from "@/lib/api"
-import { useApp } from "@/lib/app-store"
+import { lsGet, lsSet, useApp } from "@/lib/app-store"
 import { tilde } from "@/lib/format"
 import { focusPaneInHerdr } from "@/lib/pane-focus"
 import { qk } from "@/lib/query"
@@ -59,6 +59,10 @@ const GRID_MIN_CELL_H = 260
 // within a host).
 const cellKey = (p: GridPane) => `${p.host}|${p.pane_id}`
 
+// Whether the pane rail is open — device-local (like the sidebar width), so a
+// small laptop can keep it collapsed while a big monitor leaves it open.
+const RAIL_OPEN_KEY = "lasso-grid-rail-open"
+
 // The Grid tab: a wall of live terminals, one per herdr pane, spanning every
 // reachable + protocol-compatible host. Each cell body is an interactive
 // terminal (a ttyd attached to that pane). Click a header to focus the pane in
@@ -85,6 +89,27 @@ export function GridTab({
     () => new Set(ui.grid_watched),
     [ui.grid_watched]
   )
+
+  // Pane rail (the picker): default collapsed so the grid keeps the full
+  // width; open state persists per device.
+  const [railOpen, setRailOpen] = React.useState(
+    () => lsGet(RAIL_OPEN_KEY) === "1"
+  )
+  const toggleRail = (next?: boolean) => {
+    setRailOpen((cur) => {
+      const v = next ?? !cur
+      lsSet(RAIL_OPEN_KEY, v ? "1" : "0")
+      return v
+    })
+  }
+  // Keys highlighted as "new" in the rail (snapshotted when the +N badge opens
+  // it, cleared when it closes — see the seen-tracking below).
+  const [railHighlight, setRailHighlight] = React.useState<Set<string>>(
+    () => new Set()
+  )
+  React.useEffect(() => {
+    if (!railOpen) setRailHighlight((cur) => (cur.size ? new Set() : cur))
+  }, [railOpen])
 
   // Measure the grid viewport; the tall-first column/row math derives from it
   // in render (clientHeight of the scroll container is the viewport height, not
@@ -273,6 +298,21 @@ export function GridTab({
   return (
     <div className="flex min-h-0 flex-1 flex-col">
       <div className="flex shrink-0 flex-wrap items-center gap-2 border-border border-b px-2 py-1.5">
+        <button
+          type="button"
+          onClick={() => toggleRail()}
+          aria-pressed={railOpen}
+          className={cn(
+            "rounded-full border px-2 py-0.5 text-[11px] transition-colors",
+            railOpen
+              ? "border-primary/40 bg-accent text-foreground"
+              : "border-border text-muted-foreground hover:text-foreground"
+          )}
+          title={railOpen ? "Hide the pane list" : "Show the pane list"}
+        >
+          Panes
+        </button>
+
         {/* All / Watch segmented toggle: All is the classic every-pane wall,
             Watch shows only starred panes (persisted server-side). */}
         <div className="flex overflow-hidden rounded-full border border-border text-[11px]">
@@ -400,57 +440,79 @@ export function GridTab({
         </div>
       )}
 
-      <div
-        ref={gridRef}
-        className="termgrid"
-        style={
-          {
-            "--grid-cols": cols,
-            "--grid-cell-h": `${cellH}px`,
-          } as React.CSSProperties
-        }
-      >
-        {error ? (
-          <div className="empty">
-            cannot list panes
-            <br />
-            {error}
-          </div>
-        ) : !panes ? (
-          <div className="empty">loading panes…</div>
-        ) : panes.length === 0 ? (
-          <div className="empty">
-            {mode === "watch"
-              ? watched.size === 0
-                ? "no watched panes yet — star ☆ panes to build your watch list"
-                : "no watched panes are running (or they're hidden by filters)"
-              : agentsOnly || hidden.size
-                ? "no panes match the filters"
-                : "no panes"}
-          </div>
-        ) : (
-          panes.map((p) => (
-            <GridCell
-              key={cellKey(p)}
-              pane={p}
-              active={active}
-              selected={selected.has(cellKey(p))}
-              selectionCount={selected.size}
-              focused={
-                p.host === activeHost
-                  ? activePaneID
-                    ? p.pane_id === activePaneID
-                    : !!p.focused
-                  : false
-              }
-              watched={watched.has(cellKey(p))}
-              onToggleWatch={() => toggleWatch(cellKey(p))}
-              onClick={(e) => onCellClick(e, p)}
-              onRename={() => requestRename(p)}
-              onClose={() => requestClose(p)}
-            />
-          ))
-        )}
+      <div className="flex min-h-0 flex-1">
+        <GridRail
+          open={railOpen}
+          panes={all}
+          watched={watched}
+          newKeys={railHighlight}
+          onToggleWatch={toggleWatch}
+          onFocusPane={(p) => void focusPane(p)}
+        />
+        <div
+          ref={gridRef}
+          className="termgrid"
+          style={
+            {
+              "--grid-cols": cols,
+              "--grid-cell-h": `${cellH}px`,
+            } as React.CSSProperties
+          }
+        >
+          {error ? (
+            <div className="empty">
+              cannot list panes
+              <br />
+              {error}
+            </div>
+          ) : !panes ? (
+            <div className="empty">loading panes…</div>
+          ) : panes.length === 0 ? (
+            <div className="empty">
+              {mode === "watch" ? (
+                <>
+                  {watched.size === 0
+                    ? "no watched panes yet — star ☆ panes to build your watch list"
+                    : "no watched panes are running (or they're hidden by filters)"}
+                  <br />
+                  <button
+                    type="button"
+                    onClick={() => toggleRail(true)}
+                    className="mt-2 rounded border border-border px-2 py-0.5 text-[11px] text-muted-foreground hover:text-foreground"
+                  >
+                    browse panes
+                  </button>
+                </>
+              ) : agentsOnly || hidden.size ? (
+                "no panes match the filters"
+              ) : (
+                "no panes"
+              )}
+            </div>
+          ) : (
+            panes.map((p) => (
+              <GridCell
+                key={cellKey(p)}
+                pane={p}
+                active={active}
+                selected={selected.has(cellKey(p))}
+                selectionCount={selected.size}
+                focused={
+                  p.host === activeHost
+                    ? activePaneID
+                      ? p.pane_id === activePaneID
+                      : !!p.focused
+                    : false
+                }
+                watched={watched.has(cellKey(p))}
+                onToggleWatch={() => toggleWatch(cellKey(p))}
+                onClick={(e) => onCellClick(e, p)}
+                onRename={() => requestRename(p)}
+                onClose={() => requestClose(p)}
+              />
+            ))
+          )}
+        </div>
       </div>
 
       <div className="hint">
