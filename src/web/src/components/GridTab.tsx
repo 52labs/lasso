@@ -31,7 +31,7 @@ import { api, type GridPane } from "@/lib/api"
 import { lsGet, lsSet, useApp } from "@/lib/app-store"
 import { tilde } from "@/lib/format"
 import { loadSeen, markSeen, reconcileSeen } from "@/lib/grid-seen"
-import { focusPaneInHerdr } from "@/lib/pane-focus"
+import { focusPaneInHerdr, focusPaneInPlace } from "@/lib/pane-focus"
 import { qk } from "@/lib/query"
 import {
   bootTermFrame,
@@ -302,10 +302,20 @@ export function GridTab({
     patchUIState({ grid_selected: Array.from(next) })
   }
 
-  // Grid-local focus: clicking a cell (or a rail row) highlights it and hands
-  // it the keyboard, WITHOUT leaving the grid — going to the Herdr tab is a
-  // deliberate right-click action ("Open in Herdr").
-  const [focusedKey, setFocusedKey] = React.useState<string | null>(null)
+  // In-grid focus: make the pane herdr's focused pane WITHOUT leaving the grid
+  // (no history push, no grid-terminal release, no view switch). The cell's
+  // border highlight and the sidebar file viewer both key off the SSE focus
+  // state (activePaneID / activeCwd / host), so they follow automatically —
+  // including across hosts.
+  const focusInGridBackend = React.useCallback(
+    (p: GridPane) => {
+      if (p.host === activeHost && p.pane_id === activePaneID) return
+      focusPaneInPlace(p, activeHost).catch((e) =>
+        toast.error(`focus failed: ${(e as Error).message}`)
+      )
+    },
+    [activeHost, activePaneID]
+  )
   const focusInGrid = (p: GridPane) => {
     const key = cellKey(p)
     if (panes && !panes.some((x) => cellKey(x) === key)) {
@@ -313,13 +323,37 @@ export function GridTab({
       toast(`${p.host_label} pane isn't shown — star it or switch to All`)
       return
     }
-    setFocusedKey(key)
+    focusInGridBackend(p)
     const fid = frameId(p.host, p.terminal_id)
     document
       .getElementById(`cell-${fid}`)
       ?.scrollIntoView({ block: "nearest", behavior: "smooth" })
     focusTerminalFrame(fid)
   }
+
+  // Clicking INSIDE a cell's terminal moves keyboard focus into its iframe —
+  // the parent window blurs and the iframe element becomes activeElement.
+  // Catch that and promote it to a real herdr focus so the border highlight and
+  // sidebar follow the terminal the user is actually typing in. (An app-level
+  // window blur — switching browser tabs — re-finds the already-focused frame
+  // and the guard in focusInGridBackend makes it a no-op.)
+  React.useEffect(() => {
+    if (!active) return
+    const onBlur = () => {
+      setTimeout(() => {
+        const el = document.activeElement
+        if (
+          !(el instanceof HTMLIFrameElement) ||
+          !el.id.startsWith("gridterm-")
+        )
+          return
+        const p = all?.find((x) => frameId(x.host, x.terminal_id) === el.id)
+        if (p) focusInGridBackend(p)
+      }, 0)
+    }
+    window.addEventListener("blur", onBlur)
+    return () => window.removeEventListener("blur", onBlur)
+  }, [active, all, focusInGridBackend])
 
   // Honor a focus request from App (an agent created from the New Agent dialog
   // while the Grid view was active): once the new pane shows up in a payload,
@@ -346,7 +380,7 @@ export function GridTab({
     const key = cellKey(p)
     if (mode === "watch" && !watched.has(key))
       patchUIState({ grid_watched: [...watched, key] })
-    setFocusedKey(key)
+    focusInGridBackend(p)
     // The cell may still be mounting (or just became visible via the star), and
     // its ttyd takes a moment to attach — retry the scroll + keyboard handoff.
     const fid = frameId(p.host, p.terminal_id)
@@ -358,7 +392,7 @@ export function GridTab({
         focusTerminalFrame(fid)
       }, delay)
     }
-  }, [focusRequest, all, mode, watched])
+  }, [focusRequest, all, mode, watched, focusInGridBackend])
 
   // Header click: plain click opens the pane in Herdr (clicking into the cell
   // BODY is the in-grid interaction — the terminal takes the keyboard right
@@ -656,13 +690,11 @@ export function GridTab({
                 selected={selected.has(cellKey(p))}
                 selectionCount={selected.size}
                 focused={
-                  focusedKey
-                    ? cellKey(p) === focusedKey
-                    : p.host === activeHost
-                      ? activePaneID
-                        ? p.pane_id === activePaneID
-                        : !!p.focused
-                      : false
+                  p.host === activeHost
+                    ? activePaneID
+                      ? p.pane_id === activePaneID
+                      : !!p.focused
+                    : false
                 }
                 watched={watched.has(cellKey(p))}
                 onToggleWatch={() => toggleWatch(cellKey(p))}
