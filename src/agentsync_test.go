@@ -178,3 +178,114 @@ func TestColorMath(t *testing.T) {
 		t.Errorf("mocha bg should read as dark")
 	}
 }
+
+// The ghostty theme file mirrors the embedded terminal: chrome from the herdr
+// UI tokens, the 16 ANSI colors from the scheme's canonical palette.
+func TestGhosttyThemeBody(t *testing.T) {
+	rt := resolveThemeByName("tokyo-night")
+	body := string(ghosttyThemeBody(rt))
+	for _, want := range []string{
+		"background = #1a1b26",
+		"foreground = #c0caf5",
+		"palette = 0=#15161e",
+		"palette = 15=#c0caf5",
+	} {
+		if !strings.Contains(body, want+"\n") {
+			t.Errorf("missing %q in:\n%s", want, body)
+		}
+	}
+	// Selection is the accent pre-composited over the bg (ghostty has no alpha),
+	// so it must be neither the raw accent nor the raw background.
+	sel := ""
+	for _, ln := range strings.Split(body, "\n") {
+		if v, ok := strings.CutPrefix(ln, "selection-background = "); ok {
+			sel = v
+		}
+	}
+	if sel == "" || sel == rt.ui.Accent || sel == rt.ui.PanelBg {
+		t.Errorf("selection-background = %q, want a blend", sel)
+	}
+}
+
+func TestGhosttySetTheme(t *testing.T) {
+	cases := []struct {
+		name, in, want string
+		changed        bool
+	}{
+		{
+			name:    "replaces an auto light/dark pair",
+			in:      "font-size = 18\ntheme = light:Catppuccin Latte,dark:Catppuccin Frappe\n",
+			want:    "font-size = 18\ntheme = herdr\n",
+			changed: true,
+		},
+		{
+			name:    "appends when the key is absent",
+			in:      "font-size = 18\n",
+			want:    "font-size = 18\ntheme = herdr\n",
+			changed: true,
+		},
+		{
+			name:    "leaves comments alone",
+			in:      "# theme = Dracula\ntheme = Dracula\n",
+			want:    "# theme = Dracula\ntheme = herdr\n",
+			changed: true,
+		},
+		{name: "no-op when already in step", in: "theme = herdr\n"},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			got, changed := ghosttySetTheme([]byte(c.in), "herdr")
+			if changed != c.changed {
+				t.Fatalf("changed = %v, want %v", changed, c.changed)
+			}
+			if changed && string(got) != c.want {
+				t.Errorf("got %q, want %q", got, c.want)
+			}
+		})
+	}
+}
+
+// A host without a ghostty config gets the theme file but no config conjured
+// out of thin air; one with a config gets its theme key repointed.
+func TestSyncGhosttyTheme(t *testing.T) {
+	home := t.TempDir()
+	b := &localBackend{}
+	rt := resolveThemeByName("catppuccin")
+
+	if err := syncGhosttyTheme(b, home, rt); err != nil {
+		t.Fatalf("no config: %v", err)
+	}
+	if _, err := os.ReadFile(filepath.Join(home, ".config", "ghostty", "themes", "herdr")); err != nil {
+		t.Fatalf("theme file not written: %v", err)
+	}
+	for _, parts := range ghosttyConfigPaths {
+		if _, err := os.Stat(filepath.Join(append([]string{home}, parts...)...)); err == nil {
+			t.Errorf("conjured a ghostty config at %v", parts)
+		}
+	}
+
+	// macOS-style config: the theme key gets repointed, other keys survive.
+	cfg := filepath.Join(home, "Library", "Application Support", "com.mitchellh.ghostty", "config.ghostty")
+	os.MkdirAll(filepath.Dir(cfg), 0o755)
+	os.WriteFile(cfg, []byte("font-size = 18\ntheme = Dracula\n"), 0o644)
+	if err := syncGhosttyTheme(b, home, rt); err != nil {
+		t.Fatalf("with config: %v", err)
+	}
+	got, _ := os.ReadFile(cfg)
+	if string(got) != "font-size = 18\ntheme = herdr\n" {
+		t.Errorf("config = %q", got)
+	}
+
+	// A theme flip rewrites the theme file, not the (already-correct) config.
+	before, _ := os.Stat(cfg)
+	if err := syncGhosttyTheme(b, home, resolveThemeByName("gruvbox")); err != nil {
+		t.Fatalf("flip: %v", err)
+	}
+	body, _ := os.ReadFile(filepath.Join(home, ".config", "ghostty", "themes", "herdr"))
+	if !strings.Contains(string(body), resolveThemeByName("gruvbox").ui.PanelBg) {
+		t.Errorf("theme file not updated on flip: %s", body)
+	}
+	if after, _ := os.Stat(cfg); !after.ModTime().Equal(before.ModTime()) {
+		t.Errorf("config rewritten though its theme key was already in step")
+	}
+}
