@@ -27,7 +27,10 @@ import (
 //
 //   - herdr RPC + events: the remote herdr unix socket is forwarded (-L) to a
 //     local socket, which the shared dial code (herdrCallSock / subscribeEvents)
-//     points at — identical to the local case.
+//     points at — identical to the local case. herdr's streaming client socket
+//     (<sock>-client.sock, the transport `herdr terminal attach` uses for pty
+//     bytes) is forwarded alongside it, so grid pane attaches multiplex over
+//     this same connection instead of opening SSH connections of their own.
 //   - file ops: the SFTP subsystem (`ssh host -s sftp`), driven by pkg/sftp.
 //   - git: `ssh host "git -C <dir> ..."`.
 //
@@ -38,9 +41,13 @@ type remoteBackend struct {
 	remoteSock string // absolute herdr socket path on the remote host
 	ctlPath    string // ssh ControlMaster control socket (local)
 	localSock  string // local end of the forwarded herdr socket
-	home       string // remote $HOME, for ~-expansion
-	protocol   int    // remote herdr protocol (verified == local at connect)
-	version    string // remote herdr version (for display)
+	// localClientSock is the local end of the forwarded herdr *client* socket
+	// (herdrClientSock(localSock)). It is derived, but stored so teardown and
+	// the grid attach agree on one path.
+	localClientSock string
+	home            string // remote $HOME, for ~-expansion
+	protocol        int    // remote herdr protocol (verified == local at connect)
+	version         string // remote herdr version (for display)
 
 	cancel context.CancelFunc // tears down the control master + sockets
 	done   chan struct{}      // closed once teardown completes
@@ -94,9 +101,11 @@ func newRemoteBackend(parent context.Context, alias, remoteSock string, wantProt
 		localSock:  filepath.Join(os.TempDir(), fmt.Sprintf("lasso-herdr-%d-%s.sock", os.Getpid(), tag)),
 		done:       make(chan struct{}),
 	}
+	b.localClientSock = herdrClientSock(b.localSock)
 	// Clear stale sockets a crashed prior run may have left so ssh can bind.
 	_ = os.Remove(b.ctlPath)
 	_ = os.Remove(b.localSock)
+	_ = os.Remove(b.localClientSock)
 
 	// Open the control master and the forwarded herdr socket. -fNT backgrounds
 	// the master after authentication, so this returns once the forward is up.
@@ -115,6 +124,11 @@ func newRemoteBackend(parent context.Context, alias, remoteSock string, wantProt
 		"-o", "ControlPersist=60",
 		"-fNT",
 		"-L", b.localSock + ":" + b.remoteSock,
+		// herdr's streaming client socket sits beside the RPC socket on the
+		// remote host; forwarding it lets `herdr terminal attach` run locally
+		// against this master (see gridAttachCmd). A remote without it just
+		// fails the forward at connect time, not the master.
+		"-L", b.localClientSock + ":" + herdrClientSock(b.remoteSock),
 		alias,
 	}
 	out, err := exec.CommandContext(mctx, "ssh", args...).CombinedOutput()
@@ -182,6 +196,13 @@ func (b *remoteBackend) waitForSocket(ctx context.Context, wantProtocol int) (st
 
 func (b *remoteBackend) Name() string      { return b.alias }
 func (b *remoteBackend) HerdrSock() string { return b.localSock }
+
+// herdrClientSock derives the streaming client socket path herdr uses from its
+// RPC socket path (herdr.sock → herdr-client.sock) — the same derivation herdr
+// itself applies to HERDR_SOCKET_PATH.
+func herdrClientSock(sock string) string {
+	return strings.TrimSuffix(sock, ".sock") + "-client.sock"
+}
 
 func (b *remoteBackend) HerdrCall(method string, params any) (json.RawMessage, error) {
 	return herdrCallSock(b.localSock, method, params)
@@ -432,6 +453,7 @@ func (b *remoteBackend) killMaster() {
 	_ = exec.Command("ssh", "-o", "ControlPath="+b.ctlPath, "-O", "exit", b.alias).Run()
 	_ = os.Remove(b.ctlPath)
 	_ = os.Remove(b.localSock)
+	_ = os.Remove(b.localClientSock)
 }
 
 // TermCmd / ShellCmd / TermEnv give the per-host commands the two ttyd
