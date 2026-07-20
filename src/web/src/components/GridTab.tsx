@@ -33,7 +33,11 @@ import { tilde } from "@/lib/format"
 import { loadSeen, markSeen, reconcileSeen } from "@/lib/grid-seen"
 import { focusPaneInHerdr } from "@/lib/pane-focus"
 import { qk } from "@/lib/query"
-import { bootTermFrame, whenTerminalReady } from "@/lib/terminal"
+import {
+  bootTermFrame,
+  focusTerminalFrame,
+  whenTerminalReady,
+} from "@/lib/terminal"
 import { GRID_FRAME_CLASS } from "@/lib/theme"
 import { patchUIState, useUIState } from "@/lib/ui-state"
 import { cn } from "@/lib/utils"
@@ -284,9 +288,28 @@ export function GridTab({
     patchUIState({ grid_selected: Array.from(next) })
   }
 
-  // Header click: plain click focuses the pane in Herdr; ⌘/Ctrl/Shift-click
-  // toggles selection instead. (Also fired for keyboard Enter/Space — only the
-  // modifier keys are read off the event.)
+  // Grid-local focus: clicking a cell (or a rail row) highlights it and hands
+  // it the keyboard, WITHOUT leaving the grid — going to the Herdr tab is a
+  // deliberate right-click action ("Open in Herdr").
+  const [focusedKey, setFocusedKey] = React.useState<string | null>(null)
+  const focusInGrid = (p: GridPane) => {
+    const key = cellKey(p)
+    if (panes && !panes.some((x) => cellKey(x) === key)) {
+      // Filtered out of the current view (e.g. unstarred in Watch mode).
+      toast(`${p.host_label} pane isn't shown — star it or switch to All`)
+      return
+    }
+    setFocusedKey(key)
+    const fid = frameId(p.host, p.terminal_id)
+    document
+      .getElementById(`cell-${fid}`)
+      ?.scrollIntoView({ block: "nearest", behavior: "smooth" })
+    focusTerminalFrame(fid)
+  }
+
+  // Header click: plain click focuses the pane here in the grid; ⌘/Ctrl/Shift-
+  // click toggles selection instead. (Also fired for keyboard Enter/Space —
+  // only the modifier keys are read off the event.)
   const onCellClick = (
     e: React.MouseEvent | React.KeyboardEvent,
     p: GridPane
@@ -296,7 +319,7 @@ export function GridTab({
       return
     }
     clearSelection()
-    void focusPane(p)
+    focusInGrid(p)
   }
 
   // Focus a pane in the Herdr tab (see focusPaneInHerdr for the sequence; shared
@@ -523,7 +546,8 @@ export function GridTab({
           watched={watched}
           newKeys={railHighlight}
           onToggleWatch={toggleWatch}
-          onFocusPane={(p) => void focusPane(p)}
+          onFocusPane={focusInGrid}
+          onOpenInHerdr={(p) => void focusPane(p)}
         />
         <div
           ref={gridRef}
@@ -574,15 +598,18 @@ export function GridTab({
                 selected={selected.has(cellKey(p))}
                 selectionCount={selected.size}
                 focused={
-                  p.host === activeHost
-                    ? activePaneID
-                      ? p.pane_id === activePaneID
-                      : !!p.focused
-                    : false
+                  focusedKey
+                    ? cellKey(p) === focusedKey
+                    : p.host === activeHost
+                      ? activePaneID
+                        ? p.pane_id === activePaneID
+                        : !!p.focused
+                      : false
                 }
                 watched={watched.has(cellKey(p))}
                 onToggleWatch={() => toggleWatch(cellKey(p))}
                 onClick={(e) => onCellClick(e, p)}
+                onOpenInHerdr={() => void focusPane(p)}
                 onRename={() => requestRename(p)}
                 onClose={() => requestClose(p)}
               />
@@ -592,8 +619,8 @@ export function GridTab({
       </div>
 
       <div className="hint">
-        click a header to focus in Herdr · ⌘/Ctrl-click to select · right-click
-        for rename / close
+        click a header to focus its terminal · ⌘/Ctrl-click to select ·
+        right-click for watch / open in Herdr / rename / close
       </div>
 
       {/* rename the workspace (relabels every pane grouped under it on that host) */}
@@ -682,6 +709,7 @@ function GridCell({
   watched,
   onToggleWatch,
   onClick,
+  onOpenInHerdr,
   onRename,
   onClose,
 }: {
@@ -693,6 +721,7 @@ function GridCell({
   watched: boolean
   onToggleWatch: () => void
   onClick: (e: React.MouseEvent | React.KeyboardEvent) => void
+  onOpenInHerdr: () => void
   onRename: () => void
   onClose: () => void
 }) {
@@ -799,6 +828,7 @@ function GridCell({
 
   return (
     <div
+      id={`cell-${id}`}
       className={cn("termcell", focused && "focused", selected && "selected")}
     >
       <ContextMenu>
@@ -809,7 +839,7 @@ function GridCell({
             role="button"
             tabIndex={0}
             className="termcell-head"
-            title={`${tip}\n\nclick to focus in Herdr · ⌘/Ctrl-click to select`}
+            title={`${tip}\n\nclick to focus · ⌘/Ctrl-click to select`}
             onClick={onClick}
             onKeyDown={(e) => {
               if (e.key === "Enter" || e.key === " ") {
@@ -843,6 +873,12 @@ function GridCell({
           </div>
         </ContextMenuTrigger>
         <ContextMenuContent>
+          <ContextMenuItem onSelect={onOpenInHerdr}>
+            Open in Herdr
+          </ContextMenuItem>
+          <ContextMenuItem onSelect={onToggleWatch}>
+            {watched ? "Unwatch ☆" : "Watch ★"}
+          </ContextMenuItem>
           <ContextMenuItem onSelect={onRename}>
             Rename workspace…
           </ContextMenuItem>

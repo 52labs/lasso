@@ -515,6 +515,20 @@ export function whenTerminalReady(id: string, onReady: () => void): () => void {
   }
 }
 
+// Hand keyboard focus to a terminal iframe by element id (used by grid cells,
+// where clicking a header should let the user type without a second click).
+export function focusTerminalFrame(id: string) {
+  try {
+    const w = frameWindow(id)
+    if (w) {
+      w.focus()
+      w.term?.focus?.()
+    }
+  } catch {
+    /* ignore */
+  }
+}
+
 // Nudge a hidden-then-shown terminal to refit and take the keyboard.
 export function refitTerminal(id: string) {
   try {

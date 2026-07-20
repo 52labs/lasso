@@ -1,5 +1,11 @@
 import * as React from "react"
 
+import {
+  ContextMenu,
+  ContextMenuContent,
+  ContextMenuItem,
+  ContextMenuTrigger,
+} from "@/components/ui/context-menu"
 import { Input } from "@/components/ui/input"
 import type { GridPane } from "@/lib/api"
 import { tilde } from "@/lib/format"
@@ -22,6 +28,7 @@ export function GridRail({
   newKeys,
   onToggleWatch,
   onFocusPane,
+  onOpenInHerdr,
 }: {
   open: boolean
   /** ALL panes across hosts, unfiltered — the rail is the full roster. */
@@ -30,7 +37,10 @@ export function GridRail({
   /** Keys to highlight as new (snapshotted by GridTab when the badge opens the rail). */
   newKeys: Set<string>
   onToggleWatch: (key: string) => void
+  /** Click: focus the pane's cell here in the grid (no navigation). */
   onFocusPane: (p: GridPane) => void
+  /** Context menu: deliberately leave the grid for the Herdr tab. */
+  onOpenInHerdr: (p: GridPane) => void
 }) {
   const [search, setSearch] = React.useState("")
   const firstNewRef = React.useRef<HTMLDivElement>(null)
@@ -122,46 +132,58 @@ export function GridRail({
                     >
                       {watched.has(key) ? "★" : "☆"}
                     </button>
-                    <button
-                      type="button"
-                      onClick={() => onFocusPane(p)}
-                      title={[
-                        p.host_label,
-                        p.workspace_label,
-                        p.tab_label,
-                        p.agent,
-                        tilde(p.cwd),
-                        "",
-                        "click to focus in Herdr",
-                      ]
-                        .filter((s) => s !== undefined && s !== null)
-                        .join("\n")}
-                      className="flex min-w-0 flex-1 items-center gap-1.5 text-left"
-                    >
-                      <span className="truncate text-foreground">
-                        {title}
-                        {tabLabel ? ` · ${tabLabel}` : ""}
-                      </span>
-                      {p.has_agent && (
-                        <span
-                          className={cn(
-                            "shrink-0 text-[10px] text-muted-foreground",
-                            p.agent_status === "working" && "text-warn",
-                            p.agent_status === "blocked" && "text-bad",
-                            (p.agent_status === "idle" ||
-                              p.agent_status === "done") &&
-                              "text-good"
-                          )}
+                    <ContextMenu>
+                      <ContextMenuTrigger asChild>
+                        <button
+                          type="button"
+                          onClick={() => onFocusPane(p)}
+                          title={[
+                            p.host_label,
+                            p.workspace_label,
+                            p.tab_label,
+                            p.agent,
+                            tilde(p.cwd),
+                            "",
+                            "click to focus in the grid",
+                          ]
+                            .filter((s) => s !== undefined && s !== null)
+                            .join("\n")}
+                          className="flex min-w-0 flex-1 items-center gap-1.5 text-left"
                         >
-                          ● {p.agent || "agent"}
-                        </span>
-                      )}
-                      {isNew && (
-                        <span className="shrink-0 rounded-sm bg-primary/15 px-1 text-[9px] text-primary uppercase">
-                          new
-                        </span>
-                      )}
-                    </button>
+                          <span className="truncate text-foreground">
+                            {title}
+                            {tabLabel ? ` · ${tabLabel}` : ""}
+                          </span>
+                          {p.has_agent && (
+                            <span
+                              className={cn(
+                                "shrink-0 text-[10px] text-muted-foreground",
+                                p.agent_status === "working" && "text-warn",
+                                p.agent_status === "blocked" && "text-bad",
+                                (p.agent_status === "idle" ||
+                                  p.agent_status === "done") &&
+                                  "text-good"
+                              )}
+                            >
+                              ● {p.agent || "agent"}
+                            </span>
+                          )}
+                          {isNew && (
+                            <span className="shrink-0 rounded-sm bg-primary/15 px-1 text-[9px] text-primary uppercase">
+                              new
+                            </span>
+                          )}
+                        </button>
+                      </ContextMenuTrigger>
+                      <ContextMenuContent>
+                        <ContextMenuItem onSelect={() => onOpenInHerdr(p)}>
+                          Open in Herdr
+                        </ContextMenuItem>
+                        <ContextMenuItem onSelect={() => onToggleWatch(key)}>
+                          {watched.has(key) ? "Unwatch ☆" : "Watch ★"}
+                        </ContextMenuItem>
+                      </ContextMenuContent>
+                    </ContextMenu>
                   </div>
                 )
               })}
