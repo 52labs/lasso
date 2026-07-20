@@ -31,6 +31,7 @@ interface XTerm {
   buffer?: XTermBuffer
   options?: Record<string, unknown>
   attachCustomKeyEventHandler?: (h: (e: KeyboardEvent) => boolean) => void
+  resize?: (cols: number, rows: number) => void
   // xterm.js public IParser. ttyd 1.7.4 never registers an OSC 52 handler, so
   // we add our own (wireOsc52) to honour herdr's clipboard copies.
   parser?: {
@@ -44,6 +45,7 @@ interface XTerm {
   }
   __herdrShiftEnter?: boolean
   __herdrOsc52?: boolean
+  __herdrResizeGate?: boolean
 }
 interface TermWindow extends Window {
   term?: XTerm
@@ -201,6 +203,80 @@ function wireOsc52(id: string, tries: number) {
   if (tries < 20) setTimeout(() => wireOsc52(id, tries + 1), 150)
 }
 
+// The herdr server sizes the SHARED runtime to whichever client most recently
+// interacted — or merely resized: a bare client resize steals the "foreground"
+// slot. So a lasso session sitting in a background tab or unfocused window that
+// reflows its terminal (an OS window resize, a mobile viewport change, the theme
+// reconciler's refit nudge) clamps every other session's herdr view to ITS
+// width — the "terminal shrinks as though the sidebar opened" effect. Gate the
+// push at its chokepoint: every resize funnels through xterm's term.resize (the
+// iframe's FitAddon reacts to resize events and calls it), so wrap it and drop
+// resizes while this session is hidden or unfocused. When the session returns to
+// the foreground, nudge a refit so xterm recomputes against the *current* box
+// (the dropped dims may be stale by then).
+//
+// The first resize always passes, foreground or not: a session that loads in a
+// background tab must still establish its real size at connect, or its herdr
+// client attaches at the pty default (80×24) and clamps everyone far worse.
+function sessionInForeground(): boolean {
+  return document.visibilityState === "visible" && document.hasFocus()
+}
+
+function wireResizeGate(id: string, tries: number) {
+  let win: TermWindow | null
+  try {
+    win = frameWindow(id)
+  } catch {
+    return
+  }
+  const term = win?.term
+  if (win && term && typeof term.resize === "function") {
+    if (term.__herdrResizeGate) return
+    term.__herdrResizeGate = true
+    const w = win
+    const orig = term.resize.bind(term)
+    let sized = false
+    let deferred = false
+    term.resize = (cols: number, rows: number) => {
+      if (!sized || sessionInForeground()) {
+        sized = true
+        orig(cols, rows)
+        return
+      }
+      deferred = true
+    }
+    const flush = () => {
+      // Unhook once the iframe's window is gone (grid cells come and go), so
+      // dead closures don't pile up on the parent document for the app's life.
+      let alive = false
+      try {
+        alive = !w.closed
+      } catch {
+        /* cross-realm access after teardown */
+      }
+      if (!alive) {
+        document.removeEventListener("visibilitychange", flush)
+        window.removeEventListener("focus", flush)
+        return
+      }
+      if (!deferred || !sessionInForeground()) return
+      deferred = false
+      try {
+        w.dispatchEvent(new Event("resize"))
+      } catch {
+        /* ignore */
+      }
+    }
+    document.addEventListener("visibilitychange", flush)
+    window.addEventListener("focus", flush)
+    // Focus can land directly in the iframe (a click on the terminal) without
+    // the parent window ever firing focus, so listen there too.
+    w.addEventListener("focus", flush)
+    return
+  }
+  if (tries < 20) setTimeout(() => wireResizeGate(id, tries + 1), 150)
+}
+
 // wireTouchScroll gives terminals a finger-drag scroll on touch devices. Two
 // things conspire to make the obvious approaches fail:
 //   1. Our terminals are `tmux attach`, and tmux lives in xterm's ALTERNATE
@@ -351,6 +427,7 @@ export function wireTerminalIframe(id: string, suppressContext: boolean) {
 
   wireShiftEnter(id, 0)
   wireOsc52(id, 0)
+  wireResizeGate(id, 0)
 }
 
 // bootTermFrame wires the iframe now and re-wires (and re-applies the latest
