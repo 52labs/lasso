@@ -55,6 +55,12 @@ const POLL_MS = 2500
 // reaped out from under the still-visible grid.
 const KEEPALIVE_MS = 18_000
 
+// How long a cell waits before retrying a failed attach. A gridTerm POST can
+// fail transiently (backend momentarily stalled, an SSH mux mid-redial after a
+// network blip) — without a retry the cell would show "terminal unavailable"
+// forever, since no other timer runs until an iframe exists.
+const ATTACH_RETRY_MS = 5_000
+
 // Grid layout constants — gap/padding must match .termgrid in index.css. The
 // column count and row height are computed from the viewport (tall-first: as
 // many columns as fit at GRID_MIN_CELL_W, cells stretched to fill the height,
@@ -839,6 +845,10 @@ function GridCell({
   const { host: activeHost } = useApp()
   const bodyRef = React.useRef<HTMLDivElement>(null)
   const [src, setSrc] = React.useState<string | null>(null)
+  // The token of the attach this cell created (parsed from the proxy base).
+  // Passed with our releases so a stale fire-and-forget release can only kill
+  // OUR attach, never a newer one that re-claimed the pane after a remount.
+  const tokenRef = React.useRef("")
   const [failed, setFailed] = React.useState(false)
   // The ttyd iframe flashes its own connect/reconnect chrome before herdr
   // repaints the pane, so we keep a loading overlay on top until xterm has
@@ -853,12 +863,22 @@ function GridCell({
     const el = bodyRef.current
     if (!el) return
     let cancelled = false
+    let retry: ReturnType<typeof setTimeout> | null = null
     const attach = async () => {
       try {
         const { base } = await api.gridTerm(p.host, p.terminal_id)
-        if (!cancelled) setSrc(base)
+        if (cancelled) return
+        tokenRef.current = base.match(/\/grid-term\/([^/]+)\//)?.[1] ?? ""
+        setFailed(false)
+        setSrc(base)
       } catch {
-        if (!cancelled) setFailed(true)
+        // Transient failures (backend stalled, SSH mux mid-redial) heal on
+        // their own — keep retrying while the cell is on screen rather than
+        // stranding it on "terminal unavailable".
+        if (!cancelled) {
+          setFailed(true)
+          retry = setTimeout(() => void attach(), ATTACH_RETRY_MS)
+        }
       }
     }
     const io = new IntersectionObserver(
@@ -874,6 +894,7 @@ function GridCell({
     return () => {
       cancelled = true
       io.disconnect()
+      if (retry) clearTimeout(retry)
     }
   }, [active, src, p.host, p.terminal_id])
 
@@ -886,13 +907,13 @@ function GridCell({
     setSrc(null)
     setFailed(false)
     setReady(false)
-    void api.gridTermRelease(p.host, p.terminal_id)
+    void api.gridTermRelease(p.host, p.terminal_id, tokenRef.current)
   }, [active, p.host, p.terminal_id])
 
   // Release the server-side attach when the cell goes away entirely.
   React.useEffect(
     () => () => {
-      void api.gridTermRelease(p.host, p.terminal_id)
+      void api.gridTermRelease(p.host, p.terminal_id, tokenRef.current)
     },
     [p.host, p.terminal_id]
   )

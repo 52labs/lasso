@@ -454,12 +454,14 @@ export const api = {
   // Detach a pane's grid terminal (kills its ttyd). Called when a cell leaves
   // the grid so the pane isn't held to the cell's narrow width while it's viewed
   // full-size in the Herdr terminal. `keepalive` lets it complete even when fired
-  // from a React unmount/teardown. Best-effort — failures are ignored.
-  gridTermRelease: (host: string, terminal_id: string) =>
+  // from a React unmount/teardown. Best-effort — failures are ignored. `token`
+  // scopes the release to the attach this cell created, so a stale unmount
+  // release can't race a quick remount and kill the newer attach.
+  gridTermRelease: (host: string, terminal_id: string, token = "") =>
     fetch("/api/grid/term-release", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ host, terminal_id }),
+      body: JSON.stringify({ host, terminal_id, token }),
       keepalive: true,
     }).catch(() => {}),
 
