@@ -61,6 +61,43 @@ const KEEPALIVE_MS = 18_000
 // forever, since no other timer runs until an iframe exists.
 const ATTACH_RETRY_MS = 5_000
 
+// Stepping between panes (Single mode) or toggling one off and on (Multi)
+// unmounts and remounts cells in quick succession. Releasing the server-side
+// attach the instant a cell unmounts made every step back a cold start (fresh
+// ttyd + herdr attach + xterm boot), so unmount releases are deferred by this
+// grace: re-mounting within it finds the attach still live (ensureGridTerm
+// returns the existing entry) and the terminal reconnects near-instantly. The
+// deferred release is token-scoped, so if a newer attach claimed the pane in
+// the meantime it's a no-op. Leaving the Grid view still tears everything down
+// immediately (gridTermReleaseAll), so no thin attach lingers to clamp a pane
+// being viewed full-size in Herdr.
+const RELEASE_GRACE_MS = 30_000
+const pendingReleases = new Map<string, ReturnType<typeof setTimeout>>()
+function scheduleGridTermRelease(
+  host: string,
+  terminalId: string,
+  token: string
+) {
+  const key = `${host}|${terminalId}`
+  const prior = pendingReleases.get(key)
+  if (prior) clearTimeout(prior)
+  pendingReleases.set(
+    key,
+    setTimeout(() => {
+      pendingReleases.delete(key)
+      void api.gridTermRelease(host, terminalId, token)
+    }, RELEASE_GRACE_MS)
+  )
+}
+function cancelGridTermRelease(host: string, terminalId: string) {
+  const key = `${host}|${terminalId}`
+  const t = pendingReleases.get(key)
+  if (t) {
+    clearTimeout(t)
+    pendingReleases.delete(key)
+  }
+}
+
 // Grid layout constants — gap/padding must match .termgrid in index.css. The
 // column count and row height are computed from the viewport (tall-first: as
 // many columns as fit at GRID_MIN_CELL_W, cells stretched to fill the height,
@@ -865,6 +902,9 @@ function GridCell({
     let cancelled = false
     let retry: ReturnType<typeof setTimeout> | null = null
     const attach = async () => {
+      // A pending deferred release means WE recently unmounted this pane —
+      // cancel it so it can't kill the attach we're about to (re)use.
+      cancelGridTermRelease(p.host, p.terminal_id)
       try {
         const { base } = await api.gridTerm(p.host, p.terminal_id)
         if (cancelled) return
@@ -910,10 +950,14 @@ function GridCell({
     void api.gridTermRelease(p.host, p.terminal_id, tokenRef.current)
   }, [active, p.host, p.terminal_id])
 
-  // Release the server-side attach when the cell goes away entirely.
+  // When the cell goes away entirely, schedule (rather than fire) the release:
+  // stepping right back re-uses the still-live attach instead of cold-starting.
+  // Nothing to release if this cell never attached — an unconditional release
+  // here could kill an attach another tab owns.
   React.useEffect(
     () => () => {
-      void api.gridTermRelease(p.host, p.terminal_id, tokenRef.current)
+      if (tokenRef.current)
+        scheduleGridTermRelease(p.host, p.terminal_id, tokenRef.current)
     },
     [p.host, p.terminal_id]
   )

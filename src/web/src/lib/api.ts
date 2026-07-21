@@ -361,6 +361,12 @@ function withHost(url: string, host?: string): string {
   return `${url}${url.includes("?") ? "&" : "?"}host=${encodeURIComponent(host)}`
 }
 
+// The host switch currently in flight (if any) — see api.switchHost.
+let hostSwitch: {
+  host: string
+  promise: Promise<{ active: string; version: string; protocol: number }>
+} | null = null
+
 export const api = {
   active: () => getJSON<ActiveState>("/api/active"),
   theme: () => getJSON<ThemePayload>("/api/theme"),
@@ -381,11 +387,31 @@ export const api = {
 
   // Switch the active host ("local" or an alias). The backend re-points herdr
   // RPC, file/diff ops, and respawns the terminals at the new host.
-  switchHost: (host: string) =>
-    postJSON<{ active: string; version: string; protocol: number }>(
-      "/api/host",
-      { host }
-    ),
+  //
+  // Client-side, switches are coalesced: a same-host request while one is in
+  // flight shares its promise, and a different-host request queues behind it.
+  // The server allows only one switch at a time (409 "a host switch is already
+  // in progress"), and focus paths judge "already there?" from SSE state that
+  // lags an in-flight switch by seconds — so without this, clicking into a
+  // cell mid-switch fired a duplicate switch whose 409 surfaced as a
+  // scary-but-harmless "focus failed" toast.
+  switchHost: (host: string) => {
+    if (hostSwitch?.host === host) return hostSwitch.promise
+    const prev = hostSwitch?.promise.catch(() => {}) ?? Promise.resolve()
+    const promise = prev.then(() =>
+      postJSON<{ active: string; version: string; protocol: number }>(
+        "/api/host",
+        { host }
+      )
+    )
+    const entry = { host, promise }
+    hostSwitch = entry
+    const clear = () => {
+      if (hostSwitch === entry) hostSwitch = null
+    }
+    promise.then(clear, clear)
+    return promise
+  },
 
   // Run `herdr update` on a remote host that's behind this lasso's protocol,
   // auto-answering its interactive prompts (stop the old server = yes, which
