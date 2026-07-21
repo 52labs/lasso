@@ -48,6 +48,15 @@ type RightView = "files" | "scratch" | "browser" | "terminal" | "settings"
 
 const LEFT_VIEWS: LeftView[] = ["herdr", "grid"]
 
+// Below this *nav* width (px) the left column drops the Grid tab (and with it
+// the whole tab strip — Herdr is then the only view) and pins itself to Herdr.
+// The trigger is the measured strip width — NOT the viewport — because
+// the left column is only a fraction of the window (the sidebar eats the rest),
+// so a wide screen can still leave the nav too cramped for host + tabs + search
+// + New Agent without overlapping. The container queries below (`@container/lnav`)
+// collapse the search/New-Agent labels within this same shrinking strip.
+const GRID_HIDE_PX = 520
+
 // Shared tab-strip styling: a full-width underline strip, matching the original
 // vanilla UI rather than shadcn's default pill TabsList.
 const stripClass =
@@ -60,6 +69,9 @@ type TabDef = {
   label: string
   icon: LucideIcon
   badge?: React.ReactNode
+  // Extra classes for this tab's trigger. Applied to the hidden measure copy
+  // too so the icon-collapse measurement stays in sync.
+  className?: string
 }
 
 // A tab strip that shows full text labels when they fit, and collapses every
@@ -71,18 +83,26 @@ function FitTabs({
   center,
   trailing,
   listClassName,
+  onWidth,
 }: {
   tabs: TabDef[]
   leading?: React.ReactNode
   center?: React.ReactNode
   trailing?: React.ReactNode
   listClassName?: string
+  // Reports the strip's own width so a parent can drop tabs / switch views when
+  // the nav (not the viewport) gets too narrow. Fires on mount and on resize.
+  onWidth?: (width: number) => void
 }) {
+  const rootRef = React.useRef<HTMLDivElement>(null)
   const scrollRef = React.useRef<HTMLDivElement>(null)
   const measureRef = React.useRef<HTMLDivElement>(null)
   const [compact, setCompact] = React.useState(false)
+  const onWidthRef = React.useRef(onWidth)
+  onWidthRef.current = onWidth
 
   React.useLayoutEffect(() => {
+    const root = rootRef.current
     const scroll = scrollRef.current
     const measure = measureRef.current
     if (!scroll || !measure) return
@@ -91,8 +111,10 @@ function FitTabs({
       // width is the space the labels need. If that can't fit the visible
       // track, switch to icons. The +1 absorbs sub-pixel rounding.
       setCompact(measure.scrollWidth > scroll.clientWidth + 1)
+      if (root) onWidthRef.current?.(root.clientWidth)
     }
     const ro = new ResizeObserver(check)
+    if (root) ro.observe(root)
     ro.observe(scroll)
     ro.observe(measure)
     check()
@@ -100,11 +122,12 @@ function FitTabs({
   }, [])
 
   return (
-    <TabsList className={cn(stripClass, listClassName)}>
+    <TabsList ref={rootRef} className={cn(stripClass, listClassName)}>
       {leading}
       {/* A short vertical rule fences the leading control (host picker) off from
-          the tab group so the two idioms don't read as one jammed-together row. */}
-      {leading && (
+          the tab group so the two idioms don't read as one jammed-together row.
+          Dropped when there are no tabs — nothing left to fence off. */}
+      {leading && tabs.length > 0 && (
         <div aria-hidden className="mx-1.5 h-4 w-px shrink-0 bg-border" />
       )}
       {/* Tabs live in their own region; the leading/trailing controls stay fixed
@@ -120,11 +143,11 @@ function FitTabs({
           center ? "flex-none" : "flex-1"
         )}
       >
-        {tabs.map(({ value, label, icon: Icon, badge }) => (
+        {tabs.map(({ value, label, icon: Icon, badge, className }) => (
           <TabsTrigger
             key={value}
             value={value}
-            className={tabClass}
+            className={cn(tabClass, className)}
             title={compact ? label : undefined}
           >
             {compact ? <Icon className="size-4" aria-label={label} /> : label}
@@ -139,8 +162,8 @@ function FitTabs({
           aria-hidden
           className="pointer-events-none invisible absolute top-0 left-0 flex"
         >
-          {tabs.map(({ value, label, badge }) => (
-            <span key={value} className={tabClass}>
+          {tabs.map(({ value, label, badge, className }) => (
+            <span key={value} className={cn(tabClass, className)}>
               {label}
               {badge}
             </span>
@@ -156,20 +179,25 @@ function FitTabs({
 }
 
 // A search affordance for the header: styled like an input but it's a button
-// that opens the ⌘K pane switcher (the actual search lives in that palette). On
-// mobile it's a compact "Search" pill (only the ⌘K hint is dropped — there's no
-// ⌘ key); the full-width bar shows from md up.
+// that opens the ⌘K pane switcher (the actual search lives in that palette). It
+// fills its centre slot (flex-1, capped at max-w-xs) so it reads as a real
+// search bar at every width — the label just truncates when space runs out
+// rather than collapsing to a lone icon. The ⌘K hint shows once the strip has
+// room for it (container query, `/lnav`).
 function HeaderSearch({ onOpen }: { onOpen: () => void }) {
   return (
     <button
       type="button"
       onClick={onOpen}
       title="Search panes (⌘K)"
-      className="flex h-7 w-auto items-center gap-2 rounded-md border border-border bg-muted/40 px-2.5 text-muted-foreground text-sm hover:border-primary hover:text-foreground md:w-full md:max-w-xs"
+      className="flex h-7 w-full max-w-xs items-center gap-2 rounded-md border border-border bg-muted/40 px-2.5 text-muted-foreground text-sm hover:border-primary hover:text-foreground"
     >
       <Search className="size-3.5 shrink-0" />
+      {/* The bar fills its centre slot (flex-1), so the label rides along in
+          whatever space is free and only truncates when the strip is genuinely
+          tight — no premature collapse to a lone icon with dead space around it. */}
       <span className="min-w-0 flex-1 truncate text-left">Search</span>
-      <kbd className="hidden rounded border border-border bg-background px-1.5 py-0.5 font-mono text-[11px] text-muted-foreground md:inline-block">
+      <kbd className="@min-[520px]/lnav:inline-block hidden rounded border border-border bg-background px-1.5 py-0.5 font-mono text-[11px] text-muted-foreground">
         ⌘K
       </kbd>
     </button>
@@ -256,6 +284,19 @@ function Shell() {
     },
     []
   )
+
+  // When the nav strip is too narrow (see GRID_HIDE_PX) the Grid tab is dropped
+  // and the left column pins to Herdr — regardless of the persisted `?view=` or
+  // a resize while Grid was active. Keyed on the measured strip width (reported
+  // by FitTabs) so it fires whenever the sidebar squeezes the column, not just
+  // on a narrow viewport. `effectiveLeftView` drives rendering immediately; the
+  // effect normalizes the state + URL to match.
+  const [navWidth, setNavWidth] = React.useState(0)
+  const hideGrid = navWidth > 0 && navWidth < GRID_HIDE_PX
+  const effectiveLeftView: LeftView = hideGrid ? "herdr" : leftView
+  React.useEffect(() => {
+    if (hideGrid && leftView !== "herdr") switchLeft("herdr")
+  }, [hideGrid, leftView, switchLeft])
 
   // Warm the cross-host pane list in the background on load so the first ⌘K
   // pane-switcher search is instant instead of waiting on a fresh fetch. Shares
@@ -436,15 +477,23 @@ function Shell() {
           className="flex h-full min-h-0 flex-col"
         >
           <Tabs
-            value={leftView}
+            value={effectiveLeftView}
             onValueChange={(v) => switchLeft(v as LeftView)}
             className="flex h-full flex-col gap-0"
           >
             <FitTabs
-              tabs={[
-                { value: "herdr", label: "Herdr", icon: Terminal },
-                { value: "grid", label: "Grid", icon: LayoutGrid },
-              ]}
+              onWidth={setNavWidth}
+              // When the strip is too narrow for Grid, Herdr is the only view —
+              // so drop the whole tab strip (a lone always-active "Herdr" tab is
+              // just noise) and give that room to the search bar.
+              tabs={
+                hideGrid
+                  ? []
+                  : [
+                      { value: "herdr", label: "Herdr", icon: Terminal },
+                      { value: "grid", label: "Grid", icon: LayoutGrid },
+                    ]
+              }
               leading={<HostSwitcher variant="nav" />}
               center={
                 <HeaderSearch
@@ -454,7 +503,10 @@ function Shell() {
                   }}
                 />
               }
-              listClassName="pr-2"
+              // `@container/lnav` makes this strip the container the search /
+              // New-Agent labels shrink against (see their `@min-[…]/lnav:`
+              // classes). pr-2 keeps the trailing control off the edge.
+              listClassName="@container/lnav pr-2"
               trailing={
                 // New Agent sits at the far-right of the strip; when the sidebar
                 // is collapsed the git status + expand control follow it.
@@ -503,18 +555,18 @@ function Shell() {
               }
             />
             <div className="relative min-h-0 flex-1">
-              <Pane show={leftView === "herdr"}>
+              <Pane show={effectiveLeftView === "herdr"}>
                 <TerminalFrame
                   id="term"
                   src="/terminal/"
                   title="Herdr terminal"
                   suppressContext
-                  hidden={leftView !== "herdr"}
+                  hidden={effectiveLeftView !== "herdr"}
                 />
               </Pane>
-              <Pane show={leftView === "grid"}>
+              <Pane show={effectiveLeftView === "grid"}>
                 <GridTab
-                  active={leftView === "grid"}
+                  active={effectiveLeftView === "grid"}
                   onFocusInHerdr={() => switchLeft("herdr")}
                   focusRequest={gridFocusReq}
                 />

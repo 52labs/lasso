@@ -17,8 +17,8 @@ import { EditableCombobox } from "@/components/ui/editable-combobox"
 import { Input } from "@/components/ui/input"
 import {
   type AgentRecord,
-  api,
   ApiError,
+  api,
   type CreateAgentPayload,
   type HarnessDef,
   type HostInfo,
@@ -578,11 +578,13 @@ export function CreateAgentDialog({
           // faint tint, so it reads as the row's primary action without a solid fill.
           <button
             type="button"
-            className="my-1 flex shrink-0 items-center gap-1 self-center rounded-md border border-primary/60 bg-primary/10 px-2.5 py-1 font-medium text-primary text-xs transition-colors hover:border-primary hover:bg-primary/20"
+            className="my-1 flex shrink-0 items-center gap-1 self-center rounded-md border border-primary/60 bg-primary/10 @min-[400px]/lnav:px-2.5 px-2 py-1 font-medium text-primary text-xs transition-colors hover:border-primary hover:bg-primary/20"
             title="create a new agent (⌘O)"
           >
             <Plus className="size-3.5" />
-            <span>New Agent</span>
+            {/* Label collapses to a bare "+" only when the strip is genuinely
+                tight — tracked against the `/lnav` container, not the viewport. */}
+            <span className="@min-[400px]/lnav:inline hidden">New Agent</span>
           </button>
         ) : variant === "floating" ? (
           // Mirrors the HostSwitcher pill so the two footer controls read as a
