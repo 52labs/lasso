@@ -211,9 +211,6 @@ type uiState struct {
 	// GridSelectPane is the host|pane_id shown in Select mode ("" = auto: the
 	// first candidate).
 	GridSelectPane string `json:"grid_select_pane"`
-	// GridSelectAgentsOnly filters Select mode's cycling list to agent panes.
-	// Defaults true (seeded in getUIState so older stored blobs pick it up).
-	GridSelectAgentsOnly bool `json:"grid_select_agents_only"`
 	// GridRailAgentsOnly filters the Grid tab's pane rail to agent panes.
 	GridRailAgentsOnly bool `json:"grid_rail_agents_only"`
 	SidebarCollapsed   bool `json:"sidebar_collapsed"`
@@ -234,12 +231,11 @@ type uiState struct {
 // defaults true).
 func getUIState() (uiState, error) {
 	us := uiState{
-		GridHiddenHosts:      []string{},
-		GridSelected:         []string{},
-		GridMode:             "all",
-		GridWatched:          []string{},
-		GridSelectAgentsOnly: true,
-		FilesClickNavigates:  true,
+		GridHiddenHosts:     []string{},
+		GridSelected:        []string{},
+		GridMode:            "all",
+		GridWatched:         []string{},
+		FilesClickNavigates: true,
 	}
 	var v string
 	err := db.QueryRow(`SELECT value FROM settings WHERE key='ui_state'`).Scan(&v)

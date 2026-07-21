@@ -102,8 +102,6 @@ export interface UIState {
   grid_watched: string[]
   // host|pane_id of the pane shown in Select mode ("" = auto: first candidate).
   grid_select_pane: string
-  // Select mode cycles only agent panes when true (the default).
-  grid_select_agents_only: boolean
   // Filter the Grid tab's pane rail to agent panes.
   grid_rail_agents_only: boolean
   sidebar_collapsed: boolean

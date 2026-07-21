@@ -16,7 +16,6 @@ const DEFAULTS: UIState = {
   grid_mode: "all",
   grid_watched: [],
   grid_select_pane: "",
-  grid_select_agents_only: true,
   grid_rail_agents_only: false,
   sidebar_collapsed: false,
   sidebar_pct: 0,

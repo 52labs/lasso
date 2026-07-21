@@ -17,8 +17,8 @@ import { EditableCombobox } from "@/components/ui/editable-combobox"
 import { Input } from "@/components/ui/input"
 import {
   type AgentRecord,
-  api,
   ApiError,
+  api,
   type CreateAgentPayload,
   type HarnessDef,
   type HostInfo,

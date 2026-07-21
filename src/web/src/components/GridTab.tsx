@@ -111,10 +111,8 @@ export function GridTab({
     () => new Set(ui.grid_watched),
     [ui.grid_watched]
   )
-  // Select mode: one pane at a time. selectPane is the persisted choice;
-  // selectAgentsOnly (default true) filters the ‹ › cycling list.
+  // Select mode: one pane at a time. selectPane is the persisted choice.
   const selectPane = ui.grid_select_pane
-  const selectAgentsOnly = ui.grid_select_agents_only
 
   // Pane rail (the picker): default collapsed so the grid keeps the full
   // width; open state persists per device.
@@ -229,13 +227,14 @@ export function GridTab({
     return Array.from(m, ([host, label]) => ({ host, label }))
   }, [all])
 
-  // Select mode's cycling list: agent panes by default, everything when the
-  // toggle is off. An explicitly picked pane still shows even if it falls
-  // outside the list (e.g. selected from the rail with agents-only on).
-  const selectCandidates = React.useMemo(
-    () => (all ? all.filter((p) => !selectAgentsOnly || p.has_agent) : null),
-    [all, selectAgentsOnly]
-  )
+  // Select mode's cycling list: agent panes when any exist, else every pane.
+  // An explicitly picked pane (from the rail) still shows even when it falls
+  // outside the list.
+  const selectCandidates = React.useMemo(() => {
+    if (!all) return null
+    const agents = all.filter((p) => p.has_agent)
+    return agents.length ? agents : all
+  }, [all])
   const selectShownKey = React.useMemo(() => {
     if (!all) return null
     if (selectPane && all.some((p) => cellKey(p) === selectPane))
@@ -308,7 +307,7 @@ export function GridTab({
     patchUIState({ grid_mode: m })
 
   // Step Select mode's shown pane through the cycling list (wraps). When the
-  // shown pane sits outside the list (picked explicitly with agents-only on),
+  // shown pane sits outside the list (a non-agent pane picked from the rail),
   // stepping re-enters the list at its start.
   const stepSelect = (delta: number) => {
     const cands = selectCandidates
@@ -642,18 +641,14 @@ export function GridTab({
           </>
         ) : (
           <span className="text-muted-foreground text-xs">
-            {panes
+            {panes && mode !== "select"
               ? mode === "watch"
                 ? `${panes.length} watched`
-                : mode === "select"
-                  ? (panes[0]?.workspace_label ??
-                    panes[0]?.workspace_id ??
-                    "")
-                  : `${panes.length} pane${panes.length === 1 ? "" : "s"}${
-                      panes.length !== (all?.length ?? 0)
-                        ? ` of ${all?.length}`
-                        : ""
-                    }`
+                : `${panes.length} pane${panes.length === 1 ? "" : "s"}${
+                    panes.length !== (all?.length ?? 0)
+                      ? ` of ${all?.length}`
+                      : ""
+                  }`
               : ""}
           </span>
         )}
@@ -706,33 +701,6 @@ export function GridTab({
               className={cn(
                 "size-2 rounded-full",
                 agentsOnly ? "bg-primary" : "bg-muted-foreground/40"
-              )}
-            />
-            Agents only
-          </button>
-        )}
-
-        {/* Select mode's own agents-only toggle (defaults on) — it shapes the
-            ‹ › cycling list, not what an explicit rail pick can show. */}
-        {mode === "select" && (
-          <button
-            type="button"
-            onClick={() =>
-              patchUIState({ grid_select_agents_only: !selectAgentsOnly })
-            }
-            aria-pressed={selectAgentsOnly}
-            className={cn(
-              "ml-auto flex items-center gap-1.5 rounded-full border px-2 py-0.5 text-[11px] transition-colors",
-              selectAgentsOnly
-                ? "border-primary/40 bg-accent text-foreground"
-                : "border-border text-muted-foreground hover:text-foreground"
-            )}
-            title="Cycle only panes with an associated agent"
-          >
-            <span
-              className={cn(
-                "size-2 rounded-full",
-                selectAgentsOnly ? "bg-primary" : "bg-muted-foreground/40"
               )}
             />
             Agents only
@@ -802,23 +770,7 @@ export function GridTab({
                   </button>
                 </>
               ) : mode === "select" ? (
-                selectAgentsOnly && (all?.length ?? 0) > 0 ? (
-                  <>
-                    no agent panes
-                    <br />
-                    <button
-                      type="button"
-                      onClick={() =>
-                        patchUIState({ grid_select_agents_only: false })
-                      }
-                      className="mt-2 rounded border border-border px-2 py-0.5 text-[11px] text-muted-foreground hover:text-foreground"
-                    >
-                      show all panes
-                    </button>
-                  </>
-                ) : (
-                  "no panes"
-                )
+                "no panes"
               ) : agentsOnly || hidden.size ? (
                 "no panes match the filters"
               ) : (
