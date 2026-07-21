@@ -286,7 +286,9 @@ export function HostSwitcher({
             <Laptop className={iconClass} />
           )}
           {/* Name the active host inline in both variants. */}
-          <span className="max-w-32 truncate font-medium">{activeLabel}</span>
+          <span className="@min-[420px]/lnav:max-w-32 max-w-20 truncate font-medium">
+            {activeLabel}
+          </span>
         </DropdownMenuTrigger>
         <DropdownMenuContent
           align="start"
