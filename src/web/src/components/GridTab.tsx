@@ -537,9 +537,10 @@ export function GridTab({
           Panes
         </button>
 
-        {/* All / Watch / Select segmented toggle: All is the classic every-pane
-            wall, Watch shows only starred panes, Select shows one pane at a
-            time (all persisted server-side). */}
+        {/* All / Multi / Single segmented toggle: All is the classic every-pane
+            wall, Multi shows only starred panes (the watch list), Single shows
+            one pane at a time (all persisted server-side — the stored mode
+            values keep their original "watch"/"select" names). */}
         <div className="flex overflow-hidden rounded-full border border-border text-[11px]">
           {(["all", "watch", "select"] as const).map((m) => (
             <button
@@ -561,7 +562,7 @@ export function GridTab({
                     : "Show one pane at a time"
               }
             >
-              {m === "all" ? "All" : m === "watch" ? "Watch" : "Select"}
+              {m === "all" ? "All" : m === "watch" ? "Multi" : "Single"}
             </button>
           ))}
         </div>
