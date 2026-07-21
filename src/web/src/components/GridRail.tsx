@@ -27,9 +27,12 @@ export function GridRail({
   panes,
   watched,
   newKeys,
+  selectMode,
+  selectedKey,
   onToggleWatch,
   onFocusPane,
   onOpenInHerdr,
+  onClose,
 }: {
   open: boolean
   /** ALL panes across hosts, unfiltered — the rail is the full roster. */
@@ -37,11 +40,17 @@ export function GridRail({
   watched: Set<string>
   /** Keys to highlight as new (snapshotted by GridTab when the badge opens the rail). */
   newKeys: Set<string>
+  /** Select mode: no watch stars — clicking a row shows that one pane. */
+  selectMode: boolean
+  /** The pane currently shown in Select mode (highlighted); null otherwise. */
+  selectedKey: string | null
   onToggleWatch: (key: string) => void
   /** Click: focus the pane's cell here in the grid (no navigation). */
   onFocusPane: (p: GridPane) => void
   /** Context menu: deliberately leave the grid for the Herdr tab. */
   onOpenInHerdr: (p: GridPane) => void
+  /** Context menu: close the pane (confirm dialog + herdr pane.close). */
+  onClose: (p: GridPane) => void
 }) {
   const [search, setSearch] = React.useState("")
   // The agents-only toggle is server-synced (grid_rail_agents_only) so every
@@ -144,25 +153,28 @@ export function GridRail({
                     ref={refNew ? firstNewRef : undefined}
                     className={cn(
                       "group flex w-full items-center gap-1.5 px-2 py-1 text-xs hover:bg-accent/50",
-                      isNew && "bg-accent"
+                      (isNew || (selectMode && key === selectedKey)) &&
+                        "bg-accent"
                     )}
                   >
-                    <button
-                      type="button"
-                      aria-pressed={watched.has(key)}
-                      title={
-                        watched.has(key) ? "Stop watching" : "Watch this pane"
-                      }
-                      onClick={() => onToggleWatch(key)}
-                      className={cn(
-                        "shrink-0 text-[13px] leading-none transition-colors",
-                        watched.has(key)
-                          ? "text-primary"
-                          : "text-muted-foreground hover:text-foreground"
-                      )}
-                    >
-                      {watched.has(key) ? "★" : "☆"}
-                    </button>
+                    {!selectMode && (
+                      <button
+                        type="button"
+                        aria-pressed={watched.has(key)}
+                        title={
+                          watched.has(key) ? "Stop watching" : "Watch this pane"
+                        }
+                        onClick={() => onToggleWatch(key)}
+                        className={cn(
+                          "shrink-0 text-[13px] leading-none transition-colors",
+                          watched.has(key)
+                            ? "text-primary"
+                            : "text-muted-foreground hover:text-foreground"
+                        )}
+                      >
+                        {watched.has(key) ? "★" : "☆"}
+                      </button>
+                    )}
                     <ContextMenu>
                       <ContextMenuTrigger asChild>
                         <button
@@ -175,7 +187,9 @@ export function GridRail({
                             p.agent,
                             tilde(p.cwd),
                             "",
-                            "click to focus in the grid",
+                            selectMode
+                              ? "click to show this pane"
+                              : "click to focus in the grid",
                           ]
                             .filter((s) => s !== undefined && s !== null)
                             .join("\n")}
@@ -210,8 +224,16 @@ export function GridRail({
                         <ContextMenuItem onSelect={() => onOpenInHerdr(p)}>
                           Open in Herdr
                         </ContextMenuItem>
-                        <ContextMenuItem onSelect={() => onToggleWatch(key)}>
-                          {watched.has(key) ? "Unwatch ☆" : "Watch ★"}
+                        {!selectMode && (
+                          <ContextMenuItem onSelect={() => onToggleWatch(key)}>
+                            {watched.has(key) ? "Unwatch ☆" : "Watch ★"}
+                          </ContextMenuItem>
+                        )}
+                        <ContextMenuItem
+                          variant="destructive"
+                          onSelect={() => onClose(p)}
+                        >
+                          {p.has_agent ? "Close agent" : "Close pane"}
                         </ContextMenuItem>
                       </ContextMenuContent>
                     </ContextMenu>

@@ -44,7 +44,10 @@ function flush(useBeacon = false) {
   // sendBeacon so the last events (e.g. a release burst) still land.
   if (useBeacon && typeof navigator.sendBeacon === "function") {
     try {
-      navigator.sendBeacon("/api/log", new Blob([body], { type: "application/json" }))
+      navigator.sendBeacon(
+        "/api/log",
+        new Blob([body], { type: "application/json" })
+      )
       return
     } catch {
       /* fall through to fetch */

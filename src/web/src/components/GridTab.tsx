@@ -111,6 +111,8 @@ export function GridTab({
     () => new Set(ui.grid_watched),
     [ui.grid_watched]
   )
+  // Select mode: one pane at a time. selectPane is the persisted choice.
+  const selectPane = ui.grid_select_pane
 
   // Pane rail (the picker): default collapsed so the grid keeps the full
   // width; open state persists per device.
@@ -225,24 +227,43 @@ export function GridTab({
     return Array.from(m, ([host, label]) => ({ host, label }))
   }, [all])
 
-  // Watch mode shows exactly the starred panes — the agents-only and host
-  // filters (whose toggles are hidden in Watch mode) only shape the All wall.
+  // Select mode's cycling list: agent panes when any exist, else every pane.
+  // An explicitly picked pane (from the rail) still shows even when it falls
+  // outside the list.
+  const selectCandidates = React.useMemo(() => {
+    if (!all) return null
+    const agents = all.filter((p) => p.has_agent)
+    return agents.length ? agents : all
+  }, [all])
+  const selectShownKey = React.useMemo(() => {
+    if (!all) return null
+    if (selectPane && all.some((p) => cellKey(p) === selectPane))
+      return selectPane
+    const first = selectCandidates?.[0]
+    return first ? cellKey(first) : null
+  }, [all, selectCandidates, selectPane])
+
+  // Watch mode shows exactly the starred panes; Select mode shows exactly one.
+  // The agents-only and host filters (whose toggles are hidden outside All
+  // mode) only shape the All wall.
   const panes = React.useMemo(
     () =>
       all
         ? all.filter((p) =>
             mode === "watch"
               ? watched.has(cellKey(p))
-              : (!agentsOnly || p.has_agent) && !hidden.has(p.host)
+              : mode === "select"
+                ? cellKey(p) === selectShownKey
+                : (!agentsOnly || p.has_agent) && !hidden.has(p.host)
           )
         : null,
-    [all, agentsOnly, hidden, mode, watched]
+    [all, agentsOnly, hidden, mode, watched, selectShownKey]
   )
 
-  // A pane counts as seen once it's been on screen: rendered in All mode,
-  // listed while the rail is open, or deliberately starred.
+  // A pane counts as seen once it's been on screen: rendered in All or Select
+  // mode, listed while the rail is open, or deliberately starred.
   React.useEffect(() => {
-    if (active && mode === "all" && panes) mark(panes.map(cellKey))
+    if (active && mode !== "watch" && panes) mark(panes.map(cellKey))
   }, [active, mode, panes, mark])
   React.useEffect(() => {
     if (railOpen && all) mark(all.map(cellKey))
@@ -282,7 +303,23 @@ export function GridTab({
 
   const toggleAgentsOnly = () => patchUIState({ grid_agents_only: !agentsOnly })
 
-  const setMode = (m: "all" | "watch") => patchUIState({ grid_mode: m })
+  const setMode = (m: "all" | "watch" | "select") =>
+    patchUIState({ grid_mode: m })
+
+  // Step Select mode's shown pane through the cycling list (wraps). When the
+  // shown pane sits outside the list (a non-agent pane picked from the rail),
+  // stepping re-enters the list at its start. The displayed pane switches
+  // immediately; the herdr focus (which the sidebar file viewer follows) trails
+  // asynchronously so stepping never blocks on a cross-host switch.
+  const stepSelect = (delta: number) => {
+    const cands = selectCandidates
+    if (!cands || cands.length === 0) return
+    const idx = cands.findIndex((p) => cellKey(p) === selectShownKey)
+    const next =
+      cands[idx < 0 ? 0 : (idx + delta + cands.length) % cands.length]
+    patchUIState({ grid_select_pane: cellKey(next) })
+    focusInGridBackend(next)
+  }
 
   const toggleWatch = (key: string) => {
     const next = new Set(watched)
@@ -355,7 +392,10 @@ export function GridTab({
   )
   const focusInGrid = (p: GridPane) => {
     const key = cellKey(p)
-    if (panes && !panes.some((x) => cellKey(x) === key)) {
+    if (mode === "select") {
+      // In Select mode, picking a pane (from the rail) makes it THE pane.
+      if (key !== selectShownKey) patchUIState({ grid_select_pane: key })
+    } else if (panes && !panes.some((x) => cellKey(x) === key)) {
       // Filtered out of the current view (e.g. unstarred in Watch mode).
       toast(`${p.host_label} pane isn't shown — star it or switch to All`)
       return
@@ -393,6 +433,7 @@ export function GridTab({
     const key = cellKey(p)
     if (mode === "watch" && !watched.has(key))
       patchUIState({ grid_watched: [...watched, key] })
+    if (mode === "select") patchUIState({ grid_select_pane: key })
     focusInGridBackend(p)
     // The cell may still be mounting (or just became visible via the star), and
     // its ttyd takes a moment to attach — retry the scroll + keyboard handoff.
@@ -499,10 +540,12 @@ export function GridTab({
           Panes
         </button>
 
-        {/* All / Watch segmented toggle: All is the classic every-pane wall,
-            Watch shows only starred panes (persisted server-side). */}
+        {/* All / Multi / Single segmented toggle: All is the classic every-pane
+            wall, Multi shows only starred panes (the watch list), Single shows
+            one pane at a time (all persisted server-side — the stored mode
+            values keep their original "watch"/"select" names). */}
         <div className="flex overflow-hidden rounded-full border border-border text-[11px]">
-          {(["all", "watch"] as const).map((m) => (
+          {(["all", "watch", "select"] as const).map((m) => (
             <button
               key={m}
               type="button"
@@ -515,13 +558,50 @@ export function GridTab({
                   : "text-muted-foreground hover:text-foreground"
               )}
               title={
-                m === "all" ? "Show every pane" : "Show only watched panes"
+                m === "all"
+                  ? "Show every pane"
+                  : m === "watch"
+                    ? "Show only watched panes"
+                    : "Show one pane at a time"
               }
             >
-              {m === "all" ? "All" : "Watch"}
+              {m === "all" ? "All" : m === "watch" ? "Multi" : "Single"}
             </button>
           ))}
         </div>
+
+        {/* Select mode: step through the cycling list (agent panes by default). */}
+        {mode === "select" && (
+          <div className="flex items-center gap-1 text-[11px] text-muted-foreground">
+            <button
+              type="button"
+              onClick={() => stepSelect(-1)}
+              className="rounded-full border border-border px-2 py-0.5 transition-colors hover:text-foreground"
+              title="Previous pane"
+            >
+              ‹
+            </button>
+            <span className="tabular-nums">
+              {(() => {
+                const n = selectCandidates?.length ?? 0
+                if (!n) return "0"
+                const idx =
+                  selectCandidates?.findIndex(
+                    (p) => cellKey(p) === selectShownKey
+                  ) ?? -1
+                return idx >= 0 ? `${idx + 1} / ${n}` : `· / ${n}`
+              })()}
+            </span>
+            <button
+              type="button"
+              onClick={() => stepSelect(1)}
+              className="rounded-full border border-border px-2 py-0.5 transition-colors hover:text-foreground"
+              title="Next pane"
+            >
+              ›
+            </button>
+          </div>
+        )}
 
         {/* Panes that appeared since this device last looked — Watch mode only.
             Clicking opens the rail with the new rows highlighted (a snapshot,
@@ -565,7 +645,7 @@ export function GridTab({
           </>
         ) : (
           <span className="text-muted-foreground text-xs">
-            {panes
+            {panes && mode !== "select"
               ? mode === "watch"
                 ? `${panes.length} watched`
                 : `${panes.length} pane${panes.length === 1 ? "" : "s"}${
@@ -653,9 +733,12 @@ export function GridTab({
           panes={all}
           watched={watched}
           newKeys={railHighlight}
+          selectMode={mode === "select"}
+          selectedKey={mode === "select" ? selectShownKey : null}
           onToggleWatch={toggleWatch}
           onFocusPane={focusInGrid}
           onOpenInHerdr={(p) => void focusPane(p)}
+          onClose={requestClose}
         />
         <div
           ref={gridRef}
@@ -691,6 +774,8 @@ export function GridTab({
                     browse panes
                   </button>
                 </>
+              ) : mode === "select" ? (
+                "no panes"
               ) : agentsOnly || hidden.size ? (
                 "no panes match the filters"
               ) : (
@@ -713,6 +798,7 @@ export function GridTab({
                     : false
                 }
                 watched={watched.has(cellKey(p))}
+                watchable={mode !== "select"}
                 pending={focusPending === cellKey(p)}
                 onToggleWatch={() => toggleWatch(cellKey(p))}
                 onClick={(e) => onCellClick(e, p)}
@@ -815,6 +901,7 @@ function GridCell({
   selectionCount,
   focused,
   watched,
+  watchable,
   pending,
   onToggleWatch,
   onClick,
@@ -829,6 +916,8 @@ function GridCell({
   selectionCount: number
   focused: boolean
   watched: boolean
+  /** Whether to offer the watch star at all (hidden in Select mode). */
+  watchable: boolean
   /** A focus (in-grid or into Herdr) for this cell is in flight — show a spinner. */
   pending: boolean
   onToggleWatch: () => void
@@ -1033,27 +1122,31 @@ function GridCell({
                 ● {p.agent || "agent"}
               </span>
             )}
-            <button
-              type="button"
-              className={cn("termcell-star", watched && "watched")}
-              aria-pressed={watched}
-              title={watched ? "Stop watching" : "Watch this pane"}
-              onClick={(e) => {
-                e.stopPropagation()
-                onToggleWatch()
-              }}
-            >
-              {watched ? "★" : "☆"}
-            </button>
+            {watchable && (
+              <button
+                type="button"
+                className={cn("termcell-star", watched && "watched")}
+                aria-pressed={watched}
+                title={watched ? "Stop watching" : "Watch this pane"}
+                onClick={(e) => {
+                  e.stopPropagation()
+                  onToggleWatch()
+                }}
+              >
+                {watched ? "★" : "☆"}
+              </button>
+            )}
           </div>
         </ContextMenuTrigger>
         <ContextMenuContent>
           <ContextMenuItem onSelect={onOpenInHerdr}>
             Open in Herdr
           </ContextMenuItem>
-          <ContextMenuItem onSelect={onToggleWatch}>
-            {watched ? "Unwatch ☆" : "Watch ★"}
-          </ContextMenuItem>
+          {watchable && (
+            <ContextMenuItem onSelect={onToggleWatch}>
+              {watched ? "Unwatch ☆" : "Watch ★"}
+            </ContextMenuItem>
+          )}
           <ContextMenuItem onSelect={onRename}>
             Rename workspace…
           </ContextMenuItem>
