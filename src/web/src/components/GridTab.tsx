@@ -738,6 +738,7 @@ export function GridTab({
           onToggleWatch={toggleWatch}
           onFocusPane={focusInGrid}
           onOpenInHerdr={(p) => void focusPane(p)}
+          onClose={requestClose}
         />
         <div
           ref={gridRef}

@@ -32,6 +32,7 @@ export function GridRail({
   onToggleWatch,
   onFocusPane,
   onOpenInHerdr,
+  onClose,
 }: {
   open: boolean
   /** ALL panes across hosts, unfiltered — the rail is the full roster. */
@@ -48,6 +49,8 @@ export function GridRail({
   onFocusPane: (p: GridPane) => void
   /** Context menu: deliberately leave the grid for the Herdr tab. */
   onOpenInHerdr: (p: GridPane) => void
+  /** Context menu: close the pane (confirm dialog + herdr pane.close). */
+  onClose: (p: GridPane) => void
 }) {
   const [search, setSearch] = React.useState("")
   // The agents-only toggle is server-synced (grid_rail_agents_only) so every
@@ -226,6 +229,12 @@ export function GridRail({
                             {watched.has(key) ? "Unwatch ☆" : "Watch ★"}
                           </ContextMenuItem>
                         )}
+                        <ContextMenuItem
+                          variant="destructive"
+                          onSelect={() => onClose(p)}
+                        >
+                          {p.has_agent ? "Close agent" : "Close pane"}
+                        </ContextMenuItem>
                       </ContextMenuContent>
                     </ContextMenu>
                   </div>
