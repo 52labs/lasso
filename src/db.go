@@ -202,11 +202,18 @@ type uiState struct {
 	GridHiddenHosts []string `json:"grid_hidden_hosts"`
 	GridSelected    []string `json:"grid_selected"`
 	// GridMode is the Grid tab's visibility mode: "all" shows every pane (minus
-	// filters), "watch" shows only the panes in GridWatched. Anything else reads
-	// as "all" (normalized in getUIState).
+	// filters), "watch" shows only the panes in GridWatched, "select" shows one
+	// pane at a time (GridSelectPane). Anything else reads as "all" (normalized
+	// in getUIState).
 	GridMode string `json:"grid_mode"`
 	// GridWatched holds host|pane_id keys of starred (watched) panes.
 	GridWatched []string `json:"grid_watched"`
+	// GridSelectPane is the host|pane_id shown in Select mode ("" = auto: the
+	// first candidate).
+	GridSelectPane string `json:"grid_select_pane"`
+	// GridSelectAgentsOnly filters Select mode's cycling list to agent panes.
+	// Defaults true (seeded in getUIState so older stored blobs pick it up).
+	GridSelectAgentsOnly bool `json:"grid_select_agents_only"`
 	// GridRailAgentsOnly filters the Grid tab's pane rail to agent panes.
 	GridRailAgentsOnly bool `json:"grid_rail_agents_only"`
 	SidebarCollapsed   bool `json:"sidebar_collapsed"`
@@ -227,11 +234,12 @@ type uiState struct {
 // defaults true).
 func getUIState() (uiState, error) {
 	us := uiState{
-		GridHiddenHosts:     []string{},
-		GridSelected:        []string{},
-		GridMode:            "all",
-		GridWatched:         []string{},
-		FilesClickNavigates: true,
+		GridHiddenHosts:      []string{},
+		GridSelected:         []string{},
+		GridMode:             "all",
+		GridWatched:          []string{},
+		GridSelectAgentsOnly: true,
+		FilesClickNavigates:  true,
 	}
 	var v string
 	err := db.QueryRow(`SELECT value FROM settings WHERE key='ui_state'`).Scan(&v)
@@ -251,7 +259,7 @@ func getUIState() (uiState, error) {
 	if us.GridWatched == nil {
 		us.GridWatched = []string{}
 	}
-	if us.GridMode != "watch" {
+	if us.GridMode != "watch" && us.GridMode != "select" {
 		us.GridMode = "all"
 	}
 	return us, nil

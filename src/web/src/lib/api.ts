@@ -95,10 +95,15 @@ export interface UIState {
   // survives navigating away and back (or reloading).
   grid_selected: string[]
   // Grid tab visibility mode: "all" shows every pane (minus filters), "watch"
-  // shows only the starred panes in grid_watched.
-  grid_mode: "all" | "watch"
+  // shows only the starred panes in grid_watched, "select" shows one pane at
+  // a time (grid_select_pane).
+  grid_mode: "all" | "watch" | "select"
   // host|pane_id keys of starred (watched) panes.
   grid_watched: string[]
+  // host|pane_id of the pane shown in Select mode ("" = auto: first candidate).
+  grid_select_pane: string
+  // Select mode cycles only agent panes when true (the default).
+  grid_select_agents_only: boolean
   // Filter the Grid tab's pane rail to agent panes.
   grid_rail_agents_only: boolean
   sidebar_collapsed: boolean
