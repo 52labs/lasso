@@ -724,11 +724,6 @@ export function GridTab({
         </div>
       </div>
 
-      <div className="hint">
-        click a header to open in Herdr · click inside a cell to type there ·
-        ⌘/Ctrl-click a header to select · right-click for actions
-      </div>
-
       {/* rename the workspace (relabels every pane grouped under it on that host) */}
       <Dialog
         open={renameTarget != null}
