@@ -60,7 +60,15 @@ var gridPool struct {
 // each cycle, so an idle TTL below it meant a full SSH connect + teardown per
 // remote host every 2 minutes, forever — constant control-master churn (and
 // log spam) with recurring windows where a grid op landed mid-reconnect.
-const gridBackendIdle = 5 * time.Minute
+//
+// Generous on purpose: an idle master costs almost nothing, while every reap
+// means a full SSH reconnect (0.2–0.7s) on the next touch. At 5m, a host that
+// merely flapped out of discovery for two warm cycles lost its master; now
+// only a host that stays unwarmed and unused for this long — i.e. one that's
+// genuinely gone — gets collected. Dead-but-pooled masters don't wait for the
+// reaper: gridHostBackend liveness-checks entries on access and redials in
+// place.
+const gridBackendIdle = 30 * time.Minute
 
 // gridHealthEvery throttles the pooled-backend liveness check: a cache hit
 // pings the host's forwarded socket at most this often. Between checks a dead
