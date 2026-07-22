@@ -118,9 +118,9 @@ Appearance (System / Light / Dark, persisted per device).
 - A **release binary** (the curl install) downloads the latest GitHub release for
   your platform, verifies its checksum, atomically replaces itself, and restarts
   the background server if one is running.
-- A **pitchfork-supervised source checkout** (the maintainer's prod) keeps the
-  historical behavior: `git pull --ff-only` then `pitchfork restart`, which
-  rebuilds from source.
+- A **systemd-supervised source checkout** (the maintainer's prod) keeps the
+  historical behavior: `git pull --ff-only` then `systemctl --user restart lasso`,
+  which rebuilds from source.
 
 The Settings tab surfaces "update available → vX.Y.Z" when a newer release exists.
 

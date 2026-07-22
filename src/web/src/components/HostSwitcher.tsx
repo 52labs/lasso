@@ -55,7 +55,7 @@ function formatBehind(n: number | undefined): string {
 
 // provisionable reports whether a reachable host has no herdr server running
 // (missing entirely, or installed but stopped) — the case a fresh
-// install-and-supervise (via pitchfork) can fix.
+// install-and-supervise (via systemd --user) can fix.
 function provisionable(h: HostInfo): boolean {
   return h.reachable && !h.running
 }
@@ -120,7 +120,7 @@ export function HostSwitcher({
   const [open, setOpen] = React.useState(false)
   const [updatingLasso, setUpdatingLasso] = React.useState(false)
 
-  // This lasso build's version + whether it can self-update (a pitchfork-
+  // This lasso build's version + whether it can self-update (a systemd-
   // supervised git checkout). Fetched while the menu is open.
   const versionQuery = useQuery({
     queryKey: qk.version,
@@ -176,7 +176,7 @@ export function HostSwitcher({
 
   // Run a remote action on a host then re-probe so its row reflects the result.
   // "update" runs `herdr update` (host is behind; stops its old server/panes);
-  // "provision" installs herdr + supervises it with pitchfork (host had none
+  // "provision" installs herdr + supervises it with systemd --user (host had none
   // running). Both are slow, but they run independently per host — several can be
   // in flight at once (the button only disables for the host already running).
   const runHostAction = React.useCallback(
@@ -350,7 +350,7 @@ export function HostSwitcher({
                     ? canUpgrade
                       ? `Update herdr on ${h.alias} (${h.version} → ${localVer}; protocol unchanged)`
                       : `Run \`herdr update\` on ${h.alias} (protocol ${h.protocol} → ${localProto}; stops its running sessions)`
-                    : `Install herdr on ${h.alias} and supervise it with pitchfork`
+                    : `Install herdr on ${h.alias} and supervise it with systemd`
                 }
                 disabled={busy}
                 onClick={(e) => {

@@ -107,16 +107,14 @@ lasso update        # swaps the release binary in place
 ```
 
 **`lasso update` only auto-restarts a *pidfile-managed* daemon.** When lasso is
-run under a supervisor (prod is a systemd `--user` unit; some hosts use
-pitchfork), the built-in restart no-ops and the running daemon keeps serving the
-**old** binary — `/api/version` then stays stale and a later `closeme` would land
-on a half-applied update. So restart explicitly via whatever owns the process:
+run under a supervisor (prod is a systemd `--user` unit), the built-in restart
+no-ops and the running daemon keeps serving the **old** binary — `/api/version`
+then stays stale and a later `closeme` would land on a half-applied update. So
+restart explicitly via whatever owns the process:
 
 ```bash
 if systemctl --user is-active --quiet lasso.service 2>/dev/null; then
   systemctl --user restart lasso.service          # prod: systemd --user unit
-elif pitchfork status 2>/dev/null | grep -qiw lasso; then
-  pitchfork restart lasso                          # pitchfork-supervised host
 else
   lasso restart                                    # dev / unsupervised (pidfile)
 fi

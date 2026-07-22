@@ -21,8 +21,8 @@ import (
 // versions. Two install shapes are supported (see cliUpdate):
 //   - a release binary (curl-installed): compare to the latest GitHub release and
 //     self-replace the binary.
-//   - a pitchfork-supervised source checkout (the maintainer's prod): keep the
-//     existing git-pull + `pitchfork restart` path (selfupdate.go).
+//   - a systemd-supervised source checkout (the maintainer's prod): keep the
+//     existing git-pull + `systemctl --user restart` path (selfupdate.go).
 
 const githubRepo = "knowsuchagency/lasso"
 
@@ -185,30 +185,30 @@ func parseSemver(s string) ([3]int, bool) {
 // lasso update
 // ---------------------------------------------------------------------------
 
-// cliUpdate updates lasso in place. A pitchfork-supervised source checkout keeps
+// cliUpdate updates lasso in place. A systemd-supervised source checkout keeps
 // the historical git-pull + restart behavior; otherwise (a release binary) it
 // downloads the latest release for this platform and atomically replaces itself,
 // restarting the background daemon if one is running.
 func cliUpdate() {
 	if selfUpdateAvailable() {
-		updateViaPitchfork()
+		updateViaSystemd()
 		return
 	}
 	updateViaRelease()
 }
 
-// updateViaPitchfork runs the supervised-install update synchronously (unlike
+// updateViaSystemd runs the supervised-install update synchronously (unlike
 // serveSelfUpdate, the CLI isn't the process being restarted, so it can wait).
-func updateViaPitchfork() {
-	src, daemon := lassoSrcDir(), lassoDaemon()
+func updateViaSystemd() {
+	src, unit := lassoSrcDir(), lassoUnit()
 	fmt.Printf("updating supervised checkout at %s …\n", src)
 	if out, err := exec.Command("git", "-C", src, "pull", "--ff-only").CombinedOutput(); err != nil {
 		fatal("git pull: %v\n%s", err, out)
 	}
-	if out, err := exec.Command("pitchfork", "restart", daemon).CombinedOutput(); err != nil {
-		fatal("pitchfork restart %s: %v\n%s", daemon, err, out)
+	if out, err := exec.Command("systemctl", "--user", "restart", unit).CombinedOutput(); err != nil {
+		fatal("systemctl --user restart %s: %v\n%s", unit, err, out)
 	}
-	fmt.Printf("updated; %s restarted (rebuilds from source)\n", daemon)
+	fmt.Printf("updated; %s restarted (rebuilds from source)\n", unit)
 }
 
 // updateViaRelease downloads the latest release binary for this platform, checks

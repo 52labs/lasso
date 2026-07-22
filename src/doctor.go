@@ -59,6 +59,35 @@ func cliDoctor() {
 		d.line(checkPass, "herdr daemon", fmt.Sprintf("%s, protocol %d", v, p))
 	}
 
+	// Agent-state integrations — lifecycle hooks that give herdr authoritative
+	// idle/working/blocked states for the harnesses lasso can spawn. Missing
+	// ones degrade to screen-buffer detection, so warn rather than fail.
+	// Harness IDs (claude/codex/opencode) match herdr's integration targets.
+	if _, err := exec.LookPath("herdr"); err == nil {
+		if out, err := exec.Command("herdr", "integration", "status").Output(); err == nil {
+			installed := map[string]bool{}
+			for _, ln := range strings.Split(string(out), "\n") {
+				if name, rest, ok := strings.Cut(ln, ":"); ok {
+					installed[strings.TrimSpace(name)] = !strings.Contains(rest, "not installed")
+				}
+			}
+			var have, missing []string
+			for _, h := range harnesses {
+				if installed[h.ID] {
+					have = append(have, h.ID)
+				} else {
+					missing = append(missing, h.ID)
+				}
+			}
+			if len(missing) == 0 {
+				d.line(checkPass, "agent integrations", strings.Join(have, ", "))
+			} else {
+				d.line(checkWarn, "agent integrations",
+					strings.Join(missing, ", ")+" missing — `herdr integration install <agent>` gives herdr authoritative agent states")
+			}
+		}
+	}
+
 	// State dir writable (pid/log/db live here).
 	dir := lassoStateDir()
 	if err := os.MkdirAll(dir, 0o755); err != nil {

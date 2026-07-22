@@ -55,3 +55,40 @@ cannot read your environment — you must pass `$HERDR_PANE_ID` yourself.
 
 If `$HERDR_PANE_ID` is empty, you are not running under lasso and none of this
 applies to you.
+
+## Broadcasting what you're working on
+
+Your pane has a status card in the herdr sidebar and the lasso grid. You can
+put a live one-line summary on it so the human can see what you're doing
+without opening your terminal:
+
+```bash
+herdr pane report-metadata "$HERDR_PANE_ID" --source agent:self \
+  --token summary="migrating auth tests to vitest" --ttl-ms 1800000
+```
+
+Update it when you change phases (exploring → implementing → testing); the
+TTL clears it automatically if you go quiet. Keep it under ~60 characters.
+
+Do **not** use `herdr pane report-agent` — that claims lifecycle authority
+over your pane, overriding herdr's own idle/working/blocked detection, and a
+stale claim sticks if you exit uncleanly. `report-metadata` is display-only
+and fails safe.
+
+## Using the rest of the herdr CLI
+
+herdr ships its own agent skill (`npx skills add ogulcancelik/herdr --skill
+herdr`) covering pane orchestration — splitting panes, starting sibling
+agents with `herdr agent start` / `prompt` / `wait`, and running commands with
+`herdr pane run` / `wait-output`. Those all work from inside a lasso pane too
+(you are in a herdr session; `HERDR_ENV=1` is set). Two lasso-specific rules
+on top of it:
+
+- Never `herdr pane close` yourself or any pane lasso created. `lasso
+  closeme` (or the `close_agent` MCP tool) is the only sanctioned way to shut
+  yourself down — it also cleans up lasso's agent record and staged prompt
+  files, which a raw pane close leaves behind.
+- Panes and agents you spawn directly via `herdr` are invisible to lasso's
+  agent list (no record, no repo/branch, no close tracking). Prefer lasso's
+  `create_agent` MCP tool when the new agent should show up as a first-class
+  lasso agent; use raw herdr panes only for short-lived helpers.

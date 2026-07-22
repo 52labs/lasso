@@ -8,21 +8,21 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
-	"syscall"
 )
 
 // Lasso self-update. Unlike herdr (which runs on each host and is updated there
 // via the host switcher's "Update"), lasso runs only on the local machine, as a
-// pitchfork daemon. New features change behavior and can shift the herdr
+// systemd --user service. New features change behavior and can shift the herdr
 // protocol lasso targets, so the host switcher also offers "Update lasso": pull
 // the latest source and let the supervisor rebuild + restart it, bringing lasso
 // in line with a host running a newer herdr.
 //
-// The prod install is a pitchfork daemon (default name "lasso") whose run script
-// does `git checkout main; go build; exec ./lasso` from the source checkout. So
-// updating is: `git pull --ff-only` in that checkout, then `pitchfork restart
-// <daemon>` — the restart rebuilds the pulled code. The restart SIGTERMs this
-// very process, so the updater must be fully detached to outlive it.
+// The supervised source install is a systemd --user unit (default name "lasso")
+// whose start command does `git checkout main; go build; exec ./lasso` from the
+// source checkout. So updating is: `git pull --ff-only` in that checkout, then
+// `systemctl --user restart <unit>` — the restart rebuilds the pulled code. The
+// restart SIGTERMs this very process (and everything in the unit's cgroup), so
+// the updater must run outside the unit to outlive it.
 
 // lassoSrcDir is the source checkout to update: LASSO_SRC_DIR if set, else the
 // directory holding the running binary (prod builds to <checkout>/lasso).
@@ -37,19 +37,19 @@ func lassoSrcDir() string {
 	return filepath.Dir(exe)
 }
 
-// lassoDaemon is the pitchfork daemon name to restart (override for non-default
-// deployments via LASSO_PITCHFORK_DAEMON).
-func lassoDaemon() string {
-	if d := os.Getenv("LASSO_PITCHFORK_DAEMON"); d != "" {
+// lassoUnit is the systemd --user unit name to restart (override for
+// non-default deployments via LASSO_SYSTEMD_UNIT).
+func lassoUnit() string {
+	if d := os.Getenv("LASSO_SYSTEMD_UNIT"); d != "" {
 		return d
 	}
 	return "lasso"
 }
 
 // selfUpdateAvailable reports whether this looks like the supervised prod
-// install: a git checkout supervised by a pitchfork daemon. Dev/worktree runs
-// (no pitchfork, or running from `go run`) return false so the UI can hide the
-// action and the endpoint can refuse cleanly.
+// install: a git checkout run by a systemd --user unit. Dev/worktree runs
+// (no systemd unit, or running from `go run`) return false so the UI can hide
+// the action and the endpoint can refuse cleanly.
 func selfUpdateAvailable() bool {
 	// Never self-update a dev instance: it's served by Vite with hot reload and
 	// its binary often lives in a throwaway worktree, so a pull+restart would
@@ -64,12 +64,13 @@ func selfUpdateAvailable() bool {
 	if _, err := os.Stat(filepath.Join(src, ".git")); err != nil {
 		return false
 	}
-	pf, err := exec.LookPath("pitchfork")
+	sc, err := exec.LookPath("systemctl")
 	if err != nil {
 		return false
 	}
-	// `pitchfork status <daemon>` exits non-zero if the daemon isn't registered.
-	return exec.Command(pf, "status", lassoDaemon()).Run() == nil
+	// is-active exits non-zero when the unit doesn't exist or isn't running —
+	// and the supervised install is by definition running (it's serving us).
+	return exec.Command(sc, "--user", "is-active", "--quiet", lassoUnit()).Run() == nil
 }
 
 // selfUpdateStatus reports whether a newer lasso is waiting to be built, so the
@@ -125,38 +126,38 @@ func gitOutput(dir string, args ...string) (string, error) {
 	return strings.TrimSpace(string(out)), err
 }
 
-// serveSelfUpdate kicks off a detached "git pull + pitchfork restart" so lasso
-// rebuilds itself from the latest source. Returns immediately; the client sees
-// the server bounce a moment later.
+// serveSelfUpdate kicks off a detached "git pull + systemctl --user restart" so
+// lasso rebuilds itself from the latest source. Returns immediately; the client
+// sees the server bounce a moment later.
 func serveSelfUpdate(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		http.Error(w, "POST required", http.StatusMethodNotAllowed)
 		return
 	}
 	if !selfUpdateAvailable() {
-		http.Error(w, "lasso isn't a self-updatable install here (no pitchfork-supervised git checkout) — "+
+		http.Error(w, "lasso isn't a self-updatable install here (no systemd-supervised git checkout) — "+
 			"update it the way it was deployed", http.StatusConflict)
 		return
 	}
 	src := lassoSrcDir()
-	daemon := lassoDaemon()
+	unit := lassoUnit()
 
-	// One detached shell does the whole update. setsid + Setpgid put it in its
-	// own session/process group so `pitchfork restart`, which kills this process,
-	// can't take the updater down mid-flight. Output is discarded — the caller is
-	// about to be restarted and pitchfork logs capture the rebuild.
+	// One transient systemd unit does the whole update. A plain forked child
+	// (even setsid'd) would still live in this service's cgroup, and
+	// `systemctl --user restart` kills the whole cgroup — taking the updater
+	// down mid-flight. systemd-run asks the user manager to spawn the updater
+	// in its own unit, outside ours, so it survives the restart. Output is
+	// discarded — the caller is about to be restarted and the journal captures
+	// the rebuild.
 	script := fmt.Sprintf(
-		"git -C %s pull --ff-only && pitchfork restart %s",
-		shellQuote(src), shellQuote(daemon))
-	cmd := exec.Command("setsid", "sh", "-c", script)
-	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+		"git -C %s pull --ff-only && systemctl --user restart %s",
+		shellQuote(src), shellQuote(unit))
+	cmd := exec.Command("systemd-run", "--user", "--collect", "--quiet", "sh", "-c", script)
 	cmd.Stdin, cmd.Stdout, cmd.Stderr = nil, nil, nil
-	if err := cmd.Start(); err != nil {
+	if err := cmd.Run(); err != nil {
 		http.Error(w, "start updater: "+err.Error(), http.StatusInternalServerError)
 		return
 	}
-	// Release so we don't leave a zombie when we're restarted out from under it.
-	_ = cmd.Process.Release()
 
-	writeJSON(w, map[string]any{"started": true, "src": src, "daemon": daemon})
+	writeJSON(w, map[string]any{"started": true, "src": src, "unit": unit})
 }
