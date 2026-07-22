@@ -157,7 +157,7 @@ export interface VersionInfo {
   herdr_protocol: number
   herdr_version?: string
   compatible: boolean
-  // Whether this install can self-update (a pitchfork-supervised git checkout).
+  // Whether this install can self-update (a systemd-supervised git checkout).
   // False for dev/worktree runs, where the "Update lasso" action is hidden.
   updatable: boolean
   // Only meaningful when `updatable`: whether the running build is behind main.
@@ -394,7 +394,7 @@ export const api = {
     ),
 
   // Install herdr on a remote host (if missing) and bring it up supervised by
-  // pitchfork (installing pitchfork via mise if needed). For hosts where herdr
+  // systemd --user (also installing herdr's agent-state integrations). For hosts where herdr
   // is missing or its server isn't running. Slow — downloads binaries — and
   // returns a provisioning log.
   provisionHost: (host: string) =>
@@ -404,10 +404,10 @@ export const api = {
     ),
 
   // Update lasso itself: pull the latest source and let the supervisor rebuild +
-  // restart it. Only works on the pitchfork-supervised prod install (see
+  // restart it. Only works on the systemd-supervised prod install (see
   // VersionInfo.updatable); the server bounces a moment after this returns.
   selfUpdate: () =>
-    postJSON<{ started: boolean; src: string; daemon: string }>(
+    postJSON<{ started: boolean; src: string; unit: string }>(
       "/api/self-update",
       {}
     ),

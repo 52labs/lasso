@@ -389,52 +389,37 @@ func serveHostUpdate(w http.ResponseWriter, r *http.Request) {
 }
 
 // ---------------------------------------------------------------------------
-// POST /api/host-provision — install herdr + supervise it with pitchfork
+// POST /api/host-provision — install herdr + supervise it with systemd --user
 // ---------------------------------------------------------------------------
 
-// hostProvisionTimeout bounds the whole bootstrap: it may download pitchfork
-// (via mise) and the herdr release binary over the far host's network.
+// hostProvisionTimeout bounds the whole bootstrap: it may download the herdr
+// release binary over the far host's network.
 const hostProvisionTimeout = 5 * time.Minute
 
-// provisionScript bootstraps herdr-under-pitchfork on a remote host, end to end
-// and idempotently: ensure mise (mise.run) + pitchfork (installed via mise,
-// matching our own setup), ensure herdr (herdr.dev/install.sh), register a
-// [daemons.herdr] block in the global pitchfork config if absent, then bring the
-// supervisor up and start the daemon. It's shell-agnostic — rather than trust the
-// login shell's PATH wiring (which on some hosts only activates mise for
-// fish/zsh), it puts the user-local bin + mise shim dirs on PATH itself and
-// activates mise if present. Every step logs a line so the captured output reads
-// as a provisioning log.
+// provisionScript bootstraps herdr-under-systemd on a remote Linux host, end to
+// end and idempotently: ensure herdr (herdr.dev/install.sh), write a systemd
+// --user unit for the server, enable lingering so it survives logout/reboot,
+// start it, and install the agent-state integrations for every harness lasso
+// can spawn (claude/codex/opencode) so herdr gets authoritative
+// idle/working/blocked hooks instead of screen-scraping. It's shell-agnostic —
+// rather than trust the login shell's PATH wiring, it puts the user-local bin
+// dirs on PATH itself. Every step logs a line so the captured output reads as a
+// provisioning log.
 const provisionScript = `set -u
 log() { printf '==> %s\n' "$*"; }
 
 export PATH="$HOME/.local/bin:$HOME/.local/share/mise/shims:$PATH"
-if command -v mise >/dev/null 2>&1; then
-  eval "$(mise activate bash 2>/dev/null)" || true
-fi
 hash -r 2>/dev/null || true
 
-# 1. mise + pitchfork --------------------------------------------------------
-# A bare host has neither; install mise first (it's how we manage pitchfork) so
-# setup works end to end instead of stopping with "install mise then retry".
-if ! command -v pitchfork >/dev/null 2>&1; then
-  if ! command -v mise >/dev/null 2>&1; then
-    log "installing mise (mise.run)"
-    curl -fsSL https://mise.run | sh
-    export PATH="$HOME/.local/bin:$HOME/.local/share/mise/shims:$PATH"
-    eval "$(mise activate bash 2>/dev/null)" || true
-    hash -r 2>/dev/null || true
-  fi
-  command -v mise >/dev/null 2>&1 || { echo "ERROR: mise install failed (see https://mise.run)" >&2; exit 3; }
-  log "mise $(mise --version 2>/dev/null)"
-  log "installing pitchfork via mise"
-  mise use -g pitchfork@latest
-  hash -r 2>/dev/null || true
-fi
-command -v pitchfork >/dev/null 2>&1 || { echo "ERROR: pitchfork not on PATH after install" >&2; exit 3; }
-log "pitchfork $(pitchfork --version 2>/dev/null)"
+# 0. systemd -----------------------------------------------------------------
+# Supervision is systemd --user; a non-interactive ssh session may lack the
+# runtime dir env the user manager is addressed by.
+command -v systemctl >/dev/null 2>&1 || { echo "ERROR: systemctl not found — provisioning requires a Linux host with systemd" >&2; exit 3; }
+export XDG_RUNTIME_DIR="${XDG_RUNTIME_DIR:-/run/user/$(id -u)}"
+systemctl --user is-enabled default.target >/dev/null 2>&1 || true
+loginctl enable-linger "$(id -un)" 2>/dev/null || log "note: 'loginctl enable-linger' failed; the herdr server may stop at logout"
 
-# 2. herdr -------------------------------------------------------------------
+# 1. herdr -------------------------------------------------------------------
 if ! command -v herdr >/dev/null 2>&1; then
   log "installing herdr (herdr.dev/install.sh)"
   curl -fsSL https://herdr.dev/install.sh | sh
@@ -444,50 +429,66 @@ herdr_bin="$(command -v herdr 2>/dev/null || echo "$HOME/.local/bin/herdr")"
 [ -x "$herdr_bin" ] || command -v herdr >/dev/null 2>&1 || { echo "ERROR: herdr not installed" >&2; exit 4; }
 log "herdr $("$herdr_bin" --version 2>/dev/null)"
 
-# 3. register the herdr daemon in the global pitchfork config ----------------
-cfg="${XDG_CONFIG_HOME:-$HOME/.config}/pitchfork/config.toml"
-mkdir -p "$(dirname "$cfg")"
-touch "$cfg"
-if grep -q '^\[daemons.herdr\]' "$cfg"; then
-  log "pitchfork daemon 'herdr' already registered"
-else
-  log "registering pitchfork daemon 'herdr'"
-  cat >> "$cfg" <<EOF
+# 2. systemd --user unit -----------------------------------------------------
+# Written unconditionally (marked managed) so re-provisioning refreshes it.
+unit_dir="${XDG_CONFIG_HOME:-$HOME/.config}/systemd/user"
+mkdir -p "$unit_dir"
+log "writing $unit_dir/herdr.service"
+cat > "$unit_dir/herdr.service" <<EOF
+[Unit]
+Description=herdr — headless terminal workspace server for AI coding agents
+# managed by lasso host provisioning; edits may be overwritten on re-provision
+After=network-online.target
+Wants=network-online.target
 
-[daemons.herdr]
-run = "$herdr_bin server"
-dir = "$HOME"
-boot_start = true
-retry = true
-ready_output = "herdr server running"
+[Service]
+Type=simple
+WorkingDirectory=$HOME
+Environment=PATH=$HOME/.local/bin:$HOME/.local/share/mise/shims:/usr/local/bin:/usr/bin:/bin
+ExecStart=$herdr_bin server
+# Graceful shutdown via herdr's own API so panes are torn down cleanly.
+ExecStop=$herdr_bin server stop
+# Only signal the main server process, not every pane in the cgroup.
+KillMode=mixed
+Restart=on-failure
+RestartSec=2
+
+[Install]
+WantedBy=default.target
 EOF
-fi
+systemctl --user daemon-reload
+log "starting herdr under systemd --user"
+systemctl --user enable --now herdr.service || { echo "ERROR: 'systemctl --user enable --now herdr' failed" >&2; exit 5; }
 
-# 4. supervise + start -------------------------------------------------------
-pitchfork supervisor start >/dev/null 2>&1 || true
-pitchfork boot enable >/dev/null 2>&1 || log "note: 'pitchfork boot enable' failed; boot persistence may need manual setup (linger/systemd-user)"
-log "starting herdr under pitchfork"
-# Start the daemon by name; fall back to starting all global daemons (covers a
-# pitchfork that only resolves the freshly-added daemon via the bulk -g form).
-# The supervisor's boot_start is the final backstop either way.
-pitchfork start -f herdr || pitchfork start -g || log "note: 'pitchfork start' did not confirm ready; supervisor boot_start is the backstop"
+# 3. agent-state integrations ------------------------------------------------
+# Lifecycle hooks give herdr authoritative idle/working/blocked states for the
+# agents lasso spawns; without them it falls back to screen-buffer detection.
+# Best-effort: an integration for a CLI that isn't installed yet still stages
+# its hook files and starts working once that CLI arrives.
+for agent in claude codex opencode; do
+  if "$herdr_bin" integration install "$agent" >/dev/null 2>&1; then
+    log "integration $agent installed"
+  else
+    log "note: 'herdr integration install $agent' failed; agent state falls back to screen detection"
+  fi
+done
 
-# 5. verify ------------------------------------------------------------------
+# 4. verify ------------------------------------------------------------------
 sleep 1
 if "$herdr_bin" status server --json 2>/dev/null | grep -Eq '"running"[[:space:]]*:[[:space:]]*true'; then
   log "herdr server running"
 else
   echo "ERROR: herdr server not running after setup" >&2
   "$herdr_bin" status server --json 2>/dev/null || true
-  exit 5
+  exit 6
 fi
 log "done"
 `
 
 // serveHostProvision installs herdr on a remote host (if missing) and brings it
-// up supervised by pitchfork, so a host that has no herdr — or has it but with
-// no server running — can be made selectable. Unlike the update path this is
-// fully non-interactive (the install scripts and pitchfork commands don't
+// up supervised by systemd --user, so a host that has no herdr — or has it but
+// with no server running — can be made selectable. Unlike the update path this
+// is fully non-interactive (the install scripts and systemctl commands don't
 // prompt), so no PTY is needed: we pipe provisionScript to `bash -s`.
 func serveHostProvision(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {

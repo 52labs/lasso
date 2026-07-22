@@ -64,7 +64,7 @@ var harnesses = []harnessDef{
 		ID:               "claude",
 		Label:            "Claude Code",
 		SupportsPlanMode: true,
-		ModelSuggestions: []string{"opus", "sonnet", "haiku", "claude-fable-5"},
+		ModelSuggestions: []string{"opus", "sonnet", "haiku", "fable"},
 		buildCmd:         claudeCommand,
 		defaultModel:     claudeConfiguredModel,
 	},
@@ -72,7 +72,7 @@ var harnesses = []harnessDef{
 		ID:               "codex",
 		Label:            "Codex",
 		SupportsPlanMode: false,
-		ModelSuggestions: []string{"gpt-5.1-codex-max", "gpt-5.1-codex", "gpt-5.1-codex-mini"},
+		ModelSuggestions: []string{"gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna"},
 		buildCmd:         codexCommand,
 	},
 	{

@@ -33,7 +33,7 @@ import (
 // Subcommands are dispatched in main() BEFORE flag.Parse so the server's flags
 // don't have to coexist with subcommand names. A bare invocation, or anything
 // whose first arg looks like a flag, falls through to the foreground server —
-// keeping `exec ./lasso` (the pitchfork run script) working unchanged.
+// keeping `exec ./lasso` (the supervised install's run script) working unchanged.
 
 // defaultListenAddr is the server's default bind address, shared by the -listen
 // flag (main.go) and the CLI (status/doctor/URL display) so they never drift.

@@ -37,7 +37,7 @@ browser
                       your cloudflared tunnel
                          ingress: "*.<dev-domain>" → http://127.0.0.1:<demux-port>
                          ▼
-                      lasso devproxy  (the demux, a pitchfork/systemd daemon)
+                      lasso devproxy  (the demux, a systemd daemon)
                          Host "<port>.<dev-domain>" → http://127.0.0.1:<port>
                          (rewrites Host to loopback so dev servers that check
                           Host — e.g. Vite's allowedHosts → 403 — accept it)
@@ -61,7 +61,7 @@ existing public APIs.
    lasso devproxy --listen 127.0.0.1:<demux-port> --domain <dev-domain> --ports 1024-65535
    ```
 
-   Supervise it (pitchfork/systemd). No HTTP ready-check: the demux 404s any
+   Supervise it (systemd --user). No HTTP ready-check: the demux 404s any
    host that isn't `<port>.<dev-domain>`, so a 2xx probe never passes —
    process-up means ready.
 

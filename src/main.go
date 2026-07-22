@@ -1233,7 +1233,7 @@ type versionInfo struct {
 	UpdateState   string `json:"update_state,omitempty"`
 	CommitsBehind int    `json:"commits_behind,omitempty"`
 	// LatestVersion is the newest published GitHub release tag, set only for a
-	// release-binary install (not the supervised/pitchfork checkout, which tracks
+	// release-binary install (not the systemd-supervised checkout, which tracks
 	// main by commit instead). When it's newer than this build the Settings tab
 	// shows an "update available" hint pointing at `lasso update`.
 	LatestVersion string `json:"latest_version,omitempty"`
