@@ -220,20 +220,25 @@ func warmAllHosts() {
 // and the on-demand path retries.
 func warmHost(host string) {
 	key := hostCacheKey(host)
-	_, repos, err := cachedHostReposList(key, true)
-	if err != nil {
-		log.Printf("warm: repos on %s: %v", key, err)
-		return
-	}
-	// Pooled backends outlive the idle TTL as long as warming keeps touching
-	// them (gridBackendIdle > warmInterval, deliberately — churning a full SSH
-	// connect/teardown per host per cycle was worse). A wedged connection is
-	// gridHostBackend's problem now: it liveness-checks pooled entries on
-	// access and redials dead ones in place, so this call already hands back a
-	// healthy (or freshly re-dialed) backend.
+	// Dial (or touch) the host's pooled backend FIRST, before any repo work:
+	// this is what pre-warms the SSH control master, so the first grid poll or
+	// dialog open finds a live connection instead of paying the 0.2–0.7s
+	// handshake. Ordered ahead of the repo listing deliberately — that chain
+	// (settings + repo-state sqlite reads) can fail for reasons that have
+	// nothing to do with the connection, and the master should stay warm
+	// regardless. Pooled backends then outlive the idle TTL as long as warming
+	// keeps touching them (gridBackendIdle > warmInterval). A wedged connection
+	// is gridHostBackend's problem: it liveness-checks pooled entries on access
+	// and redials dead ones in place, so this hands back a healthy (or freshly
+	// re-dialed) backend.
 	be, err := gridHostBackend(key)
 	if err != nil {
 		log.Printf("warm: backend for %s: %v", key, err)
+		return
+	}
+	_, repos, err := cachedHostReposList(key, true)
+	if err != nil {
+		log.Printf("warm: repos on %s: %v", key, err)
 		return
 	}
 
