@@ -86,7 +86,7 @@ mise `ls-remote` cache compounds this). So **wait for the release + its assets**
 ```bash
 # poll until the release exists AND a linux-amd64 binary asset is attached
 for i in $(seq 1 60); do
-  if gh release view "v$VER" --repo 52labs/lasso --json assets \
+  if gh release view "v$VER" --repo Orange-County-AI/lasso --json assets \
        -q '.assets[].name' 2>/dev/null | grep -q lasso-linux-amd64; then
     echo "release v$VER published"; break
   fi
@@ -94,7 +94,7 @@ for i in $(seq 1 60); do
 done
 ```
 
-If it never appears, check the run: `gh run list --repo 52labs/lasso --workflow release.yml`.
+If it never appears, check the run: `gh run list --repo Orange-County-AI/lasso --workflow release.yml`.
 Don't proceed to update against a missing/failed release.
 
 ## 6. lasso update — then restart the daemon via **its supervisor**

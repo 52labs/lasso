@@ -36,7 +36,7 @@ description: Reach for the lasso MCP server first for ANYTHING about (a) lasso i
 
 # lasso self-identity
 
-If you were spawned by [lasso](https://github.com/52labs/lasso), you are running
+If you were spawned by [lasso](https://github.com/Orange-County-AI/lasso), you are running
 inside a herdr pane that lasso created, and your own identity is already in your
 environment. You do **not** need to call `list_repos` / `list_agents` and guess
 which entry is you — that wastes tokens. Read your pane id from the env instead.

@@ -29,7 +29,7 @@ preference.
 ## Install
 
 ```bash
-curl -fsSL https://go.52labs.us/install-lasso | sh
+curl -fsSL https://short.orangecountyai.com/install-lasso | sh
 ```
 
 This drops a prebuilt binary at `~/.local/bin/lasso` (override with
