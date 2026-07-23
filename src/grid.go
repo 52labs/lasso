@@ -291,8 +291,8 @@ func reapGridBackends() {
 // whether herdr has detected an agent in it (HasAgent / Agent come from
 // agent.list, since pane.list reports only agent_status, not the agent kind).
 type gridPane struct {
-	Host           string `json:"host"`       // "local" or ssh-config alias (focus/attach key)
-	HostLabel      string `json:"host_label"` // display name (hostname for local)
+	Host      string `json:"host"`       // "local" or ssh-config alias (focus/attach key)
+	HostLabel string `json:"host_label"` // display name (hostname for local)
 	// HostHostname / HostUser resolve the alias to its physical box + account (via
 	// `ssh -G`, or the local machine's own hostname/user for "local"). They let the
 	// pane rail group panes by host and user the way the navbar host switcher does
