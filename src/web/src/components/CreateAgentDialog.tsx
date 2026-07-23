@@ -766,89 +766,59 @@ export function CreateAgentDialog({
               </div>
             </Field>
 
-            <div className="flex items-center gap-2">
-              {/* Plan mode only exists on harnesses that support it (claude);
-                  hide the checkbox elsewhere rather than offering a no-op. */}
-              {harness.supports_plan_mode && (
-                <>
-                  <Checkbox
-                    id="agent-plan-mode"
-                    checked={planMode}
-                    onCheckedChange={(v) => setPlanMode(v === true)}
-                    // Checkboxes toggle on Space by ARIA convention; this form is
-                    // otherwise Enter-driven, so accept Enter to toggle too.
-                    onKeyDown={(e) => {
-                      if (e.key === "Enter") {
-                        e.preventDefault()
-                        setPlanMode((v) => !v)
-                      }
-                    }}
-                  />
-                  <label
-                    htmlFor="agent-plan-mode"
-                    className="cursor-pointer text-sm"
-                  >
-                    Start in plan mode
-                  </label>
-                </>
-              )}
-              <div className="ml-auto flex items-center gap-1.5">
-                <label htmlFor="agent-host" className={labelClass}>
-                  Host
-                </label>
-                <select
-                  id="agent-host"
-                  className={cn(fieldClass, "w-auto py-1")}
-                  value={selectedHost}
-                  onChange={(e) => setSelectedHost(e.target.value)}
-                >
-                  {hostGroups.map((g) => {
-                    // Flat "<host> · <user>" for a single-account box; inside an
-                    // optgroup the host is the group label, so options lead with
-                    // the account name (alias in parens when it differs).
-                    const text = (
-                      o: { alias: string; user: string; disabled: boolean },
-                      inGroup: boolean
-                    ) => {
-                      const name = inGroup ? o.user || o.alias : o.alias
-                      const extra = inGroup
-                        ? o.alias && o.alias !== o.user
-                          ? ` (${o.alias})`
-                          : ""
-                        : o.user
-                          ? ` · ${o.user}`
-                          : ""
-                      return `${name}${extra}${o.disabled ? " (unavailable)" : ""}`
-                    }
-                    if (g.opts.length === 1) {
-                      const o = g.opts[0]
-                      return (
+            <Field label="Host" htmlFor="agent-host">
+              <select
+                id="agent-host"
+                className={fieldClass}
+                value={selectedHost}
+                onChange={(e) => setSelectedHost(e.target.value)}
+              >
+                {hostGroups.map((g) => {
+                  // Flat "<host> · <user>" for a single-account box; inside an
+                  // optgroup the host is the group label, so options lead with
+                  // the account name (alias in parens when it differs).
+                  const text = (
+                    o: { alias: string; user: string; disabled: boolean },
+                    inGroup: boolean
+                  ) => {
+                    const name = inGroup ? o.user || o.alias : o.alias
+                    const extra = inGroup
+                      ? o.alias && o.alias !== o.user
+                        ? ` (${o.alias})`
+                        : ""
+                      : o.user
+                        ? ` · ${o.user}`
+                        : ""
+                    return `${name}${extra}${o.disabled ? " (unavailable)" : ""}`
+                  }
+                  if (g.opts.length === 1) {
+                    const o = g.opts[0]
+                    return (
+                      <option
+                        key={o.value}
+                        value={o.value}
+                        disabled={o.disabled}
+                      >
+                        {text(o, false)}
+                      </option>
+                    )
+                  }
+                  return (
+                    <optgroup key={g.box} label={g.box}>
+                      {g.opts.map((o) => (
                         <option
                           key={o.value}
                           value={o.value}
                           disabled={o.disabled}
                         >
-                          {text(o, false)}
+                          {text(o, true)}
                         </option>
-                      )
-                    }
-                    return (
-                      <optgroup key={g.box} label={g.box}>
-                        {g.opts.map((o) => (
-                          <option
-                            key={o.value}
-                            value={o.value}
-                            disabled={o.disabled}
-                          >
-                            {text(o, true)}
-                          </option>
-                        ))}
-                      </optgroup>
-                    )
-                  })}
-                </select>
-              </div>
-            </div>
+                      ))}
+                    </optgroup>
+                  )
+                })}
+              </select>
+            </Field>
 
             {type === "git" && (
               <div className="grid grid-cols-2 gap-3">
@@ -940,6 +910,31 @@ export function CreateAgentDialog({
                     />
                   </Field>
                 </div>
+                {/* Plan mode only exists on harnesses that support it (claude);
+                    hide the toggle elsewhere rather than offering a no-op. */}
+                {harness.supports_plan_mode && (
+                  <div className="flex items-center gap-2">
+                    <Checkbox
+                      id="agent-plan-mode"
+                      checked={planMode}
+                      onCheckedChange={(v) => setPlanMode(v === true)}
+                      // Checkboxes toggle on Space by ARIA convention; this form
+                      // is otherwise Enter-driven, so accept Enter to toggle too.
+                      onKeyDown={(e) => {
+                        if (e.key === "Enter") {
+                          e.preventDefault()
+                          setPlanMode((v) => !v)
+                        }
+                      }}
+                    />
+                    <label
+                      htmlFor="agent-plan-mode"
+                      className="cursor-pointer text-sm"
+                    >
+                      Start in plan mode
+                    </label>
+                  </div>
+                )}
                 <Field label="Extra CLI args" htmlFor="agent-extra-args">
                   <Input
                     id="agent-extra-args"
